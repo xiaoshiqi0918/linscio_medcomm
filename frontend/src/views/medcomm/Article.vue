@@ -1812,6 +1812,14 @@ async function handleGenerate() {
       await loadArticle(currentSectionId.value ?? undefined)
       streamedText.value = ''
     },
+    onTitleGenerated: (title) => {
+      articleTitleDraft.value = title
+      if (article.value) {
+        article.value = { ...article.value, title }
+        articleStore.setCurrent(article.value)
+      }
+      ElMessage.success('已根据全文自动总结标题')
+    },
     onVerifyReport: (r) => articleStore.setVerificationReport(r),
     onOllamaWarning: (msg) => articleStore.setOllamaWarning(msg),
   })
@@ -2012,7 +2020,7 @@ async function doExport(format: string) {
   const a = document.createElement('a')
   a.href = url
   const ext = { html: 'html', docx: 'docx', pdf: 'pdf', txt: 'txt', md: 'md' }[format] || 'txt'
-  a.download = `${article.value?.topic || 'article'}.${ext}`
+  a.download = `${article.value?.title || article.value?.topic || 'article'}.${ext}`
   a.click()
   URL.revokeObjectURL(url)
 }

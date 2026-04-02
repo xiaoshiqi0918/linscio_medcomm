@@ -39,7 +39,7 @@ class ScriptExporter(BaseExporter):
     async def export(self, fmt: str = "txt") -> tuple[bytes, str, str]:
         article, parts = await load_article_sections(self.article_id, self._db)
         base_name = (article.topic or "article").replace("/", "-")
-        txt = script.to_script_txt(parts)
+        txt = script.to_script_txt(parts, article=article)
         return txt.encode("utf-8"), "text/plain; charset=utf-8", f"{base_name}.txt"
 
 
@@ -49,7 +49,7 @@ class StoryboardExporter(BaseExporter):
     async def export(self, fmt: str = "docx") -> tuple[bytes, str, str]:
         article, parts = await load_article_sections(self.article_id, self._db)
         base_name = (article.topic or "article").replace("/", "-")
-        txt = script.to_storyboard_txt(parts)
+        txt = script.to_storyboard_txt(parts, article=article)
         if fmt == "docx":
             try:
                 buf, fn = html_docx.to_docx(article, [(f"镜头{i}", b) for i, (_, b, _) in enumerate(parts, 1)])
@@ -65,7 +65,7 @@ class ComicExporter(BaseExporter):
     async def export(self, fmt: str = "txt") -> tuple[bytes, str, str]:
         article, parts = await load_article_sections(self.article_id, self._db)
         base_name = (article.topic or "article").replace("/", "-")
-        txt = script.to_comic_txt(parts)
+        txt = script.to_comic_txt(parts, article=article)
         if fmt == "pdf":
             from app.services.export.weasyprint_exporter import WeasyPrintExporter
             exp = WeasyPrintExporter(self.article_id, self.platform, self._db)
@@ -79,8 +79,10 @@ class CardExporter(BaseExporter):
     async def export(self, fmt: str = "txt") -> tuple[bytes, str, str]:
         article, parts = await load_article_sections(self.article_id, self._db)
         base_name = (article.topic or "article").replace("/", "-")
+        title_display = (article.title or article.topic or "").strip()
+        header = f"{title_display}\n\n" if title_display else ""
         lines = [f"卡片{i}\n{b}\n" for i, (_, b, _) in enumerate(parts, 1)]
-        txt = "\n".join(lines)
+        txt = header + "\n".join(lines)
         return txt.encode("utf-8"), "text/plain; charset=utf-8", f"{base_name}.txt"
 
 
@@ -90,12 +92,14 @@ class LongImageExporter(BaseExporter):
     async def export(self, fmt: str = "txt") -> tuple[bytes, str, str]:
         article, parts = await load_article_sections(self.article_id, self._db)
         base_name = (article.topic or "article").replace("/", "-")
+        title_display = (article.title or article.topic or "").strip()
+        header = f"{title_display}\n\n" if title_display else ""
         labels = ["封面", "板块1", "板块2", "板块3", "页脚"]
         lines = []
         for i, (_, body, _) in enumerate(parts):
             label = labels[i] if i < len(labels) else f"板块{i+1}"
             lines.append(f"{label}\n{body}\n")
-        txt = "\n".join(lines)
+        txt = header + "\n".join(lines)
         if fmt == "html":
             full_text = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in parts)
             html = html_docx.to_html(article, full_text)
@@ -109,8 +113,8 @@ class TxtExporter(BaseExporter):
     async def export(self, fmt: str = "txt") -> tuple[bytes, str, str]:
         article, parts = await load_article_sections(self.article_id, self._db)
         base_name = (article.topic or "article").replace("/", "-")
-        lines = [f"## {t or st}\n\n{b}\n" for t, b, st in parts]
-        txt = "\n".join(lines)
+        body = "\n".join(f"## {t or st}\n\n{b}\n" for t, b, st in parts)
+        txt = prepend_export_title_plain(article, body)
         return txt.encode("utf-8"), "text/plain; charset=utf-8", f"{base_name}.txt"
 
 

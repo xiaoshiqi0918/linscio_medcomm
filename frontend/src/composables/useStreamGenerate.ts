@@ -24,6 +24,7 @@ export function useStreamGenerate() {
       onOllamaWarning?: (message: string) => void
       onClaimSkipped?: (reason: string) => void
       onReadingLevelSkipped?: (reason: string) => void
+      onTitleGenerated?: (title: string) => void
     } = {}
   ) {
     generating.value = true
@@ -83,6 +84,8 @@ export function useStreamGenerate() {
                   callbacks.onClaimSkipped?.(evt.reason)
                 } else if (evt.type === 'reading_level_skipped' && evt.reason) {
                   callbacks.onReadingLevelSkipped?.(evt.reason)
+                } else if (evt.type === 'title_generated' && evt.title) {
+                  callbacks.onTitleGenerated?.(evt.title)
                 } else if (evt.type === 'error') {
                   error.value = evt.message
                   ElMessage.error(evt.message || 'AI 生成失败')
