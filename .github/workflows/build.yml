@@ -69,10 +69,7 @@ jobs:
       - name: Pre-download wheels (${{ matrix.platform }})
         shell: bash
         run: |
-          mkdir -p build/wheels/${{ matrix.platform }}/
-          pip download -r backend/requirements.txt \
-            --platform ${{ matrix.pip_platform }} --python-version 3.11 \
-            --only-binary=:all: -d build/wheels/${{ matrix.platform }}/
+          bash scripts/ci-download-wheels.sh "${{ matrix.pip_platform }}" "${{ matrix.platform }}"
           pip install --no-index --find-links=build/wheels/${{ matrix.platform }}/ \
             -r backend/requirements.txt --dry-run
 

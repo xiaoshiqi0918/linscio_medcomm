@@ -3,13 +3,16 @@
  * 下载平台专属 wheels 到 build/wheels/<platform>/
  * 用于首次安装或 CI 预构建
  * 用法: node scripts/build-wheels.js [platform]
- *   platform: macos-arm64 | macos-x64 | win32-x64 | linux-x64 (默认当前平台)
+ *   platform: darwin-arm64 | darwin-x64 | win32-x64 | linux-x64（与 CI / first-run 一致）
+ *   兼容旧名: macos-arm64 → darwin-arm64, macos-x64 → darwin-x64
  */
 const { spawnSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 
 const PLATFORM_MAP = {
+  'darwin-arm64': { tag: 'macosx_11_0_arm64', arch: 'arm64' },
+  'darwin-x64': { tag: 'macosx_10_9_x86_64', arch: 'x64' },
   'macos-arm64': { tag: 'macosx_11_0_arm64', arch: 'arm64' },
   'macos-x64': { tag: 'macosx_10_9_x86_64', arch: 'x64' },
   'win32-x64': { tag: 'win_amd64', arch: 'x64' },
@@ -19,7 +22,7 @@ const PLATFORM_MAP = {
 
 function getPlatformId() {
   if (process.platform === 'win32') return 'win32-x64'
-  if (process.platform === 'darwin') return process.arch === 'arm64' ? 'macos-arm64' : 'macos-x64'
+  if (process.platform === 'darwin') return process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64'
   return process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
 }
 

@@ -15,12 +15,9 @@ function getWheelsDir() {
   return path.join(appDir, 'build', 'wheels')
 }
 
+/** 与 python-resolver.getPlatformId、CI build/wheels 子目录一致（darwin-* / win32-x64） */
 function getPlatformTag() {
-  if (process.platform === 'win32') return 'windows-x64'
-  if (process.platform === 'darwin') {
-    return process.arch === 'arm64' ? 'macos-arm64' : 'macos-x64'
-  }
-  return process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
+  return pythonResolver.getPlatformId()
 }
 
 /**
