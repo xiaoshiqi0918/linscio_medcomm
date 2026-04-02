@@ -46,7 +46,7 @@ while IFS= read -r line; do
 done < <(grep -E "$SDIST_ONLY_RE" "$REQ" || true)
 
 if [[ ${#SDIST_ARGS[@]} -gt 0 ]]; then
-  "$PY" -m pip wheel "${SDIST_ARGS[@]}" --no-deps -w "$WHEEL_DIR/"
+  "$PY" -m pip wheel "${SDIST_ARGS[@]}" -w "$WHEEL_DIR/"
   # remove leftover sdist archives if pip wheel left any
   rm -f "$WHEEL_DIR/"*.tar.gz "$WHEEL_DIR/"*.zip 2>/dev/null || true
 fi

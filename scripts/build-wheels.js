@@ -74,7 +74,7 @@ function main() {
   if (sdistLines.length > 0) {
     console.log('[build-wheels] Phase 2: build sdist-only packages into wheels')
     const sdistArgs = sdistLines.filter((l) => l.trim()).map((l) => l.trim())
-    const r2 = spawnSync(pip, ['wheel', ...sdistArgs, '--no-deps', '-w', wheelsDir], {
+    const r2 = spawnSync(pip, ['wheel', ...sdistArgs, '-w', wheelsDir], {
       stdio: 'inherit', cwd: path.join(root, 'backend'),
     })
     if (r2.status !== 0) {
