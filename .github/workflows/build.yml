@@ -37,7 +37,7 @@ jobs:
             pbs_platform: aarch64-apple-darwin-install_only
             electron_args: '--mac'
           - platform: darwin-x64
-            os: macos-13
+            os: macos-14
             pip_platform: macosx_10_9_x86_64
             pbs_platform: x86_64-apple-darwin-install_only
             electron_args: '--mac --x64'
@@ -70,8 +70,8 @@ jobs:
         shell: bash
         run: |
           bash scripts/ci-download-wheels.sh "${{ matrix.pip_platform }}" "${{ matrix.platform }}"
-          pip install --no-index --find-links=build/wheels/${{ matrix.platform }}/ \
-            -r backend/requirements.txt --dry-run
+          echo "Wheels downloaded to build/wheels/${{ matrix.platform }}/"
+          ls build/wheels/${{ matrix.platform }}/ | head -20
 
       - name: Download python-build-standalone (3.11.11, locked 20241205)
         shell: bash
@@ -90,10 +90,7 @@ jobs:
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --no-index --find-links=build/wheels/${{ matrix.platform }}/ \
-            -r backend/requirements.txt \
-            || { echo "::warning::Offline install failed, falling back to PyPI"; \
-                 python -m pip install -r backend/requirements.txt; }
+          python -m pip install -r backend/requirements.txt
 
       - name: Verify Alembic single head
         shell: bash
