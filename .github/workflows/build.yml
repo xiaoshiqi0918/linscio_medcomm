@@ -80,7 +80,11 @@ jobs:
           curl -sSL "https://github.com/astral-sh/python-build-standalone/releases/download/20241205/cpython-3.11.11+20241205-${{ matrix.pbs_platform }}.tar.gz" \
             -o build/python-standalone.tar.gz
           tar -xzf build/python-standalone.tar.gz -C build
-          mv build/cpython-3.11* build/python
+          # install_only tarballs extract to python/; older releases to cpython-*
+          if [ ! -d build/python ]; then
+            mv build/cpython-3.11* build/python
+          fi
+          ls build/python/bin/python3 build/python/python.exe 2>/dev/null || ls build/python/
 
       - name: Install backend deps (for Alembic migration check)
         shell: bash
