@@ -10,7 +10,7 @@ from app.api.v1.auth import get_current_user
 from app.models.user import User
 from app.services.user_settings import UserSettingService
 
-from app.services.llm.manager import DOMESTIC_PROVIDERS, MODEL_HINTS, set_user_default_model
+from app.services.llm.manager import DOMESTIC_PROVIDERS, set_user_default_model
 
 router = APIRouter()
 

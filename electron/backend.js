@@ -32,12 +32,16 @@ async function checkHealth() {
   }
 }
 
-function startHealthCheck(onUnhealthy) {
+function startHealthCheck(onUnhealthy, onHealthy) {
   if (healthCheckTimer) clearInterval(healthCheckTimer)
   healthCheckTimer = setInterval(async () => {
     if (!backendProcess) return
     const ok = await checkHealth()
-    if (!ok && onUnhealthy) onUnhealthy()
+    if (ok) {
+      if (onHealthy) onHealthy()
+    } else {
+      if (onUnhealthy) onUnhealthy()
+    }
   }, 10000)
 }
 

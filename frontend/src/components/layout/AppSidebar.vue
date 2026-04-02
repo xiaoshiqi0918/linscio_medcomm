@@ -19,9 +19,6 @@
         <router-link to="/templates" class="nav-item">
           <span class="icon">📄</span> 模板库
         </router-link>
-        <router-link to="/polish" class="nav-item nav-item-subtle">
-          <span class="icon">✏️</span> 润色（实验）
-        </router-link>
       </div>
       <div class="nav-group">
         <span class="nav-group-title">资产管理</span>
@@ -144,13 +141,6 @@ onUnmounted(() => {
 
 .icon {
   margin-right: 0.5rem;
-}
-
-.nav-item-subtle {
-  font-size: 0.78rem;
-  opacity: 0.72;
-  padding-top: 0.35rem;
-  padding-bottom: 0.35rem;
 }
 
 .sidebar-footer {

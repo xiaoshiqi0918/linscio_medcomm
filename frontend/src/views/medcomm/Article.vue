@@ -512,8 +512,8 @@
         <el-icon class="is-loading" style="font-size:1.5rem;"><Loading /></el-icon>
         <p style="margin-top:0.5em;color:#888;">正在润色…</p>
       </div>
-      <div v-else-if="polishChanges.length === 0 && !polishError" style="text-align:center;padding:2em 0;color:#999;">
-        暂无润色建议
+      <div v-else-if="polishChanges.length === 0 && !polishError" style="text-align:center;padding:2em 0;color:#67c23a;">
+        内容已较好，暂无润色建议
       </div>
       <div v-else-if="polishError" style="padding:1em 0;color:#f56c6c;">{{ polishError }}</div>
       <div v-else class="polish-changes-list">
@@ -682,7 +682,7 @@ async function fetchSectionVersions() {
     const res = await api.medcomm.getSectionVersions(currentSectionId.value)
     sectionVersions.value = res.data?.items || []
   } catch (e: any) {
-    ElMessage.error(axiosErrorDetail(e) || '加载版本失败')
+    ElMessage.error(await axiosErrorDetail(e) || '加载版本失败')
   } finally {
     versionsLoading.value = false
   }
@@ -695,7 +695,7 @@ async function revertToVersion(row: { id: number }) {
     ElMessage.success('已恢复到该版本')
     await loadArticle(currentSectionId.value ?? undefined)
   } catch (e: any) {
-    ElMessage.error(axiosErrorDetail(e) || '恢复失败')
+    ElMessage.error(await axiosErrorDetail(e) || '恢复失败')
   }
 }
 
@@ -706,7 +706,7 @@ async function fetchSnapshots() {
     const res = await api.medcomm.listSnapshots(articleId.value)
     articleSnapshots.value = res.data?.items || []
   } catch (e: any) {
-    ElMessage.error(axiosErrorDetail(e) || '加载快照失败')
+    ElMessage.error(await axiosErrorDetail(e) || '加载快照失败')
   } finally {
     snapshotsLoading.value = false
   }
@@ -721,7 +721,7 @@ async function createArticleSnapshot() {
     ElMessage.success('快照已保存')
     await fetchSnapshots()
   } catch (e: any) {
-    ElMessage.error(axiosErrorDetail(e) || '保存快照失败')
+    ElMessage.error(await axiosErrorDetail(e) || '保存快照失败')
   } finally {
     snapshotSaving.value = false
   }
@@ -745,7 +745,7 @@ async function restoreSnapshot(row: { id: number }) {
     await fetchSectionVersions()
     await fetchSnapshots()
   } catch (e: any) {
-    ElMessage.error(axiosErrorDetail(e) || '恢复失败')
+    ElMessage.error(await axiosErrorDetail(e) || '恢复失败')
   }
 }
 
@@ -756,7 +756,7 @@ async function deleteSnapshot(row: { id: number }) {
     ElMessage.success('已删除')
     await fetchSnapshots()
   } catch (e: any) {
-    ElMessage.error(axiosErrorDetail(e) || '删除失败')
+    ElMessage.error(await axiosErrorDetail(e) || '删除失败')
   }
 }
 
@@ -877,7 +877,7 @@ async function saveVisualContinuity() {
     }
     ElMessage.success('已保存图示连贯性配置')
   } catch (e: any) {
-    ElMessage.error(axiosErrorDetail(e) || '保存失败')
+    ElMessage.error(await axiosErrorDetail(e) || '保存失败')
   } finally {
     savingVisualContinuity.value = false
   }
@@ -1999,7 +1999,7 @@ async function saveArticleTitle() {
       articleStore.setCurrent(article.value)
     }
   } catch (e: unknown) {
-    ElMessage.error(axiosErrorDetail(e as any) || '保存标题失败')
+    ElMessage.error(await axiosErrorDetail(e as any) || '保存标题失败')
     articleTitleDraft.value = prev
   }
 }
@@ -2017,7 +2017,7 @@ async function handleGenerateTitle() {
       ElMessage.success('已根据全文总结标题')
     }
   } catch (e: unknown) {
-    ElMessage.error(axiosErrorDetail(e as any) || '生成标题失败')
+    ElMessage.error(await axiosErrorDetail(e as any) || '生成标题失败')
   } finally {
     titleGenerating.value = false
   }
@@ -2044,9 +2044,9 @@ async function openPolishDialog(type: 'language' | 'platform') {
     await api.polish.run({ session_id: sessionId })
     const changesRes = await api.polish.getChanges(sessionId)
     polishChanges.value = changesRes.data?.changes ?? []
-    if (!polishChanges.value.length) polishError.value = '无润色建议（内容已较好）'
+    // polishChanges empty + polishError empty → template shows green "暂无润色建议"
   } catch (e: unknown) {
-    polishError.value = axiosErrorDetail(e as any) || '润色失败'
+    polishError.value = await axiosErrorDetail(e as any) || '润色失败'
   } finally {
     polishLoading.value = false
   }
@@ -2076,7 +2076,7 @@ async function copyMarkdownExport() {
     await navigator.clipboard.writeText(text)
     ElMessage.success('已复制 Markdown（含参考文献与配图说明）')
   } catch (e: unknown) {
-    ElMessage.error(axiosErrorDetail(e as any) || '复制失败')
+    ElMessage.error(await axiosErrorDetail(e as any) || '复制失败')
   } finally {
     copyMdLoading.value = false
   }

@@ -700,30 +700,32 @@ async def _auto_generate_title_if_complete(article_id: int) -> dict | None:
     from app.services.export.utils import load_article_sections
     from app.services.medcomm.title_generator import generate_article_title as gen_title
 
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Article).where(Article.id == article_id, Article.deleted_at.is_(None)))
-        article = result.scalar_one_or_none()
-        if not article:
-            return None
-        if (article.title or "").strip():
-            return None
-        _, parts = await load_article_sections(article_id, db)
-        if not parts or any(not body.strip() for _, body, _ in parts):
-            return None
-        title = await gen_title(
-            article_id=article_id,
-            topic=article.topic or "",
-            content_format=article.content_format or "article",
-            platform=article.platform or "wechat",
-            target_audience=article.target_audience or "public",
-            parts=parts,
-            article_default_model=article.default_model,
-        )
-        if not title:
-            return None
-        article.title = title[:500]
-        await db.commit()
-        return {"type": "title_generated", "title": title[:500]}
+    lock = get_domain_lock("articles")
+    async with lock:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Article).where(Article.id == article_id, Article.deleted_at.is_(None)))
+            article = result.scalar_one_or_none()
+            if not article:
+                return None
+            if (article.title or "").strip():
+                return None
+            _, parts = await load_article_sections(article_id, db)
+            if not parts or any(not body.strip() for _, body, _ in parts):
+                return None
+            title = await gen_title(
+                article_id=article_id,
+                topic=article.topic or "",
+                content_format=article.content_format or "article",
+                platform=article.platform or "wechat",
+                target_audience=article.target_audience or "public",
+                parts=parts,
+                article_default_model=article.default_model,
+            )
+            if not title:
+                return None
+            article.title = title[:500]
+            await db.commit()
+            return {"type": "title_generated", "title": title[:500]}
 
 
 async def _get_section_text(db: AsyncSession, article_id: int, section_type: str, platform: str) -> str:
@@ -963,7 +965,7 @@ async def generate_section(
                         await sess.commit()
             yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
-            if evt.get("type") == "done":
+            if evt.get("type") == "done" and evt.get("content"):
                 try:
                     title_evt = await _auto_generate_title_if_complete(a_id)
                     if title_evt:

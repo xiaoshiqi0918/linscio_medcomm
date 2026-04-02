@@ -314,6 +314,8 @@ async function startBackend() {
     console.warn(`[MedComm] Backend unhealthy, restarting (${startBackend._restartCount}/5)...`)
     backend.stop()
     setTimeout(() => startBackend(), 2000)
+  }, () => {
+    if (startBackend._restartCount > 0) startBackend._restartCount = 0
   })
   backend.start(env)
 }

@@ -47,9 +47,11 @@ def _collect_citation_refs(node: dict, out: list[dict]) -> None:
         _collect_citation_refs(c, out)
 
 
-def _extract_text(node: dict) -> str:
+def _extract_text(node) -> str:
     if isinstance(node, str):
         return node
+    if isinstance(node, list):
+        return "".join(_extract_text(c) for c in node)
     if not isinstance(node, dict):
         return ""
     if node.get("type") == "text":
