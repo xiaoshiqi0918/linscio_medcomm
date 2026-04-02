@@ -13,6 +13,12 @@ venv/
 *.db-shm
 .DS_Store
 Thumbs.db
+*.swp
+*~
+.idea/
+.pytest_cache/
+.mypy_cache/
+coverage/
 *.linscio-backup
 .data/
 # 本地认证密钥（由后端在 APP_DATA 下自动生成，勿提交）

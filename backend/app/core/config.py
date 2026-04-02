@@ -32,10 +32,17 @@ def _load_or_create_auth_secret() -> str:
                 return val
         val = secrets.token_urlsafe(48)
         p.write_text(val, encoding="utf-8")
+        try:
+            p.chmod(0o600)
+        except OSError:
+            pass
         return val
     except Exception:
-        # 兜底：开发环境默认值（不推荐生产使用）
-        return "linscio-dev-secret"
+        import logging
+        logging.getLogger(__name__).warning(
+            "无法读写 .auth_secret，使用临时随机密钥（本次进程有效）"
+        )
+        return secrets.token_urlsafe(48)
 
 
 class Settings:

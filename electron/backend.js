@@ -60,8 +60,10 @@ async function start(envExtra = {}) {
     backendProcess = null
     if (code !== 0 && code !== null && restartCount < MAX_RESTARTS) {
       restartCount++
-      console.warn(`[MedComm] Backend exited (code=${code}), restarting in 3s...`)
+      console.warn(`[MedComm] Backend exited (code=${code}), restarting in 3s (${restartCount}/${MAX_RESTARTS})...`)
       setTimeout(() => start(envExtra), 3000)
+    } else if (code === 0) {
+      restartCount = 0
     }
   })
 }
@@ -72,9 +74,16 @@ function stop() {
     healthCheckTimer = null
   }
   if (backendProcess) {
+    const proc = backendProcess
     backendProcess.removeAllListeners('exit')
-    backendProcess.kill('SIGTERM')
     backendProcess = null
+    if (process.platform === 'win32') {
+      try {
+        require('child_process').execSync(`taskkill /pid ${proc.pid} /T /F`, { stdio: 'ignore' })
+      } catch { /* already exited */ }
+    } else {
+      proc.kill('SIGTERM')
+    }
   }
 }
 

@@ -26,20 +26,23 @@ fi
 
 mkdir -p "$WHEEL_DIR"
 TMP_REQ="$(mktemp)"
-grep -vE '^\s*jieba' "$REQ" | grep -vE '^\s*bibtexparser' > "$TMP_REQ"
+trap 'rm -f "$TMP_REQ"' EXIT
 
+SDIST_ONLY_RE='^\s*(jieba|bibtexparser)'
+grep -vE "$SDIST_ONLY_RE" "$REQ" > "$TMP_REQ"
+
+echo "==> Phase 1: binary wheels (platform=$PIP_PLATFORM)"
 "$PY" -m pip download -r "$TMP_REQ" \
   --platform "$PIP_PLATFORM" --python-version 3.11 \
   --only-binary=:all: -d "$WHEEL_DIR/"
-rm -f "$TMP_REQ"
 
-# 无平台约束：拉取 sdist / 通用 wheel，供嵌入 Python 离线安装
+echo "==> Phase 2: sdist-only packages (no platform constraint)"
 SDIST_ARGS=()
 while IFS= read -r line; do
   [[ -z "${line// }" ]] && continue
   [[ "$line" =~ ^# ]] && continue
   SDIST_ARGS+=("$line")
-done < <(grep -E '^\s*(jieba|bibtexparser)' "$REQ" || true)
+done < <(grep -E "$SDIST_ONLY_RE" "$REQ" || true)
 
 if [[ ${#SDIST_ARGS[@]} -gt 0 ]]; then
   "$PY" -m pip download "${SDIST_ARGS[@]}" -d "$WHEEL_DIR/"

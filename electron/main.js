@@ -304,8 +304,14 @@ async function startBackend() {
     Object.assign(env, await keychain.getApiKeysForBackend())
   } catch (e) { /* keychain 不可用时忽略 */ }
 
+  if (!startBackend._restartCount) startBackend._restartCount = 0
   backend.startHealthCheck(() => {
-    console.warn('[MedComm] Backend unhealthy, restarting...')
+    if (startBackend._restartCount >= 5) {
+      console.error('[MedComm] Backend health-restart limit reached')
+      return
+    }
+    startBackend._restartCount++
+    console.warn(`[MedComm] Backend unhealthy, restarting (${startBackend._restartCount}/5)...`)
     backend.stop()
     setTimeout(() => startBackend(), 2000)
   })
@@ -563,12 +569,18 @@ app.whenReady().then(async () => {
   // 定时备份：每小时 DB / 每日完整
   setInterval(() => backup.runScheduledBackup(), 15 * 60 * 1000)
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  app.on('activate', async () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      const healthy = await backend.checkHealth()
+      if (!healthy) await startBackend()
+      createWindow()
+    }
   })
 })
 
 app.on('window-all-closed', () => {
-  backend.stop()
-  if (process.platform !== 'darwin') app.quit()
+  if (process.platform !== 'darwin') {
+    backend.stop()
+    app.quit()
+  }
 })

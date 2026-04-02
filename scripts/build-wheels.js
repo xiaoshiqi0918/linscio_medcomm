@@ -47,18 +47,42 @@ function main() {
   fs.mkdirSync(wheelsDir, { recursive: true })
 
   const pip = process.env.PIP_PATH || 'pip'
-  const r = spawnSync(pip, [
-    'download', '-r', requirementsPath,
+  const SDIST_ONLY = ['jieba', 'bibtexparser']
+
+  const lines = fs.readFileSync(requirementsPath, 'utf-8').split('\n')
+  const binaryLines = lines.filter((l) => !SDIST_ONLY.some((s) => l.trim().startsWith(s)))
+  const sdistLines = lines.filter((l) => SDIST_ONLY.some((s) => l.trim().startsWith(s)))
+
+  const tmpReq = path.join(root, 'build', '.tmp-req-binary.txt')
+  fs.writeFileSync(tmpReq, binaryLines.join('\n'))
+
+  console.log('[build-wheels] Phase 1: binary wheels (platform=%s)', meta.tag)
+  const r1 = spawnSync(pip, [
+    'download', '-r', tmpReq,
     '--platform', meta.tag,
     '--python-version', '311',
     '--only-binary', ':all:',
     '--dest', wheelsDir,
   ], { stdio: 'inherit', cwd: path.join(root, 'backend') })
+  fs.unlinkSync(tmpReq)
 
-  if (r.status !== 0) {
-    console.error('[build-wheels] pip download failed, status', r.status)
+  if (r1.status !== 0) {
+    console.error('[build-wheels] Phase 1 failed, status', r1.status)
     process.exit(1)
   }
+
+  if (sdistLines.length > 0) {
+    console.log('[build-wheels] Phase 2: sdist-only packages')
+    const sdistArgs = sdistLines.filter((l) => l.trim()).flatMap((l) => [l.trim()])
+    const r2 = spawnSync(pip, ['download', ...sdistArgs, '--dest', wheelsDir], {
+      stdio: 'inherit', cwd: path.join(root, 'backend'),
+    })
+    if (r2.status !== 0) {
+      console.error('[build-wheels] Phase 2 failed, status', r2.status)
+      process.exit(1)
+    }
+  }
+
   console.log('[build-wheels] Done:', wheelsDir)
 }
 
