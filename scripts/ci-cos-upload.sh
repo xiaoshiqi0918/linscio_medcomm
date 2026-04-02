@@ -58,7 +58,7 @@ DEST_KEY="${PREFIX}/v${VER}/${PLAT}/"
 echo "::group::coscli config (~/.cos.yaml)"
 umask 077
 mkdir -p "${HOME:-$ROOT}"
-# 非交互写入凭证；全路径 cos://BucketName-APPID/... 上传，无需在配置里登记桶别名
+COS_ENDPOINT="cos.${COS_REGION}.myqcloud.com"
 cat > "${HOME}/.cos.yaml" <<EOF
 cos:
   base:
@@ -66,6 +66,11 @@ cos:
     secretkey: "${COS_SECRET_KEY}"
     sessiontoken: ""
     protocol: https
+  buckets:
+    - name: "${COS_BUCKET}"
+      alias: default
+      region: "${COS_REGION}"
+      endpoint: "${COS_ENDPOINT}"
 EOF
 echo "::endgroup::"
 

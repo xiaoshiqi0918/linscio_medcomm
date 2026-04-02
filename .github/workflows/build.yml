@@ -37,7 +37,7 @@ jobs:
             pbs_platform: aarch64-apple-darwin-install_only
             electron_args: '--mac'
           - platform: darwin-x64
-            os: macos-14
+            os: macos-13
             pip_platform: macosx_10_9_x86_64
             pbs_platform: x86_64-apple-darwin-install_only
             electron_args: '--mac --x64'
