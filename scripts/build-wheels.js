@@ -72,14 +72,20 @@ function main() {
   }
 
   if (sdistLines.length > 0) {
-    console.log('[build-wheels] Phase 2: sdist-only packages')
-    const sdistArgs = sdistLines.filter((l) => l.trim()).flatMap((l) => [l.trim()])
-    const r2 = spawnSync(pip, ['download', ...sdistArgs, '--dest', wheelsDir], {
+    console.log('[build-wheels] Phase 2: build sdist-only packages into wheels')
+    const sdistArgs = sdistLines.filter((l) => l.trim()).map((l) => l.trim())
+    const r2 = spawnSync(pip, ['wheel', ...sdistArgs, '--no-deps', '-w', wheelsDir], {
       stdio: 'inherit', cwd: path.join(root, 'backend'),
     })
     if (r2.status !== 0) {
       console.error('[build-wheels] Phase 2 failed, status', r2.status)
       process.exit(1)
+    }
+    // remove leftover sdist archives
+    for (const f of fs.readdirSync(wheelsDir)) {
+      if (f.endsWith('.tar.gz') || f.endsWith('.zip')) {
+        fs.unlinkSync(path.join(wheelsDir, f))
+      }
     }
   }
 

@@ -3,8 +3,9 @@
 # 用法: ci-download-wheels.sh <pip_platform> <dest_subdir>
 # 例:   ci-download-wheels.sh macosx_11_0_arm64 darwin-arm64
 #
-# jieba、bibtexparser 在 PyPI 上常为 sdist 或无匹配 wheel，不能与 --platform + --only-binary=:all: 同批解析；
-# 故先下载其余依赖的二进制 wheel，再单独拉取上述包（及 bibtexparser 的依赖如 pyparsing）。
+# jieba、bibtexparser 在 PyPI 上只有 sdist，不能与 --platform + --only-binary=:all: 同批解析；
+# Phase 1: 下载其余包的平台 wheel
+# Phase 2: 用 pip wheel 把 sdist 构建为 .whl（避免安装时需要 setuptools）
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REQ="$ROOT/backend/requirements.txt"
@@ -36,7 +37,7 @@ echo "==> Phase 1: binary wheels (platform=$PIP_PLATFORM)"
   --platform "$PIP_PLATFORM" --python-version 3.11 \
   --only-binary=:all: -d "$WHEEL_DIR/"
 
-echo "==> Phase 2: sdist-only packages (no platform constraint)"
+echo "==> Phase 2: build sdist-only packages into wheels"
 SDIST_ARGS=()
 while IFS= read -r line; do
   [[ -z "${line// }" ]] && continue
@@ -45,7 +46,9 @@ while IFS= read -r line; do
 done < <(grep -E "$SDIST_ONLY_RE" "$REQ" || true)
 
 if [[ ${#SDIST_ARGS[@]} -gt 0 ]]; then
-  "$PY" -m pip download "${SDIST_ARGS[@]}" -d "$WHEEL_DIR/"
+  "$PY" -m pip wheel "${SDIST_ARGS[@]}" --no-deps -w "$WHEEL_DIR/"
+  # remove leftover sdist archives if pip wheel left any
+  rm -f "$WHEEL_DIR/"*.tar.gz "$WHEEL_DIR/"*.zip 2>/dev/null || true
 fi
 
 echo "OK: wheels -> $WHEEL_DIR"
