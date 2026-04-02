@@ -55,5 +55,9 @@ else
   git commit -m "$MSG"
 fi
 
-git push -u "$REMOTE" "$BRANCH"
+if git rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+  git push "$REMOTE" "$BRANCH"
+else
+  git push -u "$REMOTE" "$BRANCH"
+fi
 echo "OK: 已推送到 $REMOTE $BRANCH"
