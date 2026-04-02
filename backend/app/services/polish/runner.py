@@ -14,6 +14,8 @@ from app.agents.polish.polish_agent import (
     HandbookPolishAgent,
 )
 from app.agents.prompts.loader import load_polish, load_writing_sop
+from app.agents.prompts.anti_hallucination import MEDCOMM_EVIDENCE_LANGUAGE
+from app.agents.prompts import MEDCOMM_ANTI_HALLUCINATION
 from app.services.llm.openai_client import chat_completion
 
 _POLISH_JSON_SYSTEM_BASE = load_polish("json_output_system") or "你是一个医学科普编辑助手。请严格按照要求的 JSON 格式输出，不要添加任何解释或额外文字。"
@@ -29,6 +31,7 @@ _WRITING_SOP_SUMMARY = """【润色参照标准——《医学科普文章写作
 
 _SOP_TEXT = load_writing_sop()
 _POLISH_JSON_SYSTEM = _POLISH_JSON_SYSTEM_BASE + ("\n\n" + _WRITING_SOP_SUMMARY if _SOP_TEXT else "")
+_POLISH_JSON_SYSTEM += "\n\n" + MEDCOMM_ANTI_HALLUCINATION + "\n\n" + MEDCOMM_EVIDENCE_LANGUAGE
 
 
 def _extract_text_from_doc(doc: dict) -> str:

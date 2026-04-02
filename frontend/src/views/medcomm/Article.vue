@@ -45,7 +45,8 @@
         <template #dropdown>
           <el-dropdown-menu>
             <el-dropdown-item @click="router.push('/personal-corpus')">个人语料</el-dropdown-item>
-            <el-dropdown-item divided @click="router.push('/polish')">润色（实验页）</el-dropdown-item>
+            <el-dropdown-item divided :disabled="!currentSectionId" @click="openPolishDialog('language')">语言润色</el-dropdown-item>
+            <el-dropdown-item :disabled="!currentSectionId" @click="openPolishDialog('platform')">平台适配</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -506,6 +507,31 @@
       </template>
     </el-dialog>
 
+    <el-dialog v-model="polishDialogVisible" :title="polishDialogTitle" width="620px" destroy-on-close>
+      <div v-if="polishLoading" style="text-align:center;padding:2em 0;">
+        <el-icon class="is-loading" style="font-size:1.5rem;"><Loading /></el-icon>
+        <p style="margin-top:0.5em;color:#888;">正在润色…</p>
+      </div>
+      <div v-else-if="polishChanges.length === 0 && !polishError" style="text-align:center;padding:2em 0;color:#999;">
+        暂无润色建议
+      </div>
+      <div v-else-if="polishError" style="padding:1em 0;color:#f56c6c;">{{ polishError }}</div>
+      <div v-else class="polish-changes-list">
+        <div v-for="(c, idx) in polishChanges" :key="c.id" class="polish-change-item" :class="{ accepted: c.status === 'accepted', rejected: c.status === 'rejected' }">
+          <div class="pc-header">#{{ idx + 1 }} <el-tag v-if="c.status !== 'pending'" size="small" :type="c.status === 'accepted' ? 'success' : 'info'">{{ c.status === 'accepted' ? '已采纳' : '已忽略' }}</el-tag></div>
+          <div class="pc-row"><span class="pc-label">原文</span><span class="pc-text del">{{ c.original_text }}</span></div>
+          <div class="pc-row"><span class="pc-label">建议</span><span class="pc-text ins">{{ c.suggested_text }}</span></div>
+          <div v-if="c.status === 'pending'" class="pc-actions">
+            <el-button size="small" type="primary" @click="handleAcceptChange(c)">采纳</el-button>
+            <el-button size="small" @click="handleRejectChange(c)">忽略</el-button>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="polishDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="claimEvidenceVisible" title="依据核对" width="540px" destroy-on-close>
       <div v-if="claimEvidencePayload" class="claim-evidence-body">
         <p v-if="claimEvidencePayload.text" class="ce-row">
@@ -540,7 +566,7 @@ import VerificationPanel from '@/components/verification/VerificationPanel.vue'
 import FormatBadge from '@/components/common/FormatBadge.vue'
 import PlatformBadge from '@/components/common/PlatformBadge.vue'
 import StageProgressBar from '@/components/layout/StageProgressBar.vue'
-import { ArrowDown } from '@element-plus/icons-vue'
+import { ArrowDown, Loading } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, axiosErrorDetail, API_BASE, getAuthToken, getLocalApiKeyHeaderForFetch } from '@/api'
 import { useStreamGenerate } from '@/composables/useStreamGenerate'
@@ -1997,6 +2023,49 @@ async function handleGenerateTitle() {
   }
 }
 
+// ─── 润色（in-editor） ───
+const polishDialogVisible = ref(false)
+const polishDialogTitle = ref('润色')
+const polishLoading = ref(false)
+const polishError = ref('')
+const polishChanges = ref<Array<{ id: number; original_text: string; suggested_text: string; status: string }>>([])
+
+async function openPolishDialog(type: 'language' | 'platform') {
+  if (!currentSectionId.value) return
+  polishDialogTitle.value = type === 'language' ? '语言润色' : '平台适配'
+  polishChanges.value = []
+  polishError.value = ''
+  polishLoading.value = true
+  polishDialogVisible.value = true
+  try {
+    const sessRes = await api.polish.createSession({ section_id: currentSectionId.value, polish_type: type })
+    const sessionId = sessRes.data?.id
+    if (!sessionId) throw new Error('创建润色会话失败')
+    await api.polish.run({ session_id: sessionId })
+    const changesRes = await api.polish.getChanges(sessionId)
+    polishChanges.value = changesRes.data?.changes ?? []
+    if (!polishChanges.value.length) polishError.value = '无润色建议（内容已较好）'
+  } catch (e: unknown) {
+    polishError.value = axiosErrorDetail(e as any) || '润色失败'
+  } finally {
+    polishLoading.value = false
+  }
+}
+
+async function handleAcceptChange(c: any) {
+  try {
+    await api.polish.acceptChange(c.id)
+    c.status = 'accepted'
+  } catch { /* ignore */ }
+}
+
+async function handleRejectChange(c: any) {
+  try {
+    await api.polish.rejectChange(c.id)
+    c.status = 'rejected'
+  } catch { /* ignore */ }
+}
+
 async function copyMarkdownExport() {
   if (!articleId.value) return
   copyMdLoading.value = true
@@ -2391,4 +2460,15 @@ async function handleAuthUserChanged() {
   color: #111827;
   word-break: break-all;
 }
+
+.polish-changes-list { max-height: 60vh; overflow-y: auto; }
+.polish-change-item { border: 1px solid #e5e7eb; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.5rem; }
+.polish-change-item.accepted { border-color: #67c23a; background: #f0f9eb; }
+.polish-change-item.rejected { opacity: 0.5; }
+.pc-header { font-weight: 600; margin-bottom: 0.35rem; font-size: 0.85rem; color: #374151; }
+.pc-row { display: flex; gap: 0.5rem; margin-bottom: 0.25rem; font-size: 0.875rem; }
+.pc-label { flex-shrink: 0; color: #6b7280; min-width: 2.5em; }
+.pc-text.del { color: #f56c6c; text-decoration: line-through; }
+.pc-text.ins { color: #67c23a; }
+.pc-actions { margin-top: 0.35rem; display: flex; gap: 0.5rem; }
 </style>

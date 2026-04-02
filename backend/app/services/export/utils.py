@@ -54,6 +54,12 @@ def _extract_text(node: dict) -> str:
         return ""
     if node.get("type") == "text":
         return node.get("text", "")
+    if node.get("type") == "image":
+        src = node.get("attrs", {}).get("src", "")
+        alt = node.get("attrs", {}).get("alt", "")
+        if src:
+            return f"\n![{alt}]({src})\n"
+        return ""
     return "".join(_extract_text(c) for c in node.get("content", []))
 
 

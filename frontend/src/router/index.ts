@@ -47,12 +47,6 @@ const router = createRouter({
           meta: { title: '文献详情' },
         },
         {
-          path: 'polish',
-          name: 'polish',
-          component: () => import('@/views/placeholder/Placeholder.vue'),
-          meta: { title: '润色适配' },
-        },
-        {
           path: 'templates',
           name: 'templates',
           component: () => import('@/views/templates/Index.vue'),

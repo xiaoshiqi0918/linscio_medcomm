@@ -437,9 +437,10 @@ export const api = {
     delete: (id: number) => http.delete(`/api/v1/personal-corpus/${id}`),
   },
   polish: {
-    run: () => http.post('/api/v1/polish/run'),
+    run: (data: { session_id: number }) => http.post('/api/v1/polish/run', data),
     createSession: (data: { section_id: number; polish_type?: string }) =>
       http.post('/api/v1/polish/sessions', data),
+    getChanges: (sessionId: number) => http.get(`/api/v1/polish/sessions/${sessionId}/changes`),
     acceptChange: (changeId: number) => http.post(`/api/v1/polish/changes/${changeId}/accept`),
     rejectChange: (changeId: number) => http.post(`/api/v1/polish/changes/${changeId}/reject`),
   },

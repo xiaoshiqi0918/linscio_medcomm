@@ -116,6 +116,7 @@ async def set_default_model(body: SetDefaultModelRequest, user: User = Depends(g
 
 class TestApiKeyRequest(BaseModel):
     api_key: str = ""
+    provider: str = "openai"
 
 
 @router.get("/health")
@@ -181,21 +182,36 @@ async def connection_self_check():
 
 @router.post("/apikey/test")
 async def test_api_key(req: TestApiKeyRequest | None = None):
-    """测试 OpenAI API Key 是否有效，可传入 api_key 或使用环境变量"""
-    key = (req.api_key if req and req.api_key else os.environ.get("OPENAI_API_KEY", "")) or ""
-    if not key:
-        return {"valid": False, "error": "未配置 API Key"}
+    """测试 API Key 是否有效：支持 OpenAI 及 OpenAI-兼容国内供应商"""
+    provider = (req.provider if req and req.provider else "openai").strip().lower()
+    key = (req.api_key if req and req.api_key else "") or ""
+
+    PROVIDER_CONFIGS: dict[str, tuple[str, str, str]] = {
+        "openai": (os.environ.get("OPENAI_API_KEY", ""), "https://api.openai.com/v1", "gpt-4o-mini"),
+        "deepseek": (os.environ.get("DEEPSEEK_API_KEY", ""), "https://api.deepseek.com/v1", "deepseek-chat"),
+        "zhipu": (os.environ.get("ZHIPU_API_KEY", ""), "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+        "moonshot": (os.environ.get("MOONSHOT_API_KEY", ""), "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+        "siliconflow": (os.environ.get("SILICONFLOW_API_KEY", ""), "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
+        "dashscope": (os.environ.get("DASHSCOPE_API_KEY", ""), "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-turbo"),
+    }
+    cfg = PROVIDER_CONFIGS.get(provider)
+    if not cfg:
+        return {"valid": False, "error": f"不支持的提供商: {provider}"}
+    env_key, base_url, model = cfg
+    final_key = key or env_key
+    if not final_key:
+        return {"valid": False, "error": f"未配置 {provider} API Key"}
     try:
         from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=key)
+        client = AsyncOpenAI(api_key=final_key, base_url=base_url)
         resp = await client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=model,
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=5,
         )
-        return {"valid": True, "model": resp.model}
+        return {"valid": True, "model": resp.model, "provider": provider}
     except Exception as e:
-        return {"valid": False, "error": str(e)}
+        return {"valid": False, "error": str(e), "provider": provider}
 
 
 @router.get("/llm-models")

@@ -42,7 +42,8 @@ class WeasyPrintExporter(BaseExporter):
     """WeasyPrint PDF 导出"""
 
     async def _build_references(self) -> str:
-        from app.models.article import ArticleLiteratureBinding
+        import json as _json
+        from app.models.article import ArticleLiteratureBinding, ArticleExternalReference
         from app.models.literature import LiteraturePaper
 
         bind_result = await self._db.execute(
@@ -56,18 +57,40 @@ class WeasyPrintExporter(BaseExporter):
             if r[0] not in seen:
                 seen.add(r[0])
                 paper_ids.append(r[0])
-        if not paper_ids:
-            return ""
-        paper_result = await self._db.execute(
-            select(LiteraturePaper).where(LiteraturePaper.id.in_(paper_ids))
+        lines: list[str] = []
+        if paper_ids:
+            paper_result = await self._db.execute(
+                select(LiteraturePaper).where(LiteraturePaper.id.in_(paper_ids))
+            )
+            papers = {p.id: p for p in paper_result.scalars().all()}
+            for i, pid in enumerate(paper_ids, 1):
+                p = papers.get(pid)
+                if not p:
+                    continue
+                lines.append(f"[{i}] {CitationFormatter(p).format('apa')}")
+
+        ext_result = await self._db.execute(
+            select(ArticleExternalReference)
+            .where(ArticleExternalReference.article_id == self.article_id)
+            .order_by(ArticleExternalReference.id.asc())
         )
-        papers = {p.id: p for p in paper_result.scalars().all()}
-        lines = []
-        for i, pid in enumerate(paper_ids, 1):
-            p = papers.get(pid)
-            if not p:
-                continue
-            lines.append(f"[{i}] {CitationFormatter(p).format('apa')}")
+        ext_refs = ext_result.scalars().all()
+        offset = len(lines)
+        for j, r in enumerate(ext_refs, 1):
+            authors = ""
+            try:
+                arr = _json.loads(r.authors) if isinstance(r.authors, str) else (r.authors or [])
+                names = [a.get("name", "") for a in (arr or []) if isinstance(a, dict)]
+                authors = "; ".join([n for n in names if n]) if names else ""
+            except Exception:
+                authors = ""
+            year = r.year or ""
+            journal = r.journal or ""
+            doi = (r.doi or "").strip()
+            tail = f" DOI:{doi}" if doi else ""
+            base = " · ".join([x for x in [authors, journal, str(year) if year else ""] if x])
+            lines.append(f"[{offset + j}] {r.title}{(' — ' + base) if base else ''}{tail}")
+
         if not lines:
             return ""
         return "\n\n## 参考文献\n\n" + "\n".join(lines)
