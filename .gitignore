@@ -15,6 +15,13 @@ venv/
 Thumbs.db
 *.linscio-backup
 .data/
+# 本地认证密钥（由后端在 APP_DATA 下自动生成，勿提交）
+backend/.auth_secret
+backend/.data/.auth_secret
+# Docker Registry 本地 htpasswd（由 portal-system/scripts/create-registry-htpasswd.sh 生成）
+portal-system/registry/auth/htpasswd
+# 与 portal-system/ 目录重复，体积大
+portal-system.zip
 secrets/
 build/python/
 build/*.tar.gz
