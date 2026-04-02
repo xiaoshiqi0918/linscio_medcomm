@@ -26,3 +26,7 @@ secrets/
 build/python/
 build/*.tar.gz
 build/*.zip
+# 本地预下载的平台 wheel（体积大；CI 内生成，勿提交）
+build/wheels/*
+!build/wheels/README.md
+!build/wheels/.gitkeep
