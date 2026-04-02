@@ -1,0 +1,11 @@
+# 临时外网访问：让门户/管理后台监听 0.0.0.0，便于通过公网 IP:端口 访问
+# 用法：docker compose -f docker-compose.yml -f docker-compose.external.yml up -d
+# 恢复仅本机访问：去掉 -f docker-compose.external.yml 后重新 up -d
+
+services:
+  linscio-portal:
+    ports:
+      - "3000:80"
+  linscio-admin:
+    ports:
+      - "3001:80"

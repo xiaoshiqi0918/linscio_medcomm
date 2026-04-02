@@ -1,0 +1,164 @@
+# LinScio 门户 · 管理后台 · 镜像仓库 本地/服务器统一编排
+# 本地开发：cd portal-system && docker compose up -d
+# 不删除旧容器另起一套：docker compose -p linscio2 up -d（新容器名为 linscio2-linscio-db-1 等）
+# 首次启动前需生成 registry/auth/htpasswd；若报 "could not create registry"，多为 registry-data 卷权限问题，见 README 排障。
+#
+# ---------- 宿主机与容器端口对应 ----------
+# 服务                    宿主机端口(绑定)    容器内端口    说明
+# linscio-portal          3000                80           门户前端 (Nginx)
+# linscio-admin           3001                80           管理后台 (Nginx)
+# linscio-api             8001 (127.0.0.1)   8001         API (uvicorn)
+# linscio-registry-proxy  5003 (127.0.0.1)  5003         镜像拉取代理 (uvicorn)
+# linscio-registry-ui     5002 (127.0.0.1)  80           Registry Web UI (Nginx)
+# linscio-registry         -                 5000         仅容器间 expose，不映射宿主机
+# linscio-db               -                 5432         仅容器间，不映射宿主机
+# ------------------------------------------
+
+networks:
+  linscio-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  registry-data:
+
+services:
+  linscio-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks:
+      - linscio-net
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: linscio_portal
+      POSTGRES_USER: linscio_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U linscio_user -d linscio_portal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  linscio-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - linscio-net
+    ports:
+      - "127.0.0.1:8001:8001"
+    volumes:
+      - ./registry/auth:/registry/auth
+    environment:
+      DATABASE_URL: postgresql+asyncpg://linscio_user:${POSTGRES_PASSWORD}@linscio-db:5432/linscio_portal
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRE_MINUTES: 10080
+      AES_SECRET_KEY: ${AES_SECRET_KEY}
+      AES_IV: ${AES_IV}
+      REGISTRY_AUTH_FILE: /registry/auth/htpasswd
+      REGISTRY_URL: ${REGISTRY_URL:-registry.linscio.com.cn}
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000","http://localhost:3001"]}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      COS_SECRET_ID: ${COS_SECRET_ID:-}
+      COS_SECRET_KEY: ${COS_SECRET_KEY:-}
+      COS_BUCKET: ${COS_BUCKET:-linscio-registry-1363203425}
+      COS_REGION: ${COS_REGION:-ap-hongkong}
+    depends_on:
+      linscio-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8001/health\")' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  linscio-portal:
+    # 使用 portal 目录 + 普通 Dockerfile 构建（已含 public/docs 帮助文档，无需 linscio-docs 仓库）
+    build:
+      context: ./portal
+      dockerfile: Dockerfile
+    image: linscio-portal:latest
+    restart: unless-stopped
+    networks:
+      - linscio-net
+    ports:
+      - "3000:80"
+    depends_on:
+      - linscio-api
+
+  linscio-admin:
+    build:
+      context: ./admin
+      dockerfile: Dockerfile
+    image: linscio-admin:latest
+    restart: unless-stopped
+    networks:
+      - linscio-net
+    ports:
+      - "3001:80"
+    depends_on:
+      - linscio-api
+
+  linscio-registry:
+    image: registry:2
+    user: "0:0"
+    restart: unless-stopped
+    networks:
+      - linscio-net
+    expose:
+      - "5000"
+    volumes:
+      - registry-data:/var/lib/registry
+      - ./registry/auth:/auth
+      - ./registry/config.yml:/etc/docker/registry/config.yml:ro
+    environment:
+      REGISTRY_AUTH: htpasswd
+      REGISTRY_AUTH_HTPASSWD_REALM: LinScio Registry
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+
+  # 按 Tag 管控的拉取代理：宿主机 5003 对应容器 5003
+  linscio-registry-proxy:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    image: linscio-api:latest
+    restart: unless-stopped
+    networks:
+      - linscio-net
+    ports:
+      - "127.0.0.1:5003:5003"
+    command: uvicorn app.registry_proxy:app --host 0.0.0.0 --port 5003
+    environment:
+      APP_ENTRY: registry_proxy
+      DATABASE_URL: postgresql+asyncpg://linscio_user:${POSTGRES_PASSWORD}@linscio-db:5432/linscio_portal
+      REGISTRY_UPSTREAM_URL: http://linscio-registry:5000
+    depends_on:
+      linscio-db:
+        condition: service_healthy
+      linscio-registry:
+        condition: service_started
+
+  linscio-registry-ui:
+    build:
+      context: .
+      dockerfile: registry-ui/Dockerfile
+    image: linscio-registry-ui:latest
+    restart: unless-stopped
+    networks:
+      - linscio-net
+    ports:
+      - "127.0.0.1:5002:80"
+    environment:
+      SINGLE_REGISTRY: "true"
+      REGISTRY_TITLE: LinScio AI 镜像仓库
+      NGINX_PROXY_PASS_URL: http://linscio-registry:5000
+      DELETE_IMAGES: "true"
+      REGISTRY_SECURED: "true"
+    depends_on:
+      - linscio-registry

@@ -1,0 +1,162 @@
+"""
+学科包管理 API
+安装 / 卸载 / 状态查询
+"""
+import logging
+from pathlib import Path
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_session
+from app.core.config import settings
+from app.models.specialty_package import SpecialtyPackage
+from app.models.knowledge import KnowledgeDoc
+from app.models.term import MedicalTerm
+from app.models.example import WritingExample
+
+logger = logging.getLogger("linscio.specialty_api")
+
+router = APIRouter()
+
+
+class InstallRequest(BaseModel):
+    pack_dir: str
+    specialty_id: str
+    name: str = ""
+    version: str = "1.0.0"
+
+
+class InstallResponse(BaseModel):
+    ok: bool
+    specialty_id: str
+    config: bool = False
+    knowledge_docs: int = 0
+    terms: int = 0
+    examples: int = 0
+    errors: list[str] = []
+
+
+class UninstallRequest(BaseModel):
+    specialty_id: str
+
+
+class PackStatusItem(BaseModel):
+    specialty_id: str
+    name: str
+    local_version: str | None = None
+    remote_version: str | None = None
+    status: str = "not_installed"
+    knowledge_docs: int = 0
+    terms: int = 0
+    examples: int = 0
+
+
+@router.post("/install", response_model=InstallResponse)
+async def install_pack(req: InstallRequest, db: AsyncSession = Depends(get_session)):
+    """安装学科包：接收解压后的目录路径，执行知识/术语/范例/配置的全量导入"""
+    from app.services.knowledge.pack_installer import install_specialty_pack
+
+    pack_path = Path(req.pack_dir)
+    if not pack_path.exists():
+        return InstallResponse(ok=False, specialty_id=req.specialty_id, errors=[f"目录不存在: {req.pack_dir}"])
+
+    result = await install_specialty_pack(pack_path, req.specialty_id, db)
+
+    # 更新 specialty_packages 状态表
+    sp = await db.execute(
+        select(SpecialtyPackage).where(SpecialtyPackage.specialty_id == req.specialty_id)
+    )
+    pkg = sp.scalar_one_or_none()
+    if pkg:
+        pkg.local_version = req.version
+        pkg.status = "installed"
+        pkg.name = req.name or pkg.name
+        from datetime import datetime
+        pkg.installed_at = datetime.utcnow()
+        pkg.updated_at = datetime.utcnow()
+    else:
+        from datetime import datetime
+        pkg = SpecialtyPackage(
+            specialty_id=req.specialty_id,
+            name=req.name or req.specialty_id,
+            local_version=req.version,
+            remote_version=req.version,
+            status="installed",
+            installed_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(pkg)
+    await db.commit()
+
+    has_errors = len(result.get("errors", [])) > 0
+    return InstallResponse(
+        ok=not has_errors,
+        specialty_id=req.specialty_id,
+        config=result.get("config", False),
+        knowledge_docs=result.get("knowledge_docs", 0),
+        terms=result.get("terms", 0),
+        examples=result.get("examples", 0),
+        errors=result.get("errors", []),
+    )
+
+
+@router.post("/uninstall")
+async def uninstall_pack(req: UninstallRequest, db: AsyncSession = Depends(get_session)):
+    """卸载学科包：清除该学科 package 来源的所有数据"""
+    from app.services.knowledge.pack_installer import uninstall_specialty_pack
+
+    counts = await uninstall_specialty_pack(req.specialty_id, db)
+
+    sp = await db.execute(
+        select(SpecialtyPackage).where(SpecialtyPackage.specialty_id == req.specialty_id)
+    )
+    pkg = sp.scalar_one_or_none()
+    if pkg:
+        pkg.status = "not_installed"
+        pkg.local_version = None
+        await db.commit()
+
+    return {"ok": True, "specialty_id": req.specialty_id, "removed": counts}
+
+
+@router.get("/status", response_model=list[PackStatusItem])
+async def get_pack_status(db: AsyncSession = Depends(get_session)):
+    """获取所有已知学科包状态（含内容统计）"""
+    result = await db.execute(select(SpecialtyPackage))
+    packages = result.scalars().all()
+
+    items = []
+    for pkg in packages:
+        sid = pkg.specialty_id
+
+        doc_count = await db.execute(
+            select(func.count()).select_from(KnowledgeDoc).where(
+                KnowledgeDoc.specialty == sid, KnowledgeDoc.source == "package"
+            )
+        )
+        term_count = await db.execute(
+            select(func.count()).select_from(MedicalTerm).where(
+                MedicalTerm.specialty == sid, MedicalTerm.source == "package"
+            )
+        )
+        example_count = await db.execute(
+            select(func.count()).select_from(WritingExample).where(
+                WritingExample.specialty == sid, WritingExample.source == "package"
+            )
+        )
+
+        items.append(PackStatusItem(
+            specialty_id=sid,
+            name=pkg.name,
+            local_version=pkg.local_version,
+            remote_version=pkg.remote_version,
+            status=pkg.status,
+            knowledge_docs=doc_count.scalar() or 0,
+            terms=term_count.scalar() or 0,
+            examples=example_count.scalar() or 0,
+        ))
+
+    return items

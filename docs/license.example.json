@@ -1,0 +1,35 @@
+{
+  "type": "custom",
+  "custom_specialties": ["内分泌科", "心内科"],
+  "service_expiry": "2027-03-22",
+  "content_version": "1.0",
+  "next_content_update": "2026-06-01",
+  "preset_docs": [
+    {
+      "specialty": "内分泌科",
+      "name": "中国2型糖尿病防治指南（2023版）",
+      "chunk_count": 1245,
+      "updated_at": "2026-02-15"
+    },
+    {
+      "specialty": "内分泌科",
+      "name": "甲状腺疾病基层诊疗指南（2022版）",
+      "chunk_count": 876,
+      "updated_at": "2026-01-08"
+    }
+  ],
+  "specialty_stats": {
+    "内分泌科": {
+      "terms": 487,
+      "examples": 68,
+      "docs": 23,
+      "updated_at": "2026-02-15"
+    },
+    "心内科": {
+      "terms": 420,
+      "examples": 55,
+      "docs": 18,
+      "updated_at": "2026-02-10"
+    }
+  }
+}

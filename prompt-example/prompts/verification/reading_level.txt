@@ -1,0 +1,31 @@
+请对以下医学科普内容进行阅读难度分析。
+
+【内容信息】
+目标读者：{target_audience}
+目标受众标准：句长{max_sentence_len}字；术语密度上限{max_term_density}（术语数/总字数）；术语密度下限0.02
+
+【待分析内容】
+{content}
+
+【分析任务】
+1. 句长合规性：平均句长是否在目标范围内，超上限标注超长句并给拆分建议
+2. 术语密度：是否在0.02-{max_term_density}之间，超上限建议增加通俗解释
+3. 未解释英文缩写：缩写首次出现100字内应有中文说明
+4. 被动语态（仅public/patient）：被动句比例>20%为过高
+
+【输出格式（JSON）】
+{{
+  "passed": true,
+  "target_audience": "{target_audience}",
+  "stats": {{
+    "avg_sentence_len": 数字,
+    "term_density": 数字（0-1）,
+    "unexplained_abbreviations": []
+  }},
+  "issues": ["具体问题描述"],
+  "suggestions": ["具体改进建议"],
+  "consistency_note": ""
+}}
+passed：所有issues为空→true，有issue→false（不阻断发布）。consistency_note：章节难度差异>15%时填写提醒，否则为空。
+
+请直接输出JSON。

@@ -1,0 +1,56 @@
+请检查以下医学科普内容，识别需要处理的数据和表述问题。
+
+【已通过RAG验证的数据（豁免，不需要标注）】
+{verified_data_list}
+
+【待检查内容】
+{content}
+
+【检测规则（按严重程度分级）】
+
+HIGH（必须处理）：
+① 具体剂量表述：
+   触发条件：出现 mg/ml/毫克/毫升/片/粒/滴 + 数字的组合
+   处理：标注为 specific_dosage，建议改为"遵医嘱"
+
+② 绝对化表述：
+   触发词：一定会/必然/绝对/百分之百/完全可以根治/永久有效/从不（用于医学事件）
+   触发句式：只要……就能治愈
+   处理：标注为 absolute_statement
+
+MEDIUM（建议处理）：
+③ 医学统计数据未有来源支撑：
+   触发条件：出现百分比/患病率/治愈率/死亡率/发病率 + 具体数字
+   豁免：已在 verified_data_list 中的数据不触发
+   处理：标注为 unverified_data
+
+LOW（仅提示）：
+④ 疑似引用特定研究/指南：
+   触发条件：出现"据《XX》""根据XX研究""XX指南指出"
+   豁免：RAG 来源中有对应内容的不触发
+   处理：标注为 potential_unsourced_citation
+
+【输出格式（合法JSON）】
+
+{{
+  "data_warnings": [
+    {{
+      "original_text": "原文片段（≤40字）",
+      "warning_type": "specific_dosage|unverified_data|potential_unsourced_citation",
+      "severity": "high|medium|low",
+      "trigger_word": "触发该警告的关键词/数字",
+      "suggestion": "建议的处理方式（≤30字）"
+    }}
+  ],
+  "absolute_terms": [
+    {{
+      "original_text": "含绝对化表述的原文（≤40字）",
+      "problematic_word": "具体的问题词汇",
+      "suggested_replacement": "建议的替换表述（≤20字）"
+    }}
+  ],
+  "high_count": 0,
+  "medium_count": 0
+}}
+
+请直接输出JSON。

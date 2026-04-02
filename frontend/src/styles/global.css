@@ -1,0 +1,15 @@
+:root {
+  --page-max-width: 800px;
+  --page-padding: 2rem;
+  --page-card-gap: 1rem;
+}
+
+.page-container {
+  padding: var(--page-padding);
+  max-width: var(--page-max-width);
+  margin: 0 auto;
+}
+
+.page-cards > .el-card {
+  margin-bottom: var(--page-card-gap);
+}

@@ -1,0 +1,26 @@
+# Registry 2 显式配置，避免仅靠环境变量时的解析/缺省问题导致 panic
+version: 0.1
+log:
+  level: info
+  fields:
+    service: registry
+storage:
+  cache:
+    blobdescriptor: inmemory
+  filesystem:
+    rootdirectory: /var/lib/registry
+  delete:
+    enabled: true
+http:
+  addr: :5000
+  headers:
+    X-Content-Type-Options: [nosniff]
+auth:
+  htpasswd:
+    realm: LinScio Registry
+    path: /auth/htpasswd
+health:
+  storagedriver:
+    enabled: true
+    interval: 10s
+    threshold: 3

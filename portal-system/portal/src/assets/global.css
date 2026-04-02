@@ -1,0 +1,160 @@
+/* v4 视觉规范：学术科技感 */
+:root {
+  /* colors */
+  --primary: #1a3fcc;
+  --primary-light: #00c4aa;
+  --accent: #7b5fcc;
+  --gradient: linear-gradient(135deg, #1a3fcc 0%, #00c4aa 100%);
+  --bg: #ffffff;
+  --bg-secondary: #f6f8fc;
+  --bg-card: #eef2fa;
+  --text: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #9ca3af;
+  --border: #e2e8f2;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --radius: 12px;
+  --radius-btn: 8px;
+  --radius-tag: 999px;
+  --shadow: 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-hover: 0 8px 32px rgba(26,63,204,0.10);
+  --grid-line: #e8edf8;
+  --glow: radial-gradient(circle, rgba(0,196,170,0.08) 0%, transparent 70%);
+
+  /* semantic palette for light site */
+  --color-bg-base: #ffffff;
+  --color-bg-soft: #f8fafc;
+  --color-bg-brand-soft: #eff6ff;
+  --color-text-strong: #0f172a;
+  --color-text-body: #334155;
+  --color-text-muted: #64748b;
+  --color-border-soft: #e2e8f0;
+  --color-border-brand: #bfdbfe;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+  --color-brand-900: #1e3a8a;
+
+  /* spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-14: 56px;
+  --space-18: 72px;
+  --space-22: 88px;
+
+  /* radius */
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-pill: 999px;
+
+  /* typography */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 17px;
+  --fs-2xl: 22px;
+
+  /* layout */
+  --container-max: 1160px;
+
+  /* shadows */
+  --shadow-card: 0 8px 18px rgba(37,99,235,0.08);
+  --shadow-card-hover: 0 12px 24px rgba(37,99,235,0.12);
+  --shadow-header: 0 4px 16px rgba(0,0,0,0.08);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'DM Sans', 'Noto Sans SC', system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  line-height: 1.6;
+}
+#app { min-height: 100vh; }
+a { color: var(--primary); text-decoration: none; }
+a:hover { opacity: 0.9; }
+
+/* 字体引入在 index.html */
+
+/* ---------- shared utilities ---------- */
+.page-shell {
+  min-height: calc(100vh - 68px);
+  background: var(--color-bg-soft);
+  color: var(--color-text-body);
+}
+
+.container-shell {
+  max-width: var(--container-max);
+  margin: 0 auto;
+  padding: 0 var(--space-6);
+}
+
+.section-hero {
+  position: relative;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border-soft);
+  background: linear-gradient(160deg, #f0f7ff 0%, #e8f2ff 40%, #f5f9ff 70%, #ffffff 100%);
+}
+
+.tag-pill {
+  display: inline-block;
+  padding: 4px 11px;
+  border: 1px solid var(--color-border-brand);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-brand-soft);
+  color: var(--color-brand-700);
+  font-size: var(--fs-xs);
+}
+
+.card-base {
+  background: var(--color-bg-base);
+  border: 1.5px solid var(--color-border-soft);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
+
+.btn-base {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  padding: 9px 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-primary-ui {
+  color: #fff;
+  background: linear-gradient(135deg, var(--color-brand-600), var(--color-brand-700));
+}
+
+.btn-outline-ui {
+  color: var(--color-text-body);
+  border-color: #cbd5e1;
+  background: var(--color-bg-base);
+}
+
+.btn-outline-ui:hover {
+  border-color: var(--color-border-brand);
+  background: var(--color-bg-brand-soft);
+  color: var(--color-brand-700);
+}
+
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+}

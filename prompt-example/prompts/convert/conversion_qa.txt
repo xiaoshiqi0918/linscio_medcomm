@@ -1,0 +1,57 @@
+请检查以下内容转换是否满足质量要求。
+
+【原始内容摘要】
+{source_summary}
+
+【转换后内容】
+{converted_content}
+
+【转换方向】
+{source_format} → {target_format}
+目标受众：{target_audience}
+
+【检查维度】
+
+1. 医学准确性（最高优先级）
+   - 核心医学信息是否在转换中失真？
+   - 是否在转换中引入了原文没有的声明？
+   - 原文的安全提示（就医指引/禁忌/不确定性说明）是否保留？
+   - 是否把原文的"可能/有助于"改成了"一定/能治愈"？
+
+2. 形式合规性
+   - 输出格式是否完全符合目标形式的规范？
+   - 语言风格是否符合目标形式的要求？
+
+3. 信息完整性
+   - 关键知识点是否都包含在转换后内容中？
+   - 是否有重要信息遗漏？
+
+4. children 受众特殊检查（仅当 target_audience='children' 时执行）
+   - 是否有任何可能引起儿童恐惧的内容（针头/血液/手术/痛苦描述）？
+   - 每句是否≤15字？
+   - 是否全部使用儿童能理解的词汇和比喻？
+
+【overall_quality 判断标准（量化）】
+excellent：0 个问题
+good：     仅有 1-2 个 warning 级别问题，无 error
+needs_revision：有 3+ 个 warning，或 1 个 error（非医学准确性）
+failed：   医学准确性维度有任何 error，无论其他维度如何
+
+【输出格式（合法JSON）】
+
+{{
+  "passed": true,
+  "issues": [
+    {{
+      "dimension": "医学准确性|形式合规性|信息完整性|children特殊检查",
+      "severity": "error|warning",
+      "description": "具体问题（≤50字）",
+      "suggestion": "修改建议（≤30字）"
+    }}
+  ],
+  "overall_quality": "excellent|good|needs_revision|failed",
+  "children_check_executed": false,
+  "critical_medical_issues": ["医学准确性维度的 error 列表，其他为空数组"]
+}}
+
+请直接输出JSON，不要有任何其他文字。

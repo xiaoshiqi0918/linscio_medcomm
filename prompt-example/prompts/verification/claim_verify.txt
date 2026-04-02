@@ -1,0 +1,59 @@
+请核查以下医学科普内容中的医学声明。
+
+【待核查内容】
+{content}
+
+【可用参考资料（来自 RAG 检索）】
+{rag_context}
+
+【核查任务】
+提取内容中所有医学事实性声明，对照参考资料进行核查。
+
+【verification_status 判断标准（量化）】
+
+verified（已核实）：
+  参考资料中有直接支持该声明的内容，且两者方向一致
+  示例：声明"血糖控制目标<7mmol/L"，参考资料中有"目标值<7mmol/L"的明确表述
+
+unverified（未核实）：
+  参考资料中无相关内容，但声明本身不违反基本医学常识
+  处理：标注为待核实，不视为错误，不主动修改
+
+conflicting（存在矛盾）：
+  判断标准（满足其一即认定为 conflicting）：
+  ① 声明中的数值与参考资料中的数值相差 >20%
+  ② 声明的结论方向与参考资料相反（如声明"有益"，资料说"有害"）
+  ③ 声明涉及的适用人群与参考资料中的研究人群完全不同（儿童≠成人）
+
+【confidence 判断标准（量化）】
+
+high（高置信度）：参考资料来自指南或系统综述，且声明与资料完全一致
+medium（中置信度）：参考资料来自队列研究/病例对照，或声明与资料部分一致
+low（低置信度）：参考资料来自单个病例报告/专家意见，或资料较旧（>5年）
+
+【多个 chunks 支持同一声明的处理】
+取最高质量 chunk 作为支撑来源，confidence 取所有支持 chunks 的平均值。
+
+【输出格式（合法JSON）】
+
+{{
+  "claims": [
+    {{
+      "claim_text": "声明原文（≤60字）",
+      "claim_type": "数据声明|机制声明|效果声明|症状声明|建议声明",
+      "verification_status": "verified|unverified|conflicting",
+      "supporting_source": "支撑来源摘要（≤40字）或空字符串",
+      "confidence": "high|medium|low",
+      "conflict_detail": "若conflicting，说明矛盾具体内容（≤40字）；否则为空"
+    }}
+  ],
+  "overall_assessment": "overall_safe|needs_review|has_issues",
+  "has_issues_count": 0
+}}
+
+overall_assessment 判断规则：
+· overall_safe：无 conflicting，unverified ≤ 3条
+· needs_review：无 conflicting，unverified > 3条
+· has_issues：有任何 conflicting
+
+请直接输出JSON。

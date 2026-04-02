@@ -1,0 +1,77 @@
+请对以下检索到的医学文献内容进行相关性过滤和摘要整理。
+
+【当前写作任务】
+科普形式：{content_format}
+章节类型：{section_type}
+主题：{topic}
+目标受众：{target_audience}
+
+【检索到的原始内容（共 {chunk_count} 段）】
+{raw_chunks}
+
+【过滤和整理任务（三步）】
+
+Step 1：相关性评分（0.0-1.0）
+评分标准：
+  1.0：直接支持当前章节核心观点，可以作为写作依据
+  0.7：主题相关，需要一定转化才能使用
+  0.4：主题边缘相关，对当前章节价值有限
+  0.1：主题相关但内容过于专业/过于基础，与当前受众不匹配
+
+Step 2：按相关性分类处理
+
+■ 相关性 ≥ 0.7（usable=true）：
+  提取可用信息，整理为≤60字的简洁摘要
+  保留来源类型标注（指南/RCT研究/系统综述/队列研究/专家意见）
+
+■ 相关性 0.4-0.7（usable=false，但记录）：
+  不纳入 top_insights，但在 low_relevance_note 中注明
+  用途：帮助开发者判断检索策略是否需要调整
+  不在写作提示词中使用
+
+■ 相关性 < 0.4：
+  直接忽略，不记录
+
+Step 3：组装供写作使用的精炼摘要
+从 usable=true 的 chunks 中提取最重要的3条 top_insights
+
+【输出格式（合法JSON）】
+
+{{
+  "filtered_chunks": [
+    {{
+      "original_index": 0,
+      "relevance_score": 0.9,
+      "extracted_info": "可用于写作的核心信息（≤60字）",
+      "info_type": "data|mechanism|clinical_implication|guideline",
+      "source_quality": "guideline|rct|systematic_review|cohort|expert_opinion",
+      "usable": true
+    }}
+  ],
+  "top_insights": [
+    "最重要的3条可直接用于写作的洞察（≤60字，按价值排序）"
+  ],
+  "data_points": [
+    {{
+      "value": "具体数据",
+      "context": "数据背景说明（≤30字）",
+      "source_type": "来源类型",
+      "safe_to_use": true
+    }}
+  ],
+  "low_relevance_note": "0.4-0.7区间的chunk摘要（≤50字，供调试参考；无此类chunk时为空字符串）",
+  "overall_quality": "rich|adequate|sparse",
+  "fallback_needed": false,
+  "fallback_reason": "若fallback_needed=true，说明原因（≤30字）；否则为空字符串"
+}}
+
+【fallback_needed 判断标准】
+true：所有 chunks 的相关性均 < 0.4，或 usable=true 的 chunks 数量为 0
+false：至少有1个 usable=true 的 chunk
+
+【注意事项】
+· top_insights 最多3条，不要超出（LLM 上下文窗口限制）
+· 不要在摘要中引入原始文本没有的信息
+· data_points 的 safe_to_use=true 表示该数据有来源支撑，可直接引用
+
+请直接输出JSON，不要有任何其他文字。

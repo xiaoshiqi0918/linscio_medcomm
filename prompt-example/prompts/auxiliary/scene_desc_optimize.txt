@@ -1,0 +1,73 @@
+请将以下图像需求描述优化为高质量的 AI 图像生成提示词（英文）。
+
+【原始描述】
+{raw_desc}
+
+【图像上下文】
+图像类型：{image_type}
+图像风格：{style}
+目标受众：{target_audience}
+医学主题：{medical_topic}
+
+【优化目标】
+将原始描述转化为结构清晰、细节丰富、DALL·E 3 可高质量生成的英文提示词。
+
+【必须包含的五要素（按重要性）】
+主体（Subject）：谁/什么在画面中央
+动作/状态（Action）：主体在做什么或处于什么状态
+背景（Background）：场景环境（简洁即可）
+风格（Style）：明确的视觉风格标注（必须根据 {style} 填写）
+氛围（Mood）：画面传达的情感基调
+
+【医学准确性要求】
+解剖名词必须使用正确英文医学术语：
+· ❌ "heart pump" → ✅ "left ventricle pumping oxygenated blood"
+· ❌ "brain cell" → ✅ "neuron"（神经元）
+· ❌ "blood sugar" → ✅ "blood glucose level"
+
+【儿童受众专项要求（当 target_audience='children'）】
+正向提示词必须追加：
+"children's picture book style, warm friendly colors, cute characters,
+absolutely no scary elements, no needles, no blood, encouraging mood"
+
+【质量示范】
+↓ 正确示范（中文→优化后英文）：
+原始："画一个糖尿病患者测血糖"
+优化：
+"A middle-aged Asian patient using a blood glucose meter at home,
+gently pressing finger on test strip, soft morning kitchen light,
+clean and reassuring domestic setting,
+flat medical illustration style, warm color palette,
+no blood visible, encouraging and calm atmosphere"
+
+↓ 错误示范（太模糊）：
+原始："画一个人在医院"
+错误优化："A person in a hospital"（无主体细节/动作/氛围/风格）
+
+【quality_score 评分标准（量化）】
+0.9-1.0：包含全部五要素 + 医学术语准确 + 风格标注完整 + 安全要求明确
+0.7-0.9：包含全部五要素，但个别要素描述较简单
+0.5-0.7：缺少1-2个要素，或风格标注缺失
+0.3-0.5：仅有主体描述，其他要素严重缺失
+0.0-0.3：描述过于模糊，生成质量极差
+
+【风格标注参考（必须在优化结果中包含）】
+{style} 对应的标准风格词：
+  flat_design：        "flat vector illustration, clean lines, minimal shading"
+  medical_illustration："accurate anatomical illustration, labeled diagram style"
+  comic：              "manga-inspired, expressive characters, panel composition"
+  picture_book：       "children's book style, warm colors, cute and safe"
+  realistic：          "clinical accuracy, professional medical illustration"
+  data_viz：           "clean infographic, data visualization, readable"
+
+【输出格式（合法JSON）】
+
+{{
+  "optimized_prompt": "优化后的英文提示词（30-60词）",
+  "negative_prompt": "需要排除的元素（15-25词，英文）",
+  "quality_score": 0.0,
+  "improvement_notes": "主要改进点（中文，≤50字）",
+  "missing_elements": ["缺少的要素列表，空数组表示无缺失"]
+}}
+
+请直接输出JSON，不要有任何其他文字。

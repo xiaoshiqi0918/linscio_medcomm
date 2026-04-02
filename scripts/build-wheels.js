@@ -1,0 +1,62 @@
+#!/usr/bin/env node
+/**
+ * 下载平台专属 wheels 到 build/wheels/<platform>/
+ * 用于首次安装或 CI 预构建
+ * 用法: node scripts/build-wheels.js [platform]
+ *   platform: macos-arm64 | macos-x64 | win32-x64 | linux-x64 (默认当前平台)
+ */
+const { spawnSync } = require('child_process')
+const path = require('path')
+const fs = require('fs')
+
+const PLATFORM_MAP = {
+  'macos-arm64': { tag: 'macosx_11_0_arm64', arch: 'arm64' },
+  'macos-x64': { tag: 'macosx_10_9_x86_64', arch: 'x64' },
+  'win32-x64': { tag: 'win_amd64', arch: 'x64' },
+  'linux-x64': { tag: 'manylinux_2_17_x86_64', arch: 'x64' },
+  'linux-arm64': { tag: 'manylinux_2_17_aarch64', arch: 'arm64' },
+}
+
+function getPlatformId() {
+  if (process.platform === 'win32') return 'win32-x64'
+  if (process.platform === 'darwin') return process.arch === 'arm64' ? 'macos-arm64' : 'macos-x64'
+  return process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
+}
+
+function main() {
+  const platform = process.argv[2] || getPlatformId()
+  const meta = PLATFORM_MAP[platform]
+  if (!meta) {
+    console.error('[build-wheels] Unknown platform:', platform)
+    console.error('  Supported:', Object.keys(PLATFORM_MAP).join(', '))
+    process.exit(1)
+  }
+
+  const root = path.join(__dirname, '..')
+  const wheelsDir = path.join(root, 'build', 'wheels', platform)
+  const requirementsPath = path.join(root, 'backend', 'requirements.txt')
+
+  if (!fs.existsSync(requirementsPath)) {
+    console.error('[build-wheels] requirements.txt not found')
+    process.exit(1)
+  }
+
+  fs.mkdirSync(wheelsDir, { recursive: true })
+
+  const pip = process.env.PIP_PATH || 'pip'
+  const r = spawnSync(pip, [
+    'download', '-r', requirementsPath,
+    '--platform', meta.tag,
+    '--python-version', '311',
+    '--only-binary', ':all:',
+    '--dest', wheelsDir,
+  ], { stdio: 'inherit', cwd: path.join(root, 'backend') })
+
+  if (r.status !== 0) {
+    console.error('[build-wheels] pip download failed, status', r.status)
+    process.exit(1)
+  }
+  console.log('[build-wheels] Done:', wheelsDir)
+}
+
+main()

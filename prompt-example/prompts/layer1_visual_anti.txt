@@ -1,0 +1,26 @@
+【图示类内容专属防编造规则】
+
+▌规则一：画面描述必须医学准确
+scene_desc / illustration_desc 中描述的医学场景必须符合解剖学事实。
+❌ "heart pumping blood from left ventricle to left atrium"（方向错误）
+✅ "heart pumping oxygenated blood from left ventricle to aorta"
+
+▌规则二：拟人化不能歪曲医学机制
+器官/细胞拟人化是允许的，但角色的「行为」必须反映真实生理机制。
+检验方法：把拟人行为还原为真实机制，检查是否一致。
+❌ 白细胞"吃掉"癌细胞（免疫系统对癌细胞的作用远比"消灭"复杂，且疗效不稳定）
+✅ 免疫细胞识别并标记异常细胞（配文说明这只是免疫监控的一部分）
+
+▌规则三：对比图不能夸大疾病差异
+健康vs疾病的对比图，差异程度必须与真实病理变化匹配。
+❌ 糖尿病患者血管画成"完全堵死"（夸大病情，制造恐惧，与真实血管病变程度不符）
+✅ 糖尿病相关血管损伤用局部变化标注，配"示意图，非真实比例"说明
+
+▌规则四：画面描述不包含具体医学数值
+image_prompt / scene_desc 中不出现具体的医学数值。
+❌ "blood glucose meter showing 200mg/dL"
+✅ "blood glucose meter showing an elevated reading"
+
+▌规则五：儿童绘本绝对禁止医学恐吓元素
+illustration_desc 中严格排除：注射器、针头、血液、伤口、
+哭泣或痛苦表情、黑暗场景、任何可能引起儿童恐惧的医疗操作。

@@ -1,0 +1,41 @@
+请分析以下医学科普内容，推荐最合适的配图位置和内容。
+
+【科普内容】
+{verified_content}
+
+【文章信息】
+主题：{topic}
+专科：{specialty}
+目标受众：{target_audience}
+科普形式：{content_format}
+
+【配图推荐规则】
+1. 以下内容通常适合配图，应积极推荐：
+   - 解剖结构、生理机制、病理过程（如血糖调节、血管堵塞）
+   - 健康 vs 疾病的对比说明
+   - 流程/步骤/方法（如检查流程、预防措施）
+   - 数据/统计信息、概念对比
+
+2. 不推荐配图的情况：
+   - 纯叙事段落（故事开头、案例引入）
+   - 情绪性/共情性收尾
+
+3. 每篇文章最多推荐3处配图；若内容有机制解释或对比说明，至少推荐1处
+
+【输出格式（必须为合法 JSON）】
+
+[
+  {{
+    "anchor_text": "该段落的前20个字",
+    "image_type": "anatomy|pathology|flowchart|infographic|comparison|symptom|prevention",
+    "style": "medical_illustration|flat_design|realistic|cartoon|data_viz",
+    "description": "图像内容描述（中文，30-50字）",
+    "en_description": "图像内容描述（英文，20-40词）",
+    "reason": "为什么这里需要配图（≤20字）",
+    "priority": "high|medium"
+  }}
+]
+
+如果没有适合配图的位置，返回空数组：[]
+
+请直接输出 JSON。

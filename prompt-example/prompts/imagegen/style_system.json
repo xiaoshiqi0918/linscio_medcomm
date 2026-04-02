@@ -1,0 +1,9 @@
+{
+  "medical_illustration": "professional medical illustration, clean educational style, accurate anatomy, labeled diagram, bright clear colors, white background, no photorealism, no distressing content",
+  "flat_design": "flat design illustration, modern minimalist style, bold colors, simple shapes, infographic style, white or light background, professional medical context",
+  "realistic": "realistic medical illustration, clinical accuracy, clean professional style, appropriate for patient education, no graphic or distressing imagery, educational purpose",
+  "cartoon": "friendly cartoon illustration, warm colors, approachable style, suitable for children and general public, no scary elements, positive and encouraging mood, simple backgrounds",
+  "data_viz": "clean data visualization, infographic style, clear charts and graphs, professional color scheme, medical/health context, readable labels, white background",
+  "comic": "comic strip panel illustration, manga-inspired clean lines, expressive characters, warm color palette, medical education context, Chinese style manga, no violent or distressing content",
+  "picture_book": "children's picture book illustration, warm and friendly style, bright cheerful colors, cute characters, simple backgrounds, age-appropriate, encouraging and positive mood, no scary or frightening elements whatsoever"
+}

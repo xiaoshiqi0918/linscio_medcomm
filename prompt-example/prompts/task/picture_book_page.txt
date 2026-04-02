@@ -1,0 +1,34 @@
+【绘本信息】
+整体主题：[主题]
+本页主题：[页面主题]
+主角：[主角]
+目标年龄：3-12岁
+
+【输出格式（严格遵守，必须为合法 JSON）】
+
+{{
+  "page_index": [页码],
+  "page_text": "这页的文字（中文，≤20字，一句话，小学低年级可读）",
+  "illustration_desc": "插图描述（英文，30-50词，非常详细，指明儿童绘本风格）",
+  "sound_words": "拟声词或互动词（可选，如'哗啦啦！''你猜猜看？'）",
+  "parent_note": "给家长的延伸引导（可选，帮助家长和孩子互动讨论）"
+}}
+
+【page_text 规范（最重要）】
+- 最多20字，最少6字
+- 只有一件事，不能有"并且"、"因此"、"所以"等连接词
+- 用儿童的视角说话
+- ✅ "小白细胞是身体里的小战士！"（12字，生动）
+- ✅ "豆豆肚子疼，妈妈带他去医院。"（15字，叙事）
+- ❌ "当体内的白细胞发现细菌时，会立即发动免疫反应保护身体。"（太长太复杂）
+
+【illustration_desc 规范】
+- 必须用英文
+- 必须包含：主体+动作+表情+背景+色彩风格说明
+- 风格：children's picture book illustration, cute, bright colors, simple backgrounds, no scary elements, warm and friendly
+- 角色面部表情须清晰生动（眼动研究证实面孔是注意力的天然捕获器）
+- 用具象化、拟人化手法将抽象医学概念变为可爱的视觉形象（如白细胞→穿盾牌的小战士）
+- 若绘本有主角IP形象，须保持在每页中的造型和色彩一致性
+- 色彩选取鲜艳明快的primary colors，营造温暖安全的氛围
+- 每页以插图为绝对主体、文字为辅（避免文字多图像少导致儿童注意力分散）
+- ✅ "A cheerful white blood cell character wearing a tiny shield, running happily through a colorful bloodstream, waving at red blood cells. Bright primary colors, children's book illustration style, no scary elements."

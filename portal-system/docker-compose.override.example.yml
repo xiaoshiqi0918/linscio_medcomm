@@ -1,0 +1,10 @@
+# 临时使用公网 IP 提供镜像拉取时使用（域名备案前）
+# 用法：在服务器上复制为 docker-compose.override.yml
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+# 并确保 .env 中 REGISTRY_URL=1.15.136.213:5000，且云安全组已开放 5000 端口。
+# 备案完成后可删除 docker-compose.override.yml 并改回域名。
+
+services:
+  linscio-registry-proxy:
+    ports:
+      - "5000:5000"

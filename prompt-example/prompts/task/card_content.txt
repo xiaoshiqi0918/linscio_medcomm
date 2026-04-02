@@ -1,0 +1,35 @@
+【卡片信息】
+整体主题：[主题]
+[卡片标题行]
+配色方案：[配色建议]
+目标受众：[受众描述]
+
+【输出格式（严格遵守，必须为合法 JSON）】
+
+{{
+  "card_index": [卡片编号],
+  "card_title": "[卡片标题]",
+  "headline": "卡片最显眼的一句话（≤15字，浓缩本卡核心）",
+  "body_text": "正文内容（中文，80-120字，本卡的核心知识点）",
+  "key_takeaway": "划重点（≤20字，读者最应该记住的一句话）",
+  "illustration_desc": "配图描述（英文，20-40词，描述卡片主视觉图，DALL·E 使用）",
+  "icon_suggestions": ["图标1建议", "图标2建议"],
+  "data_placeholder": "[DATA:] 或空字符串（如本卡需要数据支撑但无来源）"
+}}
+
+【内容规范】
+
+headline（标题）：
+- 要有张力，吸引人点进去看
+- ✅ "血糖高了，先别急着吃药"
+- ❌ "血糖管理的重要性"
+
+body_text（正文）：
+- 一张卡只讲一件事
+- 分2-3个短段，每段1-2句
+- 语言：[术语要求]
+
+illustration_desc：
+- 这是给 DALL·E 的图像提示词，必须用英文
+- 要配合本卡主题，不要太抽象
+- 指明风格：flat design medical illustration, bright colors, white background

@@ -1,0 +1,39 @@
+# 生产环境可选：为 4 GB 机器设置内存上限，避免单容器占用过高
+# 使用方式：docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+  linscio-db:
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  linscio-api:
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  linscio-portal:
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+  linscio-admin:
+    deploy:
+      resources:
+        limits:
+          memory: 96M
+
+  linscio-registry:
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  linscio-registry-ui:
+    deploy:
+      resources:
+        limits:
+          memory: 64M

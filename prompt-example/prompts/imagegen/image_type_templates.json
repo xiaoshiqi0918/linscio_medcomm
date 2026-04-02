@@ -1,0 +1,50 @@
+{
+  "anatomy": {
+    "en_template": "{content} anatomy diagram, labeled with key parts, educational illustration, clear and accurate anatomical representation",
+    "negative": "inaccurate anatomy, cartoon distortion of medical accuracy"
+  },
+  "pathology": {
+    "en_template": "medical illustration showing {content} in a clear educational style, arrows showing process flow, labeled diagram, no graphic pathological imagery",
+    "negative": "graphic pathology, realistic disease photography, distressing medical imagery"
+  },
+  "flowchart": {
+    "en_template": "medical flowchart showing {content}, step-by-step diagram with arrows, clean boxes and connecting lines, each step clearly labeled in English, professional infographic style",
+    "negative": "cluttered, too many elements, unclear flow"
+  },
+  "infographic": {
+    "en_template": "health infographic about {content}, data visualization with icons and simple charts, clear sections and hierarchy, professional color-coded layout",
+    "negative": "cluttered text, poor readability, confusing layout"
+  },
+  "comparison": {
+    "en_template": "side-by-side comparison illustration: {content}, clear visual contrast, labeled, educational medical style",
+    "negative": "graphic disease imagery, distressing comparison"
+  },
+  "symptom": {
+    "en_template": "gentle educational illustration showing {content}, depicted in a sensitive and non-graphic way, using abstract or diagrammatic representation, suitable for patient education, no realistic imagery",
+    "negative": "graphic symptoms, realistic medical photography, distressing imagery, blood"
+  },
+  "prevention": {
+    "en_template": "health promotion illustration showing {content}, positive and encouraging visual, friendly educational style",
+    "negative": "negative imagery, scary consequences, punishment themes"
+  },
+  "comic_panel": {
+    "en_template": "{content}, comic strip panel style, manga-inspired clean lines, expressive characters, medical/health context, Chinese manga aesthetic, panel composition with clear focal point",
+    "negative": "Western cartoon style, violent content, scary medical imagery"
+  },
+  "picture_book_page": {
+    "en_template": "{content}, children's picture book style, warm cheerful colors, cute friendly characters, simple background, age-appropriate for 3-12 years, encouraging and positive mood, no scary elements",
+    "negative": "scary, frightening, dark themes, complex backgrounds, adult content"
+  },
+  "storyboard_frame": {
+    "en_template": "{content}, animation storyboard frame, medical education animation style, clean lines, clear focal point",
+    "negative": "photorealistic, complex textures, unclear focal point"
+  },
+  "card_illustration": {
+    "en_template": "{content}, flat design medical illustration, bright colors, white background, professional infographic style",
+    "negative": "cluttered, scary, complex"
+  },
+  "poster": {
+    "en_template": "{content}, medical poster style, professional, clear hierarchy, suitable for patient education display",
+    "negative": "cluttered, unprofessional"
+  }
+}

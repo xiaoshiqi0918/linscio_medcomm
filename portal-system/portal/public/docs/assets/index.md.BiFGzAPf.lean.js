@@ -1,0 +1,1 @@
+import{_ as a,o as e,c as t,ag as o}from"./chunks/framework.D2Ob5GRY.js";const _=JSON.parse('{"title":"LinScio AI 文档","description":"","frontmatter":{},"headers":[],"relativePath":"index.md","filePath":"index.md"}'),r={name:"index.md"};function l(n,i,s,c,d,h){return e(),t("div",null,[...i[0]||(i[0]=[o("",5)])])}const f=a(r,[["render",l]]);export{_ as __pageData,f as default};

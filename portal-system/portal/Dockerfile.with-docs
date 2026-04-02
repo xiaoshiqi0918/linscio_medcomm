@@ -1,0 +1,29 @@
+# 从仓库根目录构建且包含帮助文档的门户镜像
+# 用法（在仓库根目录执行）: docker build -f portal-system/portal/Dockerfile.with-docs -t linscio-portal:latest .
+# 构建后可在 portal-system 下 docker compose up -d linscio-portal 使用该镜像（需先 build 或 pull）
+
+# 阶段 1：构建帮助文档（portal 目标）
+FROM node:20-alpine AS docs-build
+WORKDIR /build
+COPY linscio-docs/package.json linscio-docs/package-lock.json* ./
+RUN npm ci 2>/dev/null || npm install
+COPY linscio-docs .
+ENV BUILD_TARGET=portal
+RUN npm run build:portal
+
+# 阶段 2：构建门户前端
+FROM node:20-alpine AS portal-build
+WORKDIR /app
+COPY portal-system/portal/package.json ./
+RUN npm install --registry https://registry.npmmirror.com
+COPY portal-system/portal .
+RUN npm run build
+# 将文档产物放入 dist/docs，与 Vite 的 public/docs 输出一致
+COPY --from=docs-build /build/dist/portal /app/dist/docs
+
+# 阶段 3：Nginx 托管
+FROM nginx:alpine
+COPY --from=portal-build /app/dist /usr/share/nginx/html
+COPY portal-system/portal/nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

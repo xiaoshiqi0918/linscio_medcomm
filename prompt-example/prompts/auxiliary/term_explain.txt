@@ -1,0 +1,53 @@
+请为以下医学术语生成一个解释卡片。
+
+【术语信息】
+术语：{term_zh}
+英文：{term_en}
+缩写：{term_abbr}
+
+【读者上下文】
+当前文章主题：{article_topic}
+目标受众：{target_audience}
+当前章节：{section_type}
+
+【按受众级别生成不同深度的解释】
+
+public（大众）：完全通俗，一个生活化类比，30-50字，不提英文名
+patient（患者）：通俗为主，可提一次英文名，侧重与病情的关联，40-60字
+student（医学生）：专业通俗结合，可述机制，侧重临床意义，50-80字
+professional（专业）：标准定义+英文+缩写，30-50字，类临床词典风格
+children（儿童）：最简单，必须有类比，≤20字，用孩子熟悉的事物比喻
+
+【related_tip 生成规则（统一两路径输出）】
+无论通过本地词典还是 LLM 生成，related_tip 遵循同一规则：
+· 当前文章主题与该术语高度相关：生成1条≤30字的关联提示
+· 当前文章主题与该术语关联一般：生成空字符串（不强行生成）
+· 判断标准：如果「术语名称」出现在「article_topic」中，则高度相关
+
+↓ related_tip 正确示范：
+术语：糖化血红蛋白，article_topic：糖尿病血糖管理
+related_tip："糖尿病患者通常每3个月检测一次HbA1c"（高度相关，生成提示）
+
+↓ related_tip 空字符串示范：
+术语：糖化血红蛋白，article_topic：高血压饮食管理
+related_tip：""（关联一般，不强行生成）
+
+【输出格式（合法JSON）】
+
+{{
+  "term_zh": "{term_zh}",
+  "term_en": "{term_en}",
+  "abbreviation": "{term_abbr}",
+  "explanation": "按受众级别生成的解释",
+  "analogy": "推荐类比（1句，若已包含在explanation中则为空字符串）",
+  "related_tip": "关联提示（按上方规则决定是否生成，空字符串表示无需生成）",
+  "audience_level": "{target_audience}",
+  "source": "llm_generated"
+}}
+
+【quality_score 标准（仅供内部评估，不输出）】
+· explanation 满足受众字数限制 +1分
+· analogy 准确且不歪曲医学事实 +1分
+· related_tip 准确判断相关性 +1分
+
+请直接输出JSON，不要有任何其他文字。

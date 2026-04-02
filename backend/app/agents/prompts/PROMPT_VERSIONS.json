@@ -1,0 +1,350 @@
+{
+  "_meta": {
+    "schema_version": "1.0",
+    "description": "LinScio MedComm 提示词版本记录，每次修改提示词后更新对应条目",
+    "last_updated": "2026-03-23",
+    "total_prompt_units": 42
+  },
+
+  "layer_0": {
+    "MEDCOMM_SYSTEM_PROMPT": {
+      "version": "2.0",
+      "file": "prompts/system.py",
+      "last_updated": "2026-03-22",
+      "changelog": [
+        "v2.0 (2026-03-22): 新增行为边界说明、面对压力时的处理原则、输出语言优先级",
+        "v1.0 (2026-01-10): 初始版本"
+      ]
+    }
+  },
+
+  "layer_1": {
+    "MEDCOMM_ANTI_HALLUCINATION": {
+      "version": "2.0",
+      "file": "prompts/anti_hallucination.py",
+      "last_updated": "2026-03-22",
+      "changelog": [
+        "v2.0 (2026-03-22): 新增比喻准确性判断方法、RAG豁免规则、引用权威机构规则",
+        "v1.0 (2026-01-10): 初始版本，六条通用规则"
+      ]
+    },
+    "VISUAL_ANTI_HALLUCINATION": {
+      "version": "1.0",
+      "file": "prompts/anti_hallucination.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v1.0 (2026-03-22): 初始版本，图示类五条专属规则"]
+    },
+    "SCRIPT_ANTI_HALLUCINATION": {
+      "version": "1.0",
+      "file": "prompts/anti_hallucination.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v1.0 (2026-03-22): 初始版本，脚本类四条专属规则"]
+    }
+  },
+
+  "layer_2": {
+    "AUDIENCE_PROFILES": {
+      "version": "2.0",
+      "file": "prompts/audiences.py",
+      "last_updated": "2026-03-22",
+      "changelog": [
+        "v2.0 (2026-03-22): 新增句长下限、professional 的 content_focus 字段、children 的 framework_patch 标记",
+        "v1.0 (2026-01-10): 初始版本，五种受众基础定义"
+      ]
+    },
+    "RAG_FILTER_PROMPT": {
+      "version": "2.3",
+      "file": "prompts/auxiliary_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": [
+        "v2.3 (2026-03-22): 明确 0.4-0.7 区间 chunk 的处理方式，新增 low_relevance_note 字段",
+        "v1.0 (2026-03-22): 初始版本"
+      ]
+    }
+  },
+
+  "layer_3_task": {
+    "article_intro": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 新增4种禁止开场示范、平台钩子策略", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "article_body": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 新增金字塔原则正/反例、术语处理规范", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "article_case": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 强化（化名）格式、结局虚假承诺禁止", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "article_qa": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 新增问题口吻正/反例", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "article_summary": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 行动建议正/反例量化", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "debunk_intro": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 补充正/反例", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "debunk_myth": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 误区陈述与真相表述各补充正/反例", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "debunk_action": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 补充正/反例", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "oral_hook": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 五种钩子类型、错误开场示范", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "oral_body": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 时长字数换算（3字/秒）、口播正/反例", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "oral_cta": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): CTA正/反例", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "drama_dialogue": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 台词正/反例、动作指示规范", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "storyboard_frame": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): scene_desc正/反例、旁白字数匹配公式", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "card_content": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): headline/key_takeaway正/反例", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "picture_book_page": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): page_text/illustration_desc各组正/反例", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "quiz_question": {
+      "version": "2.0",
+      "file": "prompts/task_prompts.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 题目语气正/反例、explanation温和语气示范", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "handbook_disease_intro": {
+      "version": "2.0",
+      "file": "handbook/handbook_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 三问结构正/反例", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "handbook_symptoms": {
+      "version": "2.0",
+      "file": "handbook/handbook_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 症状描述正/反例（患者感受vs医学体征）", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "handbook_treatment": {
+      "version": "2.0",
+      "file": "handbook/handbook_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 治疗目标正/反例", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "handbook_daily_care": {
+      "version": "2.0",
+      "file": "handbook/handbook_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 行动建议正/反例、字数要求、输出格式明确", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "handbook_visit_tips": {
+      "version": "2.0",
+      "file": "handbook/handbook_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 补充正/反例、字数要求、输出格式明确", "v1.0 (2026-01-10): 初始版本"]
+    }
+  },
+
+  "layer_agents": {
+    "ArticleIntroAgent": {
+      "version": "2.0",
+      "file": "agents/medcomm/intro.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 文章引言专用 Agent", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "DebunkMythAgent": {
+      "version": "2.0",
+      "file": "agents/debunk/debunk_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 辟谣误区专用 Agent", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "OralScriptAgent": {
+      "version": "2.0",
+      "file": "agents/oral_script/oral_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 口播脚本专用 Agent", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "ContentFormatConvertor": {
+      "version": "2.2",
+      "file": "agents/convert/convert_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.2 (2026-03-22): 补充children拦截、扩展转换矩阵", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "FormatAgent": {
+      "version": "2.0",
+      "file": "agents/medcomm/format_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 通用任务路由，使用 task_prompts 详细提示词", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "ComicPanelWriter": {
+      "version": "2.0",
+      "file": "agents/comic/comic_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): scene_desc正/反例（中英文对比）", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "HandbookSectionAgent": {
+      "version": "2.0",
+      "file": "agents/handbook/handbook_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 患者手册各章节提示词", "v1.0 (2026-01-10): 初始版本"]
+    }
+  },
+
+  "layer_image": {
+    "MedPromptBuilder": {
+      "version": "2.0",
+      "file": "services/imagegen/prompt_builder.py",
+      "last_updated": "2026-03-22",
+      "changelog": [
+        "v2.0 (2026-03-22): 新增 MEDICAL_SAFE_GUIDES 正向安全引导、surgery类型拒绝生成",
+        "v1.0 (2026-01-10): 初始版本"
+      ]
+    },
+    "SUGGEST_IMAGES_PROMPT": {
+      "version": "2.0",
+      "file": "prompts/verification.py",
+      "last_updated": "2026-03-22",
+      "changelog": [
+        "v2.0 (2026-03-22): 中英文混排anchor_text修复、已有图像跳过规则、配图优先级",
+        "v1.0 (2026-01-10): 初始版本"
+      ]
+    }
+  },
+
+  "layer_polish": {
+    "LanguagePolishAgent": {
+      "version": "2.0",
+      "file": "agents/polish/polish_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 五优先级量化、正/反例各补充", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "PlatformAdaptAgent": {
+      "version": "2.0",
+      "file": "agents/polish/polish_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.0 (2026-03-22): 七平台规格表完整定义", "v1.0 (2026-01-10): 初始版本"]
+    },
+    "ScriptPolishAgent": {
+      "version": "2.2",
+      "file": "agents/polish/polish_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.2 (2026-03-22): 三种脚本形式各补充正/反例、children说明", "v1.0 (2026-03-22): 初始版本"]
+    },
+    "VisualPolishAgent": {
+      "version": "2.2",
+      "file": "agents/polish/polish_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.2 (2026-03-22): 四种图示形式各补充正/反例", "v1.0 (2026-03-22): 初始版本"]
+    },
+    "HandbookPolishAgent": {
+      "version": "2.2",
+      "file": "agents/polish/polish_agent.py",
+      "last_updated": "2026-03-22",
+      "changelog": ["v2.2 (2026-03-22): 新增overall_risk_level字段、字数要求、正/反例", "v1.0 (2026-03-22): 初始版本"]
+    }
+  },
+
+  "layer_verify": {
+    "CLAIM_VERIFY_PROMPT": {
+      "version": "2.0",
+      "file": "prompts/verification.py",
+      "last_updated": "2026-03-22",
+      "changelog": [
+        "v2.0 (2026-03-22): conflicting/confidence判断标准量化、多chunks处理规则",
+        "v1.0 (2026-01-10): 初始版本"
+      ]
+    },
+    "FACT_VERIFY_PROMPT": {
+      "version": "2.0",
+      "file": "prompts/verification.py",
+      "last_updated": "2026-03-22",
+      "changelog": [
+        "v2.0 (2026-03-22): 三级触发规则（HIGH/MEDIUM/LOW）、RAG豁免规则",
+        "v1.0 (2026-01-10): 初始版本"
+      ]
+    },
+    "READING_LEVEL_PROMPT": {
+      "version": "2.0",
+      "file": "prompts/verification.py",
+      "last_updated": "2026-03-22",
+      "changelog": [
+        "v2.0 (2026-03-22): 术语密度上下限量化（0.02~max）、章节一致性检查",
+        "v1.0 (2026-01-10): 初始版本"
+      ]
+    }
+  },
+
+  "layer_infrastructure": {
+    "QUALITY_SELF_CHECK_PROMPT": {
+      "version": "2.3",
+      "file": "prompts/quality_check.py",
+      "last_updated": "2026-03-22",
+      "changelog": [
+        "v2.3 (2026-03-22): FORMAT_SPECIFIC_CHECKS 补录5种形式（long_image/quiz/h5/audio/storyboard）",
+        "v1.0 (2026-03-22): 初始版本"
+      ]
+    },
+    "AUTO_QUALITY_RULES": {
+      "version": "2.0",
+      "file": "prompts/auto_quality_rules.py",
+      "last_updated": "2026-03-23",
+      "changelog": [
+        "v2.0 (2026-03-23): 新增开场套话、感谢阅读、图像描述字段中文检测三条规则",
+        "v1.0 (2026-01-10): 初始版本，10条规则"
+      ]
+    },
+    "ACCEPTANCE_CRITERIA": {
+      "version": "1.0",
+      "file": "prompts/acceptance_checker.py",
+      "last_updated": "2026-03-23",
+      "changelog": ["v1.0 (2026-03-23): 可执行验收检查实现"]
+    }
+  }
+}
