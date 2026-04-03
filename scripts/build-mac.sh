@@ -50,6 +50,7 @@ build_one() {
     exit 1
   fi
   $PY -m pip install --no-index --find-links="$WHEELS_DIR" \
+    --no-warn-script-location \
     -r backend/requirements.txt --quiet 2>&1 | tail -5
   echo "  Installed $($PY -m pip list --format=columns 2>/dev/null | wc -l | tr -d ' ') packages"
 

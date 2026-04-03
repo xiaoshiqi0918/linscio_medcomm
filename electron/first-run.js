@@ -32,17 +32,27 @@ function runFirstRunInstall() {
   }
 
   const r = spawnSync(pythonPath, ['-c', 'import alembic, uvicorn, fastapi, sqlalchemy, greenlet, pydantic, httpx, openai'], {
-    timeout: 10000,
+    timeout: 15000,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+
+  if (r.error) {
+    const msg = r.error.code === 'ENOENT'
+      ? `Python 可执行文件无法启动: ${pythonPath}`
+      : `Python 启动失败: ${r.error.message}\n\n可能原因：缺少 Visual C++ 运行时库，请安装 Microsoft Visual C++ Redistributable 后重试。`
+    console.error('[MedComm] Python spawn error:', r.error)
+    return { ok: false, error: msg }
+  }
+
   if (r.status === 0) {
     console.log('[MedComm] Dependencies verified OK')
     return { ok: true }
   }
 
   const stderr = r.stderr?.toString().trim() || ''
-  console.error('[MedComm] Dependency check failed:', stderr)
-  return { ok: false, error: stderr || `exit ${r.status}` }
+  console.error('[MedComm] Dependency check failed:', stderr, 'signal:', r.signal)
+  const detail = stderr || (r.signal ? `被信号终止: ${r.signal}` : `exit ${r.status}`)
+  return { ok: false, error: detail }
 }
 
 module.exports = {
