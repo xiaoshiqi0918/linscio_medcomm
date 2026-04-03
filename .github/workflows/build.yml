@@ -1,19 +1,7 @@
-# LinScio MedComm 三平台构建 + 可选腾讯云 COS 上传
+# LinScio MedComm — Windows x64 构建
 #
-# 产物：macOS arm64 / macOS x64 / Windows x64（与 matrix 一致）
-#
-# 上传到 COS 需在仓库 Settings → Secrets 中配置：
-#   TENCENT_COS_SECRET_ID
-#   TENCENT_COS_SECRET_KEY
-#   TENCENT_COS_BUCKET    （格式：bucketname-APPID）
-#   TENCENT_COS_REGION    （如 ap-guangzhou）
-# 可选：
-#   TENCENT_COS_PREFIX    （对象键前缀，默认 medcomm/releases）
-#
-# 对象路径：{PREFIX}/v{package.json version}/{platform}/文件名
-# 例如：medcomm/releases/v0.1.0/darwin-arm64/LinScio MedComm-0.1.0-arm64.dmg
-#
-# PR 不执行上传；未配置密钥时跳过上传（成功退出）。
+# 产物：Windows x64 NSIS 安装包（.exe）
+# 打包完成后通过 GitHub Actions Artifacts 下载，手动上传至 COS。
 name: Build
 
 on:
@@ -21,33 +9,11 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
-  release:
-    types: [published]
   workflow_dispatch:
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: darwin-arm64
-            os: macos-14
-            pip_platform: macosx_11_0_arm64
-            pbs_platform: aarch64-apple-darwin-install_only
-            electron_args: '--mac'
-          - platform: darwin-x64
-            os: macos-14
-            pip_platform: macosx_10_9_x86_64
-            pbs_platform: x86_64-apple-darwin-install_only
-            electron_args: '--mac --x64'
-          - platform: win32-x64
-            os: windows-latest
-            pip_platform: win_amd64
-            pbs_platform: x86_64-pc-windows-msvc-shared-install_only
-            electron_args: '--win'
-
-    runs-on: ${{ matrix.os }}
+  build-win:
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -58,66 +24,96 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Setup Python (for pip download)
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install npm deps
+      - name: Install npm dependencies
         run: npm ci
 
-      - name: Pre-download wheels (${{ matrix.platform }})
+      # ① 下载 Windows wheels（跳过 uvloop 等 Unix-only 依赖）
+      - name: Download Python wheels (win_amd64)
         shell: bash
         run: |
-          bash scripts/ci-download-wheels.sh "${{ matrix.pip_platform }}" "${{ matrix.platform }}"
-          echo "Wheels downloaded to build/wheels/${{ matrix.platform }}/"
-          ls build/wheels/${{ matrix.platform }}/ | head -20
+          set -euo pipefail
+          REQ="backend/requirements.txt"
+          WHEEL_DIR="build/wheels/win32-x64"
+          mkdir -p "$WHEEL_DIR"
 
-      - name: Download python-build-standalone (3.11.11, locked 20241205)
+          # uvicorn[standard] 的 uvloop 仅限 Unix；Windows 用基础版
+          TMP_REQ="build/.tmp-req-win.txt"
+          sed 's/uvicorn\[standard\]/uvicorn/g' "$REQ" > "$TMP_REQ"
+
+          # sdist-only 包单独处理
+          SDIST_RE='^\s*(jieba|bibtexparser)'
+          grep -vE "$SDIST_RE" "$TMP_REQ" > build/.tmp-req-binary.txt
+
+          echo "==> Phase 1: binary wheels"
+          python -m pip download -r build/.tmp-req-binary.txt \
+            --platform win_amd64 --python-version 3.11 \
+            --only-binary=:all: -d "$WHEEL_DIR/"
+
+          echo "==> Phase 2: sdist-only packages"
+          SDIST_PKGS=$(grep -E "$SDIST_RE" "$TMP_REQ" | tr '\n' ' ' || true)
+          if [ -n "$SDIST_PKGS" ]; then
+            python -m pip wheel $SDIST_PKGS -w "$WHEEL_DIR/"
+            rm -f "$WHEEL_DIR/"*.tar.gz "$WHEEL_DIR/"*.zip 2>/dev/null || true
+          fi
+
+          echo "==> Wheels count: $(ls "$WHEEL_DIR/"*.whl 2>/dev/null | wc -l)"
+          rm -f build/.tmp-req-win.txt build/.tmp-req-binary.txt
+
+      # ② 下载 Windows Python standalone（嵌入到安装包）
+      - name: Download Python standalone (3.11.11)
         shell: bash
         run: |
-          mkdir -p build
-          curl -sSL "https://github.com/astral-sh/python-build-standalone/releases/download/20241205/cpython-3.11.11+20241205-${{ matrix.pbs_platform }}.tar.gz" \
-            -o build/python-standalone.tar.gz
+          curl -sSL -o build/python-standalone.tar.gz \
+            "https://github.com/astral-sh/python-build-standalone/releases/download/20241205/cpython-3.11.11+20241205-x86_64-pc-windows-msvc-shared-install_only.tar.gz"
           tar -xzf build/python-standalone.tar.gz -C build
-          # install_only tarballs extract to python/; older releases to cpython-*
           if [ ! -d build/python ]; then
             mv build/cpython-3.11* build/python
           fi
-          ls build/python/bin/python3 build/python/python.exe 2>/dev/null || ls build/python/
+          echo "Python: $(build/python/python.exe --version)"
 
-      - name: Install backend deps (for Alembic migration check)
+      # ③ 预装 Python 依赖到嵌入式 Python（打包前，运行时不再 pip install）
+      - name: Install deps into embedded Python
+        shell: bash
+        run: |
+          # uvicorn[standard] → uvicorn for Windows
+          TMP_REQ="build/.tmp-req-win.txt"
+          sed 's/uvicorn\[standard\]/uvicorn/g' backend/requirements.txt > "$TMP_REQ"
+
+          build/python/python.exe -m pip install \
+            --no-index --find-links=build/wheels/win32-x64/ \
+            -r "$TMP_REQ" --quiet
+          echo "Installed packages: $(build/python/python.exe -m pip list --format=columns 2>/dev/null | wc -l)"
+          rm -f "$TMP_REQ"
+
+      # ④ Alembic 迁移检查
+      - name: Verify Alembic single head
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r backend/requirements.txt
+          python -m pip install -r backend/requirements.txt --quiet
+          bash scripts/ci-alembic-check.sh
 
-      - name: Verify Alembic single head
-        shell: bash
-        run: bash scripts/ci-alembic-check.sh
-
+      # ⑤ 构建前端
       - name: Build frontend
         run: npm run build
 
-      - name: Build Electron (${{ matrix.platform }})
-        run: npx electron-builder ${{ matrix.electron_args }}
+      # ⑥ Electron 打包
+      - name: Build Electron (win-x64)
+        run: npx electron-builder --win --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload artifacts (${{ matrix.platform }})
+      # ⑦ 上传构建产物到 GitHub Artifacts（保留 7 天）
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.platform }}
-          path: dist/
-
-      - name: Upload installers to Tencent COS
-        if: github.event_name != 'pull_request'
-        shell: bash
-        env:
-          COS_SECRET_ID: ${{ secrets.TENCENT_COS_SECRET_ID }}
-          COS_SECRET_KEY: ${{ secrets.TENCENT_COS_SECRET_KEY }}
-          COS_BUCKET: ${{ secrets.TENCENT_COS_BUCKET }}
-          COS_REGION: ${{ secrets.TENCENT_COS_REGION }}
-          COS_PREFIX: ${{ secrets.TENCENT_COS_PREFIX }}
-          MATRIX_PLATFORM: ${{ matrix.platform }}
-        run: bash scripts/ci-cos-upload.sh
+          name: LinScio-MedComm-win-x64
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+          retention-days: 7

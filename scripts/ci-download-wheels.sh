@@ -30,7 +30,13 @@ TMP_REQ="$(mktemp)"
 trap 'rm -f "$TMP_REQ"' EXIT
 
 SDIST_ONLY_RE='^\s*(jieba|bibtexparser)'
-grep -vE "$SDIST_ONLY_RE" "$REQ" > "$TMP_REQ"
+
+# uvloop (uvicorn[standard] extra) is Unix-only; strip the extra for Windows
+if [[ "$PIP_PLATFORM" == "win_amd64" ]]; then
+  sed 's/uvicorn\[standard\]/uvicorn/g' "$REQ" | grep -vE "$SDIST_ONLY_RE" > "$TMP_REQ"
+else
+  grep -vE "$SDIST_ONLY_RE" "$REQ" > "$TMP_REQ"
+fi
 
 echo "==> Phase 1: binary wheels (platform=$PIP_PLATFORM)"
 "$PY" -m pip download -r "$TMP_REQ" \

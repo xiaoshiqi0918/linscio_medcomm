@@ -8,10 +8,11 @@ const PYTHON_VERSION = '3.11.11'
 const RELEASE_TAG = '20241205'
 const BASE_URL = 'https://github.com/astral-sh/python-build-standalone/releases/download'
 
-function getPlatformId() {
+function getPlatformId(targetArch) {
+  const arch = targetArch || process.env.TARGET_ARCH || process.arch
   if (process.platform === 'win32') return 'win32-x64'
-  if (process.platform === 'darwin') return process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64'
-  return process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
+  if (process.platform === 'darwin') return arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64'
+  return arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
 }
 
 /** 嵌入 Python 的下载 URL（python-build-standalone install_only） */

@@ -7,6 +7,7 @@ const path = require('path')
 const { app, net } = require('electron')
 
 const pythonResolver = require('./python-resolver')
+const { getBackendDir } = require('./path-utils')
 
 let backendProcess = null
 let healthCheckTimer = null
@@ -14,10 +15,6 @@ let restartCount = 0
 const MAX_RESTARTS = 5
 
 const BACKEND_URL = 'http://127.0.0.1:8765'
-
-function getBackendDir() {
-  return path.join(__dirname, '..', 'backend')
-}
 
 function getPythonPath() {
   return pythonResolver.resolvePythonPath(app)
@@ -51,11 +48,13 @@ async function start(envExtra = {}) {
   const backendDir = getBackendDir()
   const env = { ...process.env, ...envExtra }
 
+  console.log('[MedComm] Spawning backend:', pythonPath, 'cwd:', backendDir)
   backendProcess = spawn(
     pythonPath,
     ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8765'],
     { cwd: backendDir, env, stdio: ['ignore', 'pipe', 'pipe'] }
   )
+  console.log('[MedComm] Backend PID:', backendProcess.pid)
 
   backendProcess.stdout?.on('data', (d) => process.stdout.write(d.toString()))
   backendProcess.stderr?.on('data', (d) => process.stderr.write(d.toString()))

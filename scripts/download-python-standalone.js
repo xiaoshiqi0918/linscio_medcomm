@@ -14,9 +14,10 @@ const BUILD_DIR = path.join(__dirname, '..', 'build')
 const PYTHON_OUT = path.join(BUILD_DIR, 'python')
 
 function getPlatformId() {
+  const targetArch = process.env.TARGET_ARCH || process.env.npm_config_arch || process.arch
   if (process.platform === 'win32') return 'win32-x64'
-  if (process.platform === 'darwin') return process.arch === 'arm64' ? 'darwin-arm64' : 'darwin-x64'
-  return process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64'
+  if (process.platform === 'darwin') return targetArch === 'arm64' ? 'darwin-arm64' : 'darwin-x64'
+  return targetArch === 'arm64' ? 'linux-arm64' : 'linux-x64'
 }
 
 function download(url) {

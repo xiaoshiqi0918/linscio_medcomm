@@ -6,10 +6,7 @@ const { spawn } = require('child_process')
 const path = require('path')
 const { app } = require('electron')
 const pythonResolver = require('./python-resolver')
-
-function getBackendDir() {
-  return path.join(__dirname, '..', 'backend')
-}
+const { getBackendDir } = require('./path-utils')
 
 /**
  * @param {string} appDataRoot 与 main 中 APP_DATA_ROOT 一致（userData/data），供 settings.db_path 解析

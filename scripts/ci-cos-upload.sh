@@ -12,8 +12,8 @@ if [ -z "${COS_SECRET_ID:-}" ] || [ -z "${COS_SECRET_KEY:-}" ] || [ -z "${COS_BU
   exit 0
 fi
 
-if [ ! -d dist ]; then
-  echo "::error::dist/ missing, skip COS upload"
+if [ ! -d release ]; then
+  echo "::error::release/ missing, skip COS upload"
   exit 1
 fi
 
@@ -82,14 +82,14 @@ while IFS= read -r -d '' f; do
   "$COSCLI_BIN" cp "$f" "cos://${COS_BUCKET}/${DEST_KEY}${base}"
   echo "uploaded: ${DEST_KEY}${base}"
   uploaded=$((uploaded + 1))
-done < <(find dist -maxdepth 1 -type f \( \
+done < <(find release -maxdepth 1 -type f \( \
   -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o \
   -name '*.blockmap' -o -name '*.yml' -o -name '*.yaml' \
 \) -print0)
 
 if [ "$uploaded" -eq 0 ]; then
-  echo "::warning::No installer artifacts matched in dist/ (dmg/zip/exe/blockmap/yml/yaml)"
-  ls -la dist || true
+  echo "::warning::No installer artifacts matched in release/ (dmg/zip/exe/blockmap/yml/yaml)"
+  ls -la release || true
   exit 1
 fi
 

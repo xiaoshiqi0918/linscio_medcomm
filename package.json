@@ -58,7 +58,7 @@
     "appId": "com.linscio.medcomm",
     "productName": "LinScio MedComm",
     "directories": {
-      "output": "dist"
+      "output": "release"
     },
     "files": [
       "electron/**/*",
@@ -66,6 +66,10 @@
       "backend/**/*",
       "build/wheels/**/*",
       "assets/**/*"
+    ],
+    "asarUnpack": [
+      "backend/**/*",
+      "build/wheels/**/*"
     ],
     "extraResources": [
       {

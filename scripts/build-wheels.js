@@ -12,9 +12,9 @@ const fs = require('fs')
 
 const PLATFORM_MAP = {
   'darwin-arm64': { tag: 'macosx_11_0_arm64', arch: 'arm64' },
-  'darwin-x64': { tag: 'macosx_10_9_x86_64', arch: 'x64' },
+  'darwin-x64': { tag: 'macosx_11_0_x86_64', arch: 'x64' },
   'macos-arm64': { tag: 'macosx_11_0_arm64', arch: 'arm64' },
-  'macos-x64': { tag: 'macosx_10_9_x86_64', arch: 'x64' },
+  'macos-x64': { tag: 'macosx_11_0_x86_64', arch: 'x64' },
   'win32-x64': { tag: 'win_amd64', arch: 'x64' },
   'linux-x64': { tag: 'manylinux_2_17_x86_64', arch: 'x64' },
   'linux-arm64': { tag: 'manylinux_2_17_aarch64', arch: 'arm64' },
@@ -46,12 +46,23 @@ function main() {
 
   fs.mkdirSync(wheelsDir, { recursive: true })
 
-  const pip = process.env.PIP_PATH || 'pip'
+  const pip = process.env.PIP_PATH || (() => {
+    for (const cmd of ['pip', 'pip3']) {
+      try { require('child_process').execFileSync('which', [cmd], { stdio: 'ignore' }); return cmd } catch {}
+    }
+    console.error('[build-wheels] Neither pip nor pip3 found. Set PIP_PATH or install pip.')
+    process.exit(1)
+  })()
   const SDIST_ONLY = ['jieba', 'bibtexparser']
 
   const lines = fs.readFileSync(requirementsPath, 'utf-8').split('\n')
-  const binaryLines = lines.filter((l) => !SDIST_ONLY.some((s) => l.trim().startsWith(s)))
+  let binaryLines = lines.filter((l) => !SDIST_ONLY.some((s) => l.trim().startsWith(s)))
   const sdistLines = lines.filter((l) => SDIST_ONLY.some((s) => l.trim().startsWith(s)))
+
+  // uvloop (uvicorn[standard] extra) is Unix-only; strip the extra for Windows
+  if (platform === 'win32-x64') {
+    binaryLines = binaryLines.map((l) => l.replace(/uvicorn\[standard\]/g, 'uvicorn'))
+  }
 
   const tmpReq = path.join(root, 'build', '.tmp-req-binary.txt')
   fs.writeFileSync(tmpReq, binaryLines.join('\n'))

@@ -1,58 +1,48 @@
 /**
- * 平台专属 Wheels 离线安装（幂等）
- * CI 构建时需预先执行：
- *   pip download -r requirements.txt --platform <tag> --python-version 3.11
- *     --only-binary=:all: -d build/wheels/<platform>/
+ * 首次启动检查：验证嵌入 Python 依赖是否就绪。
+ * 依赖在打包前已通过 scripts/build-mac.sh 预装到 build/python；
+ * 此处仅做验证，不再尝试 pip install（/Applications 只读会失败）。
  */
 const { spawnSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 const { app } = require('electron')
 const pythonResolver = require('./python-resolver')
+const { resolveUnpacked } = require('./path-utils')
 
 function getWheelsDir() {
   const appDir = path.join(__dirname, '..')
-  return path.join(appDir, 'build', 'wheels')
+  return resolveUnpacked(path.join(appDir, 'build', 'wheels'))
 }
 
-/** 与 python-resolver.getPlatformId、CI build/wheels 子目录一致（darwin-* / win32-x64） */
 function getPlatformTag() {
   return pythonResolver.getPlatformId()
 }
 
-/**
- * 幂等执行：若 wheels 目录存在则 pip install --no-index
- * 若不存在则跳过（开发环境通常已有 venv）
- */
 function runFirstRunInstall() {
-  const wheelsDir = getWheelsDir()
-  const platform = getPlatformTag()
-  const platformWheels = path.join(wheelsDir, platform)
-
-  if (!fs.existsSync(platformWheels)) {
-    console.log('[MedComm] No wheels found for', platform, ', skipping first-run install')
-    return { skipped: true, reason: 'no wheels' }
+  if (!app.isPackaged) {
+    console.log('[MedComm] Dev mode, skipping first-run check')
+    return { skipped: true, reason: 'dev' }
   }
 
-  const backendDir = path.join(__dirname, '..', 'backend')
-  const requirementsPath = path.join(backendDir, 'requirements.txt')
-  if (!fs.existsSync(requirementsPath)) {
-    console.log('[MedComm] No requirements.txt, skipping')
-    return { skipped: true, reason: 'no requirements' }
+  const pythonPath = pythonResolver.resolvePythonPath(app)
+  if (!fs.existsSync(pythonPath)) {
+    console.error('[MedComm] Embedded Python not found:', pythonPath)
+    return { ok: false, error: 'embedded Python missing' }
   }
 
-  try {
-    const pipCmd = pythonResolver.resolvePipCommand(app)
-    const r = spawnSync(pipCmd[0], [
-      pipCmd[1], pipCmd[2], 'install', '--no-index', `--find-links=${platformWheels}`, '-r', requirementsPath,
-    ], { cwd: backendDir, stdio: 'inherit', env: { ...process.env } })
-    if (r.status !== 0) throw new Error(`pip exited ${r.status}`)
-    console.log('[MedComm] First-run wheels install completed')
+  const r = spawnSync(pythonPath, ['-c', 'import alembic, uvicorn, fastapi, sqlalchemy, greenlet, pydantic, httpx, openai'], {
+    timeout: 10000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  if (r.status === 0) {
+    console.log('[MedComm] Dependencies verified OK')
     return { ok: true }
-  } catch (e) {
-    console.warn('[MedComm] First-run wheels install failed:', e.message)
-    return { ok: false, error: e.message }
   }
+
+  const stderr = r.stderr?.toString().trim() || ''
+  console.error('[MedComm] Dependency check failed:', stderr)
+  return { ok: false, error: stderr || `exit ${r.status}` }
 }
 
 module.exports = {

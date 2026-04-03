@@ -87,6 +87,7 @@ function closeSplash() {
 }
 
 function ensureDataDirs() {
+  if (!fs.existsSync(APP_DATA_ROOT)) fs.mkdirSync(APP_DATA_ROOT, { recursive: true })
   const dirs = ['images', 'backups', 'uploads']
   dirs.forEach((d) => {
     const p = path.join(APP_DATA_ROOT, d)
@@ -305,18 +306,6 @@ async function startBackend() {
   } catch (e) { /* keychain 不可用时忽略 */ }
 
   if (!startBackend._restartCount) startBackend._restartCount = 0
-  backend.startHealthCheck(() => {
-    if (startBackend._restartCount >= 5) {
-      console.error('[MedComm] Backend health-restart limit reached')
-      return
-    }
-    startBackend._restartCount++
-    console.warn(`[MedComm] Backend unhealthy, restarting (${startBackend._restartCount}/5)...`)
-    backend.stop()
-    setTimeout(() => startBackend(), 2000)
-  }, () => {
-    if (startBackend._restartCount > 0) startBackend._restartCount = 0
-  })
   backend.start(env)
 }
 
@@ -509,17 +498,23 @@ app.whenReady().then(async () => {
   imageProtocol.setAppDataRoot(APP_DATA_ROOT)
   imageProtocol.register()
 
-  // ⑤ first-run wheels（幂等，无 wheels 则跳过）
+  // ⑤ 依赖检查（打包模式验证嵌入 Python 是否包含所需模块）
   updateSplashStatus('检查依赖...')
   const t5 = Date.now()
-  try {
-    firstRun.runFirstRunInstall()
-  } catch (e) {
-    console.warn('[MedComm] first-run skipped:', e.message)
+  const frResult = firstRun.runFirstRunInstall()
+  if (frResult && !frResult.ok && !frResult.skipped) {
+    console.error('[MedComm] Dependency check failed:', frResult.error)
+    closeSplash()
+    dialog.showErrorBox('启动失败 - 依赖缺失', `嵌入的 Python 缺少必要模块：\n${frResult.error}\n\n请重新安装应用。`)
+    app.quit()
+    return
   }
   console.log('[MedComm] first-run:', Date.now() - t5, 'ms')
 
-  // ⑥ migration
+  // ⑥ 数据目录（需在 migration 前创建，否则首次启动时 DB 目录不存在）
+  ensureDataDirs()
+
+  // ⑦ migration
   updateSplashStatus('数据库迁移...')
   backup.setAppDataRoot(APP_DATA_ROOT)
   const t6 = Date.now()
@@ -527,14 +522,13 @@ app.whenReady().then(async () => {
     await migration.runMigrations(APP_DATA_ROOT)
   } catch (e) {
     console.error('[MedComm] Migration failed:', e)
-    updateSplashStatus('迁移失败: ' + e.message)
-    setTimeout(closeSplash, 3000)
+    closeSplash()
+    dialog.showErrorBox('启动失败 - 数据库迁移', e.message || String(e))
+    backend.stop()
+    app.quit()
     return
   }
   console.log('[MedComm] migration:', Date.now() - t6, 'ms')
-
-  // ⑦ 数据目录
-  ensureDataDirs()
 
   // ⑧ spawn Python
   updateSplashStatus('启动服务...')
@@ -543,14 +537,30 @@ app.whenReady().then(async () => {
   // ⑨ 轮询 /health（超时 60 秒）
   updateSplashStatus('等待服务就绪...')
   const t9 = Date.now()
-  const healthy = await pollHealth(60000)
+  const healthy = await pollHealth(120000)
   const healthMs = Date.now() - t9
   console.log('[MedComm] health poll:', healthMs, 'ms', healthy ? 'ok' : 'timeout')
   if (!healthy) {
-    updateSplashStatus('服务启动超时')
-    setTimeout(closeSplash, 3000)
+    closeSplash()
+    dialog.showErrorBox('启动失败 - 服务超时', '后端服务在 120 秒内未就绪，请检查日志或重新启动应用。')
+    backend.stop()
+    app.quit()
     return
   }
+
+  // ⑨b 启动后台健康监控（只在首次就绪后开启，避免冷启动期间误重启）
+  backend.startHealthCheck(() => {
+    if (startBackend._restartCount >= 5) {
+      console.error('[MedComm] Backend health-restart limit reached')
+      return
+    }
+    startBackend._restartCount++
+    console.warn(`[MedComm] Backend unhealthy, restarting (${startBackend._restartCount}/5)...`)
+    backend.stop()
+    setTimeout(() => startBackend(), 2000)
+  }, () => {
+    if (startBackend._restartCount > 0) startBackend._restartCount = 0
+  })
 
   // ⑩ 主窗口
   closeSplash()
