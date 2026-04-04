@@ -96,7 +96,16 @@ if "%SKIP_COMFYUI%"=="1" (
     echo [5/7] Skipping ComfyUI download (--no-comfyui)
 ) else (
     echo [5/7] Downloading ComfyUI + SD1.5 model...
-    node scripts\download-comfyui.js
+    if not exist "%ROOT%\scripts\download-comfyui.js" (
+        echo [ERROR] Missing: %ROOT%\scripts\download-comfyui.js
+        echo   Your clone may be outdated. From project root run:
+        echo     git pull origin main
+        echo   Or skip ComfyUI for this build:
+        echo     scripts\build-win.bat --no-comfyui
+        exit /b 1
+    )
+    node "%ROOT%\scripts\download-comfyui.js"
+    if errorlevel 1 exit /b 1
 )
 
 REM ⑥ 构建前端
