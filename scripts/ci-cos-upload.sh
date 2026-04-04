@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# GitHub Actions：将 electron-builder 产物上传到腾讯云 COS（需配置 Repository secrets）
-# 环境变量：COS_SECRET_ID, COS_SECRET_KEY, COS_BUCKET（含 AppID，如 bucket-1250000000）, COS_REGION
-# 可选：COS_PREFIX（默认 medcomm/releases）、MATRIX_PLATFORM（darwin-arm64 / darwin-x64 / win32-x64）
+# GitHub Actions：将 electron-builder 产物上传到腾讯云 COS
+# 环境变量：COS_SECRET_ID, COS_SECRET_KEY, COS_BUCKET, COS_REGION
+# 可选：COS_PREFIX（默认 releases/MedComm）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,8 +12,11 @@ if [ -z "${COS_SECRET_ID:-}" ] || [ -z "${COS_SECRET_KEY:-}" ] || [ -z "${COS_BU
   exit 0
 fi
 
-if [ ! -d release ]; then
-  echo "::error::release/ missing, skip COS upload"
+VER="$(node -p "require('./package.json').version")"
+RELEASE_DIR="releases/v${VER}"
+
+if [ ! -d "$RELEASE_DIR" ]; then
+  echo "::error::${RELEASE_DIR} missing, skip COS upload"
   exit 1
 fi
 
@@ -49,11 +52,8 @@ case "$uname_s" in
     ;;
 esac
 
-VER="$(node -p "require('./package.json').version")"
-PREFIX="${COS_PREFIX:-medcomm/releases}"
-PLAT="${MATRIX_PLATFORM:-unknown}"
-# 例：medcomm/releases/0.1.0/darwin-arm64/
-DEST_KEY="${PREFIX}/v${VER}/${PLAT}/"
+PREFIX="${COS_PREFIX:-releases/MedComm}"
+DEST_KEY="${PREFIX}/v${VER}/"
 
 echo "::group::coscli config (~/.cos.yaml)"
 umask 077
@@ -82,15 +82,15 @@ while IFS= read -r -d '' f; do
   "$COSCLI_BIN" cp "$f" "cos://${COS_BUCKET}/${DEST_KEY}${base}"
   echo "uploaded: ${DEST_KEY}${base}"
   uploaded=$((uploaded + 1))
-done < <(find release -maxdepth 1 -type f \( \
+done < <(find "$RELEASE_DIR" -maxdepth 1 -type f \( \
   -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o \
   -name '*.blockmap' -o -name '*.yml' -o -name '*.yaml' \
 \) -print0)
 
 if [ "$uploaded" -eq 0 ]; then
-  echo "::warning::No installer artifacts matched in release/ (dmg/zip/exe/blockmap/yml/yaml)"
-  ls -la release || true
+  echo "::warning::No installer artifacts matched in ${RELEASE_DIR}/ (dmg/zip/exe/blockmap/yml/yaml)"
+  ls -la "$RELEASE_DIR" || true
   exit 1
 fi
 
-echo "::notice::COS upload done, ${uploaded} file(s)"
+echo "::notice::COS upload done, ${uploaded} file(s) → ${DEST_KEY}"

@@ -60,4 +60,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   downloadSpecialty: (specialtyId, specialtyName, version, fromVersion) =>
     ipcRenderer.invoke('download-specialty', specialtyId, specialtyName, version, fromVersion),
   getPackStatus: () => ipcRenderer.invoke('get-pack-status'),
+  checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
+  importLocalPack: () => ipcRenderer.invoke('import-local-pack'),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
+  // ComfyUI 管理
+  getComfyUIStatus: () => ipcRenderer.invoke('get-comfyui-status'),
+  getComfyUIUrl: () => ipcRenderer.invoke('get-comfyui-url'),
+  restartComfyUI: () => ipcRenderer.invoke('restart-comfyui'),
 })

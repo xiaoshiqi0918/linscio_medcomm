@@ -34,6 +34,15 @@ def _api_prompt_with_negative(positive: str, negative: str | None) -> str:
     return f"{pos}\n\nAvoid depicting: {neg}"
 
 
+def _resolve_workflow_path(raw: str) -> Path:
+    """Resolve a workflow path: absolute paths used as-is, relative resolved against project root."""
+    p = Path(raw).expanduser()
+    if p.is_absolute():
+        return p
+    project_root = Path(__file__).resolve().parents[3]
+    return project_root / p
+
+
 def _comfy_workflow_path(overrides: dict | None) -> str:
     o = overrides or {}
     return (o.get("comfy_workflow_path") or os.environ.get("COMFYUI_WORKFLOW_JSON", "")).strip()
@@ -41,7 +50,9 @@ def _comfy_workflow_path(overrides: dict | None) -> str:
 
 def _comfy_available_local(overrides: dict | None) -> bool:
     p = _comfy_workflow_path(overrides)
-    return bool(p and Path(p).expanduser().is_file())
+    if not p:
+        return False
+    return _resolve_workflow_path(p).is_file()
 
 
 def _comfy_available_cloud(overrides: dict | None) -> bool:
@@ -296,13 +307,19 @@ async def _comfyui(
     steps: int | None = None,
     cfg_scale: float | None = None,
     sampler_name: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    loras: list[tuple[str, float]] | None = None,
 ) -> list[str]:
     mode = _resolve_comfy_mode(preferred_provider, overrides)
     if mode is None:
         return []
     o = overrides or {}
     wf_path = _comfy_workflow_path(o)
-    if not wf_path or not Path(wf_path).expanduser().is_file():
+    if not wf_path:
+        return []
+    resolved_wf = _resolve_workflow_path(wf_path)
+    if not resolved_wf.is_file():
         return []
     if mode == "cloud" and not os.environ.get("COMFY_CLOUD_API_KEY", "").strip():
         return []
@@ -316,6 +333,7 @@ async def _comfyui(
     neg_node = (o.get("comfy_negative_node_id") or os.environ.get("COMFYUI_NEGATIVE_NODE_ID", "")).strip() or None
     neg_key = (o.get("comfy_negative_input_key") or os.environ.get("COMFYUI_NEGATIVE_INPUT_KEY", "text")).strip() or "text"
     ksampler = (o.get("comfy_ksampler_node_id") or os.environ.get("COMFYUI_KSAMPLER_NODE_ID", "")).strip() or None
+    latent_node = (o.get("comfy_latent_node_id") or os.environ.get("COMFYUI_LATENT_NODE_ID", "")).strip() or None
     api_key = os.environ.get("COMFY_CLOUD_API_KEY", "").strip() if mode == "cloud" else None
     try:
         timeout = int(os.environ.get("COMFYUI_TIMEOUT_SEC", "300"))
@@ -330,17 +348,21 @@ async def _comfyui(
             mode=mode,
             base_url=base,
             api_key=api_key,
-            workflow_path=wf_path,
+            workflow_path=str(resolved_wf),
             prompt_node_id=node_id,
             prompt_input_key=input_key,
             negative_prompt=negative_prompt,
             negative_node_id=neg_node,
             negative_input_key=neg_key,
             ksampler_node_id=ksampler,
+            latent_node_id=latent_node,
+            width=width,
+            height=height,
             seed=seed,
             steps=steps,
             cfg=cfg_scale,
             sampler_name=sampler_name,
+            loras=loras,
             timeout_sec=timeout,
         )
     except Exception as e:
@@ -366,6 +388,7 @@ async def generate_image(
     cfg_scale: float | None = None,
     sampler_name: str | None = None,
     skip_style_envelope: bool = False,
+    loras: list[tuple[str, float]] | None = None,
 ) -> tuple[list[str], bool, dict]:
     """
     生成图像，返回 (URL/路径列表, is_fallback, meta)。
@@ -432,6 +455,9 @@ async def generate_image(
             steps=steps,
             cfg_scale=cfg_scale,
             sampler_name=sampler_name,
+            width=width,
+            height=height,
+            loras=loras,
         )
 
     async def poll_fn(_iter_s: int) -> list[str]:

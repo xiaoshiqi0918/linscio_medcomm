@@ -1,6 +1,6 @@
 {
   "name": "linscio-medcomm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "LinScio MedComm - 医学科普写作智能体桌面客户端",
   "main": "electron/main.js",
   "scripts": {
@@ -15,7 +15,8 @@
     "electron:dev:dist:bypass": "npm run build && MEDCOMM_RENDERER=dist MEDCOMM_DEV_BYPASS_AUTH=1 NODE_ENV=development env -u ELECTRON_RUN_AS_NODE electron .",
     "prebuild:python": "node scripts/download-python-standalone.js",
     "prebuild:wheels": "node scripts/build-wheels.js",
-    "electron:build": "npm run prebuild:python && bash scripts/preelectron-build.sh && vite build && electron-builder",
+    "prebuild:comfyui": "node scripts/download-comfyui.js",
+    "electron:build": "npm run prebuild:python && npm run prebuild:comfyui && bash scripts/preelectron-build.sh && vite build && electron-builder",
     "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
@@ -58,7 +59,7 @@
     "appId": "com.linscio.medcomm",
     "productName": "LinScio MedComm",
     "directories": {
-      "output": "release"
+      "output": "releases/v${version}"
     },
     "files": [
       "electron/**/*",
@@ -78,6 +79,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "build/comfyui",
+        "to": "comfyui",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "protocols": [
@@ -88,12 +96,22 @@
         ]
       }
     ],
+    "artifactName": "LinScio-MedComm-${version}-${platform}-${arch}.${ext}",
     "mac": {
       "target": [
         "dmg",
         "zip"
       ],
       "category": "public.app-category.medical"
+    },
+    "dmg": {
+      "artifactName": "LinScio-MedComm-${version}-mac-${arch}.dmg"
+    },
+    "nsis": {
+      "artifactName": "LinScio-MedComm-${version}-win-x64.exe"
+    },
+    "portable": {
+      "artifactName": "LinScio-MedComm-${version}-win-x64-portable.exe"
     },
     "win": {
       "target": [
@@ -105,6 +123,9 @@
       "target": [
         "AppImage"
       ]
+    },
+    "appImage": {
+      "artifactName": "LinScio-MedComm-${version}-linux-x64.AppImage"
     }
   }
 }

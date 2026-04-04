@@ -37,3 +37,9 @@ build/*.zip
 build/wheels/*
 !build/wheels/README.md
 !build/wheels/.gitkeep
+
+# ComfyUI 引擎 + 模型（~5GB，本地通过 scripts/download-comfyui.js 下载）
+build/comfyui/
+
+# 打包产物（本地打包生成，勿提交）
+releases/

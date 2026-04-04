@@ -69,9 +69,17 @@ const actionLabel = computed(() => {
 
 async function handleAction() {
   const api = window.electronAPI
-  if (!api?.getPortalActivateUrl || !api?.openExternal) return
-  const url = await api.getPortalActivateUrl()
-  if (url) await api.openExternal(url)
+  if (!api?.openExternal) return
+
+  if (bannerType.value === 'software-update' && store.softwareUpdate?.download_url) {
+    await api.openExternal(store.softwareUpdate.download_url)
+    return
+  }
+
+  if (api.getPortalActivateUrl) {
+    const url = await api.getPortalActivateUrl()
+    if (url) await api.openExternal(url)
+  }
 }
 
 function dismiss() {

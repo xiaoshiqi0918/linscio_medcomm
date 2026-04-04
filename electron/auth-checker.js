@@ -119,10 +119,22 @@ function clearLicenseCache(globalLicenseCache) {
  * 检查主程序是否有新版本（调 POST /api/update/check）
  * 结果通过 IPC 'software-update-available' 推送到渲染进程
  */
-async function checkSoftwareUpdate(mainWindow, token, currentVersion) {
+async function checkSoftwareUpdate(mainWindow, token, currentVersion, localPacks) {
   if (!mainWindow || mainWindow.isDestroyed()) return
   const base = getPortalApiBase()
   if (!base || !token) return
+
+  const specialties = {}
+  const drawing_packs = {}
+  for (const p of (localPacks || [])) {
+    if (!p.specialty_id || !p.local_version) continue
+    const isDrawing = p.category === 'drawing' || (p.specialty_id || '').startsWith('medpic-')
+    if (isDrawing) {
+      drawing_packs[p.specialty_id] = p.local_version
+    } else {
+      specialties[p.specialty_id] = p.local_version
+    }
+  }
 
   try {
     const url = `${base.replace(/\/$/, '')}/api/update/check`
@@ -138,6 +150,8 @@ async function checkSoftwareUpdate(mainWindow, token, currentVersion) {
           ? (process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64')
           : 'win-x64',
         software_version: currentVersion || '0.0.0',
+        specialties: Object.keys(specialties).length ? specialties : undefined,
+        drawing_packs: Object.keys(drawing_packs).length ? drawing_packs : undefined,
       }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
@@ -147,6 +161,9 @@ async function checkSoftwareUpdate(mainWindow, token, currentVersion) {
       base_valid: data.base_valid,
       has_software_update: data.has_software_update,
       latest_version: data.latest_version,
+      download_url: data.download_url || null,
+      specialty_updates: data.specialty_updates || [],
+      drawing_pack_updates: data.drawing_pack_updates || [],
     })
   } catch (err) {
     console.warn('[MedComm] software update check failed:', err.message)

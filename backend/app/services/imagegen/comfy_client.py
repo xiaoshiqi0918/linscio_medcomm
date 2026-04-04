@@ -49,6 +49,102 @@ def _patch_ksampler(
     return w
 
 
+def _patch_latent_size(
+    workflow: dict[str, Any],
+    node_id: str,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+    batch_size: int | None = None,
+) -> dict[str, Any]:
+    w = copy.deepcopy(workflow)
+    node = w.get(node_id)
+    if not isinstance(node, dict):
+        return workflow
+    inputs = node.setdefault("inputs", {})
+    if width is not None:
+        inputs["width"] = int(width)
+    if height is not None:
+        inputs["height"] = int(height)
+    if batch_size is not None:
+        inputs["batch_size"] = int(batch_size)
+    return w
+
+
+def _auto_find_latent_node(workflow: dict[str, Any]) -> str | None:
+    return _auto_find_node(workflow, "EmptyLatentImage")
+
+
+def _auto_find_node(workflow: dict[str, Any], class_type: str) -> str | None:
+    for nid, node in workflow.items():
+        if isinstance(node, dict) and node.get("class_type") == class_type:
+            return nid
+    return None
+
+
+def inject_lora_chain(
+    workflow: dict[str, Any],
+    loras: list[tuple[str, float]],
+    checkpoint_node_id: str = "1",
+    positive_node_id: str = "6",
+    negative_node_id: str = "7",
+    ksampler_node_id: str = "3",
+) -> dict[str, Any]:
+    """
+    §8.4 LoRA 节点拓扑：动态将 LoRA 链注入到工作流中。
+
+    拓扑：
+      CheckpointLoaderSimple (node 1)
+        → LoraLoader #1 (style, strength)
+        → LoraLoader #2 (subject, strength)
+        ├→ CLIPTextEncode(正向) ← 末级 LoRA 的 CLIP
+        ├→ CLIPTextEncode(负向) ← 末级 LoRA 的 CLIP
+        └→ KSampler ← 末级 LoRA 的 MODEL
+
+    loras: [(filename, strength), ...] 按链接顺序排列。
+    """
+    if not loras:
+        return workflow
+
+    w = copy.deepcopy(workflow)
+    prev_model_ref = [checkpoint_node_id, 0]  # MODEL output
+    prev_clip_ref = [checkpoint_node_id, 1]    # CLIP output
+
+    lora_base_id = 100  # 使用 100+ 区间避免与现有节点冲突
+
+    for i, (filename, strength) in enumerate(loras):
+        nid = str(lora_base_id + i)
+        w[nid] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "lora_name": filename,
+                "strength_model": strength,
+                "strength_clip": strength,
+                "model": prev_model_ref,
+                "clip": prev_clip_ref,
+            },
+        }
+        prev_model_ref = [nid, 0]
+        prev_clip_ref = [nid, 1]
+
+    # 重新链接：正向 CLIPTextEncode → 末级 LoRA 的 CLIP
+    pos_node = w.get(positive_node_id)
+    if isinstance(pos_node, dict):
+        pos_node.setdefault("inputs", {})["clip"] = prev_clip_ref
+
+    # 重新链接：负向 CLIPTextEncode → 末级 LoRA 的 CLIP
+    neg_node = w.get(negative_node_id)
+    if isinstance(neg_node, dict):
+        neg_node.setdefault("inputs", {})["clip"] = prev_clip_ref
+
+    # 重新链接：KSampler → 末级 LoRA 的 MODEL
+    ks_node = w.get(ksampler_node_id)
+    if isinstance(ks_node, dict):
+        ks_node.setdefault("inputs", {})["model"] = prev_model_ref
+
+    return w
+
+
 def _inject_prompt(
     workflow: dict[str, Any],
     node_id: str,
@@ -82,10 +178,14 @@ async def submit_and_wait_image(
     negative_node_id: str | None = None,
     negative_input_key: str = "text",
     ksampler_node_id: str | None = None,
+    latent_node_id: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
     seed: int | None = None,
     steps: int | None = None,
     cfg: float | None = None,
     sampler_name: str | None = None,
+    loras: list[tuple[str, float]] | None = None,
     timeout_sec: int = 300,
     poll_interval: float = 1.0,
 ) -> bytes:
@@ -118,6 +218,24 @@ async def submit_and_wait_image(
             steps=steps,
             cfg=cfg,
             sampler_name=(sampler_name or "").strip() or None,
+        )
+
+    if width is not None or height is not None:
+        lid = (latent_node_id or "").strip() or _auto_find_latent_node(workflow)
+        if lid:
+            workflow = _patch_latent_size(workflow, lid, width=width, height=height)
+
+    if loras:
+        checkpoint_nid = _auto_find_node(workflow, "CheckpointLoaderSimple") or "1"
+        pos_nid = prompt_node_id
+        neg_nid = (negative_node_id or "").strip() or "7"
+        ks_nid = (ksampler_node_id or "").strip() or "3"
+        workflow = inject_lora_chain(
+            workflow, loras,
+            checkpoint_node_id=checkpoint_nid,
+            positive_node_id=pos_nid,
+            negative_node_id=neg_nid,
+            ksampler_node_id=ks_nid,
         )
 
     client_id = str(uuid.uuid4())

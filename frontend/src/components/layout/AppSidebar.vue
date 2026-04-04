@@ -7,8 +7,14 @@
         <router-link to="/medcomm" class="nav-item">
           <span class="icon">✍️</span> 科普写作
         </router-link>
+      </div>
+      <div class="nav-group">
+        <span class="nav-group-title">绘图</span>
+        <router-link to="/medpic" class="nav-item">
+          <span class="icon">🩺</span> MedPic 医学绘图
+        </router-link>
         <router-link to="/imagegen" class="nav-item">
-          <span class="icon">🎨</span> 图像生成
+          <span class="icon">🎨</span> 通用图像生成
         </router-link>
       </div>
       <div class="nav-group">

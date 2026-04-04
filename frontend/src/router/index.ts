@@ -35,6 +35,12 @@ const router = createRouter({
           meta: { title: '图像生成' },
         },
         {
+          path: 'medpic',
+          name: 'medpic',
+          component: () => import('@/views/medpic/Index.vue'),
+          meta: { title: 'MedPic 医学绘图' },
+        },
+        {
           path: 'literature',
           name: 'literature',
           component: () => import('@/views/literature/Index.vue'),

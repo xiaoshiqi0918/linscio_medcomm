@@ -21,6 +21,7 @@ from app.models.publish import PublishRecord
 from app.models.paper import PaperChunk
 from app.models.literature import LiteraturePaper
 from app.models.specialty_package import SpecialtyPackage
+from app.models.medpic_generation import MedPicGeneration
 
 # Alembic Config
 config = context.config

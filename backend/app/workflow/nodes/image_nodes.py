@@ -189,6 +189,11 @@ async def generate_images_node(state: ImageGenState) -> ImageGenState:
     cfg_scale = _optional_float(state.get("cfg_scale"))
     sn = (state.get("sampler_name") or "").strip() or None
 
+    raw_loras = state.get("loras")
+    loras_param: list[tuple[str, float]] | None = None
+    if raw_loras and isinstance(raw_loras, list):
+        loras_param = [(str(pair[0]), float(pair[1])) for pair in raw_loras if len(pair) >= 2]
+
     try:
         urls, is_fallback, meta = await generate_image(
             prompt=prompt,
@@ -206,6 +211,7 @@ async def generate_images_node(state: ImageGenState) -> ImageGenState:
             cfg_scale=cfg_scale,
             sampler_name=sn,
             skip_style_envelope=skip_env,
+            loras=loras_param,
         )
         used = meta.get("seeds") if isinstance(meta, dict) else []
         return {

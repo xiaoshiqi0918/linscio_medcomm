@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import medcomm, formats, system, literature, knowledge, templates, examples, terms, polish, publish, imagegen, auth, tasks, data, specialty, translate, article_snapshots, personal_corpus
+from app.api.v1 import medcomm, formats, system, literature, knowledge, templates, examples, terms, polish, publish, imagegen, auth, tasks, data, specialty, translate, article_snapshots, personal_corpus, medpic
 from app.api import internal
 from app.core.database import init_db, get_db_path
 from app.core.config import settings
@@ -19,6 +19,15 @@ LOCAL_API_KEY = os.environ.get("LINSCIO_LOCAL_API_KEY")
 # imagegen/serve：供 <img src> 等无法带 X-Local-Api-Key 的请求（路径在路由内已防 .. 穿越）
 LOCAL_KEY_EXEMPT_EXACT = {"/health", "/openapi.json", "/api/v1/imagegen/serve"}
 LOCAL_KEY_EXEMPT_PREFIX = ("/docs", "/redoc")
+
+
+def _client_is_loopback(request: Request) -> bool:
+    """开发时允许本机浏览器直连 8765（无 Electron 时无法拿到随机 Local API Key）"""
+    client = request.client
+    if client is None:
+        return False
+    host = (client.host or "").lower()
+    return host in ("127.0.0.1", "::1", "localhost")
 
 
 class LocalApiKeyMiddleware(BaseHTTPMiddleware):
@@ -33,9 +42,12 @@ class LocalApiKeyMiddleware(BaseHTTPMiddleware):
         if path in LOCAL_KEY_EXEMPT_EXACT or any(path.startswith(p) for p in LOCAL_KEY_EXEMPT_PREFIX):
             return await call_next(request)
         header_key = request.headers.get("X-Local-Api-Key") or request.headers.get("x-local-api-key")
-        if header_key != LOCAL_API_KEY:
-            return JSONResponse(status_code=403, content={"detail": "Local API key required"})
-        return await call_next(request)
+        if header_key == LOCAL_API_KEY:
+            return await call_next(request)
+        # DEBUG=1 且来自本机回环：放行（Vite 浏览器调试 + Electron 已起后端 的场景）
+        if settings.debug and _client_is_loopback(request):
+            return await call_next(request)
+        return JSONResponse(status_code=403, content={"detail": "Local API key required"})
 
 
 async def _initialize_auth():
@@ -81,7 +93,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="LinScio MedComm API",
     description="医学科普写作智能体后端 API",
-    version="0.1.0",
+    version="0.1.1",
     lifespan=lifespan,
 )
 
@@ -123,10 +135,11 @@ app.include_router(specialty.router, prefix="/api/v1/specialty", tags=["specialt
 app.include_router(translate.router, prefix="/api/v1/translate", tags=["translate"])
 app.include_router(article_snapshots.router, prefix="/api/v1/medcomm", tags=["snapshots"])
 app.include_router(personal_corpus.router, prefix="/api/v1/personal-corpus", tags=["personal-corpus"])
+app.include_router(medpic.router, prefix="/api/v1/medpic", tags=["medpic"])
 app.include_router(internal.router, prefix="/internal", tags=["internal"])
 
 
 @app.get("/health")
 async def health():
     """健康检查"""
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "0.1.1"}

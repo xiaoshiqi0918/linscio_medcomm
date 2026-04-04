@@ -36,6 +36,7 @@ if (isDev) {
 }
 
 const backend = require('./backend')
+const comfyui = require('./comfyui-manager')
 const imageProtocol = require('./image-protocol')
 const migration = require('./migration')
 const firstRun = require('./first-run')
@@ -300,6 +301,9 @@ async function startBackend() {
     LINSCIO_APP_DATA: APP_DATA_ROOT,
     LINSCIO_LOCAL_API_KEY: localApiKey,
   }
+  if (isDev) {
+    env.DEBUG = '1'
+  }
   try {
     const keychain = require('./keychain')
     Object.assign(env, await keychain.getApiKeysForBackend())
@@ -462,6 +466,68 @@ ipcMain.handle('get-pack-status', async () => {
   }
 })
 
+ipcMain.handle('get-app-version', () => app.getVersion())
+
+ipcMain.handle('check-for-update', async () => {
+  try {
+    const token = await keychain.getPassword('access_token')
+    if (!token) return { ok: false, error: '未激活' }
+    const pkgVersion = app.getVersion() || '0.0.0'
+    let localPacks = []
+    try {
+      const { net: _net } = require('electron')
+      const headers = { 'Content-Type': 'application/json' }
+      if (localApiKey) headers['X-Local-Api-Key'] = localApiKey
+      const packRes = await _net.fetch('http://127.0.0.1:8765/api/v1/specialty/status', { headers })
+      if (packRes.ok) localPacks = await packRes.json()
+    } catch { /* ignore */ }
+    await authChecker.checkSoftwareUpdate(mainWindow, token, pkgVersion, localPacks)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+})
+
+// ComfyUI IPC
+ipcMain.handle('get-comfyui-status', () => comfyui.getStatus())
+ipcMain.handle('get-comfyui-url', () => comfyui.getBaseUrl())
+ipcMain.handle('restart-comfyui', async () => {
+  comfyui.stop()
+  await new Promise((r) => setTimeout(r, 1000))
+  comfyui.start()
+  return { ok: true }
+})
+
+ipcMain.handle('import-local-pack', async () => {
+  const { dialog } = require('electron')
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择扩展包文件',
+      filters: [{ name: '扩展包', extensions: ['zip'] }],
+      properties: ['openFile'],
+    })
+    if (result.canceled || !result.filePaths.length) {
+      return { ok: false, error: 'cancelled' }
+    }
+    const zipPath = result.filePaths[0]
+    const { net: _net } = require('electron')
+    const headers = { 'Content-Type': 'application/json' }
+    if (localApiKey) headers['X-Local-Api-Key'] = localApiKey
+    const res = await _net.fetch('http://127.0.0.1:8765/api/v1/specialty/import-local', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ zip_path: zipPath }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      return { ok: false, error: body.detail || `导入失败 (${res.status})` }
+    }
+    return await res.json()
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+})
+
 app.whenReady().then(async () => {
   const t0 = Date.now()
 
@@ -534,6 +600,14 @@ app.whenReady().then(async () => {
   updateSplashStatus('启动服务...')
   await startBackend()
 
+  // ⑧b spawn ComfyUI（不阻塞主流程，后台启动）
+  updateSplashStatus('启动绘图引擎...')
+  if (comfyui.getComfyUIDir()) {
+    comfyui.start()
+  } else {
+    console.log('[MedComm] ComfyUI not found, skipping')
+  }
+
   // ⑨ 轮询 /health（超时 60 秒）
   updateSplashStatus('等待服务就绪...')
   const t9 = Date.now()
@@ -590,9 +664,13 @@ app.whenReady().then(async () => {
   })
 })
 
+app.on('before-quit', () => {
+  comfyui.stop()
+  backend.stop()
+})
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    backend.stop()
     app.quit()
   }
 })

@@ -21,6 +21,7 @@ from app.models.literature import (
 from app.models.specialty_package import SpecialtyPackage
 from app.models.article_snapshot import ArticleSnapshot
 from app.models.personal_corpus import PersonalCorpusEntry
+from app.models.medpic_generation import MedPicGeneration
 
 __all__ = [
     "Base", "User", "UserSetting", "Article", "ArticleSection", "ArticleContent", "ArticleLiteratureBinding", "ArticleExternalReference",
@@ -31,4 +32,5 @@ __all__ = [
     "SpecialtyPackage",
     "ArticleSnapshot",
     "PersonalCorpusEntry",
+    "MedPicGeneration",
 ]

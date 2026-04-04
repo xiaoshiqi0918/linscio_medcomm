@@ -1,6 +1,10 @@
 import axios from 'axios'
 
 export const API_BASE = 'http://127.0.0.1:8765'
+
+/** LLM / long-running MedPic calls (local models often exceed 30s) */
+export const MEDPIC_LLM_TIMEOUT_MS = 180000
+
 export const http = axios.create({
   baseURL: API_BASE,
   timeout: 30000,
@@ -542,6 +546,7 @@ export const api = {
       visual_continuity_prompt?: string | null
       seed_base?: number | null
       panel_index?: number | null
+      loras?: Array<[string, number]>
     }) => http.post<{ urls: string[]; is_fallback?: boolean; seeds?: number[] }>('/api/v1/imagegen/generate', data),
     aiPrompts: (data: {
       scene_idea: string
@@ -586,5 +591,274 @@ export const api = {
       if (publishUrl !== undefined) params.publish_url = publishUrl
       return http.patch(`/api/v1/publish/records/${id}`, {}, { params })
     },
+  },
+  medpic: {
+    buildPrompt: (data: {
+      scene: string
+      topic: string
+      variant?: string
+      specialty?: string
+      target_audience?: string
+      style?: string
+      color_tone?: string
+      subject?: string
+      extra_prompt?: string
+      hardware_tier?: string
+      aspect?: string
+      reference_image?: string
+      ipadapter_weight?: number
+      character_preset?: string
+      segment_index?: number
+      segment_count?: number
+      seed_mode?: string
+      lora_overrides?: Array<{ id: string; strength: number }>
+    }) => http.post<{
+      positive_prompt: string
+      negative_prompt: string
+      width: number
+      height: number
+      steps: number
+      cfg_scale: number
+      sampler_name: string
+      scheduler: string
+      workflow_path: string
+      special: string | null
+      reference_image: string | null
+      output_width: number | null
+      output_height: number | null
+      process_mode: string
+      recommended_seed: number | null
+      seed_library_version: string
+      loras: Array<{
+        id: string
+        name: string
+        category: string
+        filename: string
+        strength: number
+      }>
+      model_id: string
+      ipadapter_weight: number | null
+    }>('/api/v1/medpic/build-prompt', data),
+    getLoraRegistry: (params?: { arch?: string; tier?: string }) =>
+      http.get<{
+        loras: Array<{
+          id: string
+          name: string
+          category: string
+          filename: string
+          arch: string
+          weight_range: [number, number]
+          default_weight: number
+          tiers: string[]
+          trigger_words: string
+          auto_select_styles: string[]
+          auto_select_scenes: string[]
+          is_base_pack: boolean
+          notes: string
+        }>
+      }>('/api/v1/medpic/lora-registry', { params: params ?? {} }),
+    getModelRegistry: (params?: { tier?: string }) =>
+      http.get<{
+        models: Array<{
+          id: string
+          name: string
+          arch: string
+          filename: string
+          license: string
+          license_commercial: boolean
+          size_gb: number
+          tiers: string[]
+        }>
+        tier_model_map: Record<string, string>
+      }>('/api/v1/medpic/model-registry', { params: params ?? {} }),
+    getPresetCharacters: (params?: { scene?: string }) =>
+      http.get<{
+        characters: Array<{
+          id: string
+          name: string
+          description: string
+          reference_path: string
+          thumbnail_url: string
+          prompt_tags: string
+          scenes: string[]
+          available: boolean
+        }>
+      }>('/api/v1/medpic/preset-characters', { params: params ?? {} }),
+    getVariants: (params?: { scene?: string; hardware_tier?: string }) =>
+      http.get<{
+        variants: Array<{
+          id: string
+          scene: string
+          name: string
+          description: string
+          style: string
+          aspects: string[]
+          available: boolean
+          tier_exclude: string[]
+          special: string | null
+          supports_character: boolean
+        }>
+      }>('/api/v1/medpic/variants', { params: params ?? {} }),
+    uploadReferenceImage: (file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return http.post<{ path: string; serve_url: string }>(
+        '/api/v1/medpic/reference-image', form,
+        { headers: { 'Content-Type': 'multipart/form-data' } },
+      )
+    },
+    referenceFromGenerated: (imagePath: string) =>
+      http.post<{ path: string; serve_url: string }>(
+        '/api/v1/medpic/reference-from-generated', null,
+        { params: { image_path: imagePath } },
+      ),
+    listReferenceImages: () =>
+      http.get<{ items: Array<{ path: string; serve_url: string; filename: string }> }>(
+        '/api/v1/medpic/reference-images',
+      ),
+    finalize: (data: { image_path: string; target_width: number; target_height: number; hardware_tier?: string }) =>
+      http.post<{
+        path: string
+        serve_url: string
+        method: string
+        width: number
+        height: number
+      }>('/api/v1/medpic/finalize', data),
+    upscale: (data: { image_path: string; print_size?: string; aspect?: string }) =>
+      http.post<{
+        path: string
+        serve_url: string
+        method: string
+        width: number
+        height: number
+      }>('/api/v1/medpic/upscale', data),
+    stitch: (data: { segment_paths: string[]; variant_id?: string; output_width?: number }) =>
+      http.post<{
+        stitched_path: string
+        stitched_url: string
+        slices: Array<{ path: string; serve_url: string }>
+        segment_count: number
+      }>('/api/v1/medpic/stitch', data),
+    longSegments: (data: { topic: string; segment_count?: number; variant_id?: string }) =>
+      http.post<{ segment_prompts: string[]; count: number }>(
+        '/api/v1/medpic/long-segments', data,
+      ),
+    compose: (data: {
+      image_path: string
+      scene: string
+      texts: Record<string, string>
+    }) => http.post<{
+      composed_path: string
+      serve_url: string
+    }>('/api/v1/medpic/compose', data),
+    getLayouts: () =>
+      http.get<{ layouts: Array<{ scene_id: string; zones: string[] }> }>('/api/v1/medpic/layouts'),
+    saveHistory: (data: {
+      variant_id?: string
+      scene: string
+      style?: string
+      hardware_tier?: string
+      topic?: string
+      specialty?: string
+      positive_prompt?: string
+      negative_prompt?: string
+      seed?: number
+      seed_mode?: string
+      model_id?: string
+      loras?: unknown[]
+      width?: number
+      height?: number
+      output_width?: number
+      output_height?: number
+      base_image_path: string
+      composed_image_path?: string
+      upscaled_image_path?: string
+      ipadapter_weight?: number
+      character_preset?: string
+      reference_image_path?: string
+    }) => http.post<{ id: number; created_at: string }>('/api/v1/medpic/history', data),
+    getHistory: (params?: { scene?: string; limit?: number; offset?: number }) =>
+      http.get<{
+        items: Array<{
+          id: number
+          variant_id: string | null
+          scene: string
+          style: string
+          topic: string
+          specialty: string | null
+          seed: number | null
+          base_image_path: string
+          composed_image_path: string | null
+          upscaled_image_path: string | null
+          serve_url: string | null
+          created_at: string
+        }>
+        total: number
+      }>('/api/v1/medpic/history', { params: params ?? {} }),
+    deleteHistory: (id: number) => http.delete<{ ok: boolean }>(`/api/v1/medpic/history/${id}`),
+    updateHistory: (id: number, data: { composed_image_path?: string; upscaled_image_path?: string }) =>
+      http.patch<{ ok: boolean }>(`/api/v1/medpic/history/${id}`, data),
+    getWorkflow: (variantId: string) =>
+      http.get<{ workflow: Record<string, unknown>; variant_id: string; format: string }>(
+        `/api/v1/medpic/workflow/${variantId}`,
+      ),
+    comfyuiPrompt: (data: {
+      scene: string
+      topic: string
+      variant?: string
+      specialty?: string
+      target_audience?: string
+      style?: string
+      color_tone?: string
+      subject?: string
+      extra_prompt?: string
+      hardware_tier?: string
+      aspect?: string
+      reference_image?: string
+      ipadapter_weight?: number
+      character_preset?: string
+      seed?: number | null
+      seed_mode?: string
+      lora_overrides?: Array<{ id: string; strength: number }>
+    }) => http.post<{
+      prompt: Record<string, unknown>
+      client_id: string
+      params_used: {
+        positive_prompt: string
+        negative_prompt: string
+        width: number
+        height: number
+        steps: number
+        cfg_scale: number
+        seed: number
+        model_id: string
+        loras: Array<{ id: string; name: string; category: string; filename: string; strength: number }>
+      }
+    }>('/api/v1/medpic/comfyui-prompt', data),
+
+    aiPrompt: (data: {
+      description: string
+      specialty?: string
+      context_hint?: string
+      stream?: boolean
+    }) => http.post<{
+      positive: string
+      negative: string
+      params: { scene?: string; style?: string; aspect?: string; audience?: string; color_tone?: string }
+      explanation?: string
+    }>('/api/v1/medpic/ai-prompt', data, { timeout: MEDPIC_LLM_TIMEOUT_MS }),
+
+    aiPromptRefine: (data: {
+      current_positive: string
+      current_negative: string
+      current_params?: Record<string, string>
+      instruction: string
+      stream?: boolean
+    }) => http.post<{
+      positive: string
+      negative: string
+      params: { scene?: string; style?: string; aspect?: string; audience?: string; color_tone?: string }
+      explanation?: string
+    }>('/api/v1/medpic/ai-prompt/refine', data, { timeout: MEDPIC_LLM_TIMEOUT_MS }),
   },
 }

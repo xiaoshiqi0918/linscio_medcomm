@@ -89,6 +89,7 @@ class GenerateRequest(BaseModel):
     visual_continuity_prompt: str | None = None
     seed_base: int | None = None
     panel_index: int | None = None
+    loras: list[list] | None = None
 
 
 class CreateTaskRequest(BaseModel):
@@ -162,6 +163,7 @@ def _graph_payload_from_task_kwargs(
     seed_base: int | None = None,
     panel_index: int | None = None,
     article_id: int | None = None,
+    loras: list | None = None,
 ) -> dict:
     return {
         "scene_desc": prompt,
@@ -193,6 +195,7 @@ def _graph_payload_from_task_kwargs(
         "seed_base": seed_base,
         "panel_index": panel_index,
         "article_id": article_id,
+        "loras": loras,
     }
 
 
@@ -406,6 +409,7 @@ async def post_generate(req: GenerateRequest):
             seed_base=sb,
             panel_index=req.panel_index,
             article_id=req.article_id,
+            loras=req.loras,
         )
     )
     if state.get("error"):

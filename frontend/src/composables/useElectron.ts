@@ -19,6 +19,7 @@ export interface SoftwareUpdateInfo {
   base_valid: boolean
   has_software_update: boolean
   latest_version?: string | null
+  download_url?: string | null
 }
 
 declare global {
@@ -71,6 +72,23 @@ declare global {
         local_version?: string | null; remote_version?: string | null;
         status: string; knowledge_docs: number; terms: number; examples: number;
       }>>
+
+      // 手动检查更新
+      checkForUpdate?: () => Promise<{ ok: boolean }>
+
+      // 本地导入扩展包
+      importLocalPack?: () => Promise<{ ok: boolean; error?: string }>
+
+      // 应用版本
+      getAppVersion?: () => Promise<string>
+
+      // ComfyUI 管理
+      getComfyUIStatus?: () => Promise<{
+        running: boolean; port: number; pid: number | null;
+        dir: string | null; available: boolean
+      }>
+      getComfyUIUrl?: () => Promise<string>
+      restartComfyUI?: () => Promise<{ ok: boolean }>
     }
   }
 }

@@ -48,6 +48,22 @@
         <div class="about-row"><span class="label">内容更新</span> 季度更新 · 下次更新 {{ settingsStore.license.nextContentUpdate || '-' }}</div>
         <el-button type="primary" text size="small" @click="openContact">联系服务支持</el-button>
       </div>
+      <div v-if="isElectronEnv" class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+        <div class="about-row"><span class="label">软件版本</span> v{{ appVersion }}</div>
+        <div class="about-row" style="gap: 8px; align-items: center;">
+          <span class="label">软件更新</span>
+          <span v-if="licenseStore.hasSoftwareUpdate" style="color: #1e40af;">
+            新版本 v{{ licenseStore.softwareUpdate?.latest_version }} 可用
+          </span>
+          <span v-else style="color: #9ca3af;">当前已是最新版本</span>
+          <el-button size="small" :loading="checkingUpdate" @click="manualCheckUpdate">检查更新</el-button>
+          <el-button
+            v-if="licenseStore.hasSoftwareUpdate && licenseStore.softwareUpdate?.download_url"
+            size="small" type="primary"
+            @click="downloadUpdate"
+          >下载更新</el-button>
+        </div>
+      </div>
     </el-card>
 
     <!-- 内容配置 -->
@@ -114,6 +130,52 @@
         </div>
         <div v-if="pack.status === 'installed'" class="pack-stats">
           知识文档 {{ pack.knowledge_docs }} 篇 · 术语 {{ pack.terms }} 条 · 范例 {{ pack.examples }} 个
+        </div>
+        <div v-if="downloadingPack?.specialty_id === pack.specialty_id" class="pack-progress">
+          <el-progress
+            :percentage="downloadingPack.percent"
+            :status="downloadingPack.status === 'done' ? 'success' : downloadingPack.status === 'error' ? 'exception' : undefined"
+            :stroke-width="6"
+          />
+          <span class="pack-progress-detail">{{ downloadingPack.detail }}</span>
+        </div>
+        <div class="pack-actions">
+          <el-button
+            v-if="pack.status === 'not_installed' || pack.status === 'update_available'"
+            type="primary" size="small"
+            :loading="downloadingPack?.specialty_id === pack.specialty_id && !['done','error'].includes(downloadingPack?.status || '')"
+            @click="installPack(pack)"
+          >
+            {{ pack.status === 'update_available' ? '更新' : '安装' }}
+          </el-button>
+        </div>
+      </div>
+    </el-card>
+
+    <!-- 绘图扩展包管理 -->
+    <el-card v-if="isElectronEnv" class="settings-card">
+      <template #header>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span>绘图扩展包（MedPic）</span>
+          <div style="display:flex;gap:8px;">
+            <el-button size="small" text type="primary" @click="importLocalPack">从本地导入</el-button>
+            <el-button size="small" text type="primary" @click="goPortalSpecialties">前往门户选购</el-button>
+          </div>
+        </div>
+      </template>
+      <div v-if="!drawingPackList.length && !packLoading" class="pack-empty">
+        <p style="color:#9ca3af;">暂无绘图扩展包。基础绘图功能已内置，进阶模型与工作流可在门户选购或从本地导入。</p>
+      </div>
+      <div v-for="pack in drawingPackList" :key="pack.specialty_id" class="pack-item">
+        <div class="pack-header">
+          <span class="pack-name">{{ pack.name || pack.specialty_id }}</span>
+          <el-tag v-if="pack.status === 'installed'" type="success" size="small">已安装 v{{ pack.local_version }}</el-tag>
+          <el-tag v-else-if="pack.status === 'downloading'" type="warning" size="small">安装中</el-tag>
+          <el-tag v-else-if="pack.status === 'update_available'" type="" size="small">有更新 v{{ pack.remote_version }}</el-tag>
+          <el-tag v-else type="info" size="small">未安装</el-tag>
+        </div>
+        <div v-if="pack.description" class="pack-stats" style="color:#6b7280;">
+          {{ pack.description }}
         </div>
         <div v-if="downloadingPack?.specialty_id === pack.specialty_id" class="pack-progress">
           <el-progress
@@ -390,6 +452,10 @@ const portalPasswordInput = ref('')
 const portalLoginLoading = ref(false)
 const portalLoginError = ref('')
 const isElectronEnv = typeof window !== 'undefined' && !!window.electronAPI?.isElectron
+const appVersion = ref('0.0.0')
+if (isElectronEnv && window.electronAPI?.getAppVersion) {
+  window.electronAPI.getAppVersion().then((v: string) => { appVersion.value = v }).catch(() => {})
+}
 
 // 学科包
 interface PackItem {
@@ -401,9 +467,43 @@ interface DownloadProgress {
   specialty_id: string; name?: string; percent: number;
   status: string; detail?: string;
 }
+interface DrawingPackItem extends PackItem {
+  description?: string
+  category?: string
+}
 const packList = ref<PackItem[]>([])
+const drawingPackList = ref<DrawingPackItem[]>([])
 const packLoading = ref(false)
 const downloadingPack = ref<DownloadProgress | null>(null)
+
+const checkingUpdate = ref(false)
+
+async function manualCheckUpdate() {
+  const eApi = window.electronAPI
+  if (!eApi?.checkForUpdate) {
+    ElMessage.info('当前环境不支持检查更新')
+    return
+  }
+  checkingUpdate.value = true
+  try {
+    await eApi.checkForUpdate()
+    await new Promise(r => setTimeout(r, 2000))
+    if (!licenseStore.hasSoftwareUpdate) {
+      ElMessage.success('当前已是最新版本')
+    }
+  } catch {
+    ElMessage.error('检查更新失败')
+  } finally {
+    checkingUpdate.value = false
+  }
+}
+
+async function downloadUpdate() {
+  const url = licenseStore.softwareUpdate?.download_url
+  if (url && window.electronAPI?.openExternal) {
+    await window.electronAPI.openExternal(url)
+  }
+}
 
 function formatExpiry(iso: string) {
   try {
@@ -484,12 +584,28 @@ async function loadPackStatus() {
   if (!eApi?.getPackStatus) return
   packLoading.value = true
   try {
-    const list = await eApi.getPackStatus()
-    packList.value = list || []
-    // 合并门户已购但本地未注册的学科包
+    const list: any[] = (await eApi.getPackStatus()) || []
+
+    const specialtyItems: PackItem[] = []
+    const drawingItems: DrawingPackItem[] = []
+
+    for (const item of list) {
+      const isDrawing = item.category === 'drawing' || (item.specialty_id || '').startsWith('medpic-')
+      if (isDrawing) {
+        drawingItems.push(item)
+      } else {
+        specialtyItems.push(item)
+      }
+    }
+
+    packList.value = specialtyItems
+    drawingPackList.value = drawingItems
+
     for (const sp of licenseStore.specialties) {
-      if (!packList.value.find(p => p.specialty_id === sp.id)) {
-        packList.value.push({
+      const isDrawing = sp.id.startsWith('medpic-')
+      const targetList = isDrawing ? drawingPackList.value : packList.value
+      if (!targetList.find(p => p.specialty_id === sp.id)) {
+        targetList.push({
           specialty_id: sp.id,
           name: sp.name,
           local_version: sp.local_version,
@@ -498,7 +614,7 @@ async function loadPackStatus() {
           knowledge_docs: 0, terms: 0, examples: 0,
         })
       } else {
-        const existing = packList.value.find(p => p.specialty_id === sp.id)!
+        const existing = targetList.find(p => p.specialty_id === sp.id)!
         if (sp.remote_version && existing.local_version && sp.remote_version !== existing.local_version) {
           existing.status = 'update_available'
           existing.remote_version = sp.remote_version
@@ -540,6 +656,25 @@ async function installPack(pack: PackItem) {
 
 function goPortalSpecialties() {
   window.electronAPI?.openExternal?.('https://portal.linscio.com.cn/medcomm/specialties')
+}
+
+async function importLocalPack() {
+  const eApi = window.electronAPI
+  if (!eApi?.importLocalPack) {
+    ElMessage.info('当前环境不支持本地导入')
+    return
+  }
+  try {
+    const res = await eApi.importLocalPack()
+    if (res?.ok) {
+      ElMessage.success('扩展包导入成功')
+      await loadPackStatus()
+    } else if (res?.error !== 'cancelled') {
+      ElMessage.error(res?.error || '导入失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '导入失败')
+  }
 }
 
 const openaiKey = ref('')

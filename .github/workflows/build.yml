@@ -1,14 +1,10 @@
-# LinScio MedComm — Windows x64 构建
+# LinScio MedComm — Windows x64 构建（备用 CI，主要在 Windows 本机打包）
 #
-# 产物：Windows x64 NSIS 安装包（.exe）
-# 打包完成后通过 GitHub Actions Artifacts 下载，手动上传至 COS。
-name: Build
+# 本地打包首选：scripts\build-win.bat（含 ComfyUI + 模型）
+# CI 备用：不含 ComfyUI（5GB 太大），仅生成基础安装包
+name: Build Windows (CI fallback)
 
 on:
-  push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
 
 jobs:
@@ -32,7 +28,7 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # ① 下载 Windows wheels（跳过 uvloop 等 Unix-only 依赖）
+      # ① 下载 Windows wheels
       - name: Download Python wheels (win_amd64)
         shell: bash
         run: |
@@ -41,11 +37,9 @@ jobs:
           WHEEL_DIR="build/wheels/win32-x64"
           mkdir -p "$WHEEL_DIR"
 
-          # uvicorn[standard] 的 uvloop 仅限 Unix；Windows 用基础版
           TMP_REQ="build/.tmp-req-win.txt"
           sed 's/uvicorn\[standard\]/uvicorn/g' "$REQ" > "$TMP_REQ"
 
-          # sdist-only 包单独处理
           SDIST_RE='^\s*(jieba|bibtexparser)'
           grep -vE "$SDIST_RE" "$TMP_REQ" > build/.tmp-req-binary.txt
 
@@ -64,7 +58,7 @@ jobs:
           echo "==> Wheels count: $(ls "$WHEEL_DIR/"*.whl 2>/dev/null | wc -l)"
           rm -f build/.tmp-req-win.txt build/.tmp-req-binary.txt
 
-      # ② 下载 Windows Python standalone（嵌入到安装包）
+      # ② 下载 Windows Python standalone
       - name: Download Python standalone (3.11.11)
         shell: bash
         run: |
@@ -76,11 +70,10 @@ jobs:
           fi
           echo "Python: $(build/python/python.exe --version)"
 
-      # ③ 预装 Python 依赖到嵌入式 Python（打包前，运行时不再 pip install）
+      # ③ 预装 Python 依赖到嵌入式 Python
       - name: Install deps into embedded Python
         shell: bash
         run: |
-          # uvicorn[standard] → uvicorn for Windows
           TMP_REQ="build/.tmp-req-win.txt"
           sed 's/uvicorn\[standard\]/uvicorn/g' backend/requirements.txt > "$TMP_REQ"
 
@@ -103,18 +96,24 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # ⑥ Electron 打包
+      # ⑥ 读取版本号（供后续步骤引用）
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "ver=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+
+      # ⑦ Electron 打包
       - name: Build Electron (win-x64)
         run: npx electron-builder --win --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ⑦ 上传构建产物到 GitHub Artifacts（保留 7 天）
+      # ⑧ 上传构建产物到 GitHub Artifacts
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: LinScio-MedComm-win-x64
+          name: LinScio-MedComm-${{ steps.version.outputs.ver }}-win-x64
           path: |
-            release/*.exe
-            release/*.exe.blockmap
-          retention-days: 7
+            releases/v${{ steps.version.outputs.ver }}/*.exe
+            releases/v${{ steps.version.outputs.ver }}/*.exe.blockmap
+          retention-days: 14
