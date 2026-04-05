@@ -254,7 +254,15 @@ if exist "%OUT_DIR%\win-unpacked" (
     echo Creating distributable ZIP...
     pushd "%OUT_DIR%"
     if exist "%ZIP_NAME%" del /q "%ZIP_NAME%"
-    powershell -NoProfile -Command "Compress-Archive -Path 'win-unpacked' -DestinationPath '%ZIP_NAME%' -Force"
+    set "SEVENZIP="
+    if exist "%ROOT%\node_modules\7zip-bin\win\x64\7za.exe" (
+        set "SEVENZIP=%ROOT%\node_modules\7zip-bin\win\x64\7za.exe"
+    )
+    if defined SEVENZIP (
+        "!SEVENZIP!" a "%ZIP_NAME%" win-unpacked
+    ) else (
+        powershell -NoProfile -Command "Compress-Archive -Path 'win-unpacked' -DestinationPath '%ZIP_NAME%' -Force"
+    )
     popd
     if exist "%OUT_DIR%\%ZIP_NAME%" (
         echo   Created: %OUT_DIR%\%ZIP_NAME%
