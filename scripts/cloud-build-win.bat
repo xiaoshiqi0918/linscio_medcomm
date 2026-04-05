@@ -98,6 +98,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM -- Clear broken proxy settings --
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+set "http_proxy="
+set "https_proxy="
+set "ALL_PROXY="
+set "all_proxy="
+
 echo.
 
 if "%SKIP_SETUP%"=="1" goto skip_env_setup

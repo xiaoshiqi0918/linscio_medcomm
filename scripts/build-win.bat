@@ -43,6 +43,14 @@ pause
 exit /b 1
 :diskcheck_ok
 
+REM == Clear proxy if set but unreachable =========================
+set "HTTP_PROXY="
+set "HTTPS_PROXY="
+set "http_proxy="
+set "https_proxy="
+set "ALL_PROXY="
+set "all_proxy="
+
 REM == 1/7  Python wheels ========================================
 echo [1/7] Downloading Python wheels...
 set "WHEEL_DIR=build\wheels\win32-x64"
