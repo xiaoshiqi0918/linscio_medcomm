@@ -56,10 +56,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-python -m pip download -r build\.tmp-req-win.txt --platform win_amd64 --python-version 3.11 --only-binary=:all: -d "%WHEEL_DIR%/" --quiet 2>nul
+python -m pip download -r build\.tmp-req-win.txt -d "%WHEEL_DIR%/" --quiet
 if errorlevel 1 (
-    echo [WARN] Binary-only download incomplete, retrying relaxed...
-    python -m pip download -r build\.tmp-req-win.txt -d "%WHEEL_DIR%/" --quiet 2>nul
+    echo [WARN] Some wheels failed, retrying with platform flag...
+    python -m pip download -r build\.tmp-req-win.txt --platform win_amd64 --python-version 3.11 --only-binary=:all: -d "%WHEEL_DIR%/" --quiet 2>nul
 )
 
 python -m pip wheel jieba bibtexparser -w "%WHEEL_DIR%/" --quiet 2>nul
@@ -181,7 +181,17 @@ build\python\python.exe --version
 REM == 3/7  Install deps into embedded Python ====================
 echo [3/7] Installing deps into embedded Python...
 python -c "from pathlib import Path; Path('build').mkdir(exist_ok=True); t=Path('backend/requirements.txt').read_text(encoding='utf-8'); Path('build/.tmp-req-win.txt').write_text(t.replace('uvicorn[standard]','uvicorn'), encoding='utf-8')"
-build\python\python.exe -m pip install --no-index --find-links="%WHEEL_DIR%/" --no-warn-script-location -r build\.tmp-req-win.txt --quiet
+build\python\python.exe -m pip install --no-index --find-links="%WHEEL_DIR%/" --no-warn-script-location -r build\.tmp-req-win.txt --quiet 2>nul
+if errorlevel 1 (
+    echo   [WARN] Local wheels incomplete, installing from PyPI mirror...
+    build\python\python.exe -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --find-links="%WHEEL_DIR%/" --no-warn-script-location -r build\.tmp-req-win.txt --quiet
+    if errorlevel 1 (
+        echo [ERROR] Failed to install Python dependencies!
+        del /q build\.tmp-req-win.txt 2>nul
+        pause
+        exit /b 1
+    )
+)
 del /q build\.tmp-req-win.txt 2>nul
 echo   Done.
 
