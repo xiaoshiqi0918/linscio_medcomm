@@ -71,9 +71,9 @@ const error = ref('')
 const result = ref(null)
 
 const desktopPackages = ref([
-  { icon: '🍎', os: 'macOS (Apple Silicon)', desc: 'M1/M2/M3 ARM64', url: '' },
-  { icon: '🖥', os: 'macOS (Intel)', desc: 'x64', url: '' },
-  { icon: '🪟', os: 'Windows', desc: 'Windows 10/11 x64', url: '' },
+  { icon: '🍎', os: 'macOS (Apple Silicon)', desc: 'M1/M2/M3 ARM64', url: '/medcomm/download' },
+  { icon: '🖥', os: 'macOS (Intel)', desc: 'x64', url: '/medcomm/download' },
+  { icon: '🪟', os: 'Windows', desc: 'Windows 10/11 x64', url: '/medcomm/download' },
   { icon: '🐧', os: 'Linux', desc: 'x64 / arm64', url: '' },
 ])
 
