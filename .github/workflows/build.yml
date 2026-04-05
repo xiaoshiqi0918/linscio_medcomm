@@ -1,11 +1,17 @@
 # LinScio MedComm — Windows x64 构建（备用 CI，主要在 Windows 本机打包）
 #
-# 本地打包首选：scripts\build-win.bat（含 ComfyUI + 模型）
-# CI 备用：不含 ComfyUI（5GB 太大），仅生成基础安装包
+# 本地打包首选：scripts\build-win.bat（含 ComfyUI + 模型，与 Mac npm run electron:build 对齐）
+# CI 默认：不含 ComfyUI（~5GB）；workflow 勾选 include_comfyui 可打进安装包（耗时长）
 name: Build Windows (CI fallback)
 
 on:
   workflow_dispatch:
+    inputs:
+      include_comfyui:
+        description: 'Embed ComfyUI + SD1.5 into the installer (~5GB download, long run)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-win:
@@ -96,6 +102,11 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # ⑤b 可选：ComfyUI + 模型（与 Mac 完整包一致；默认跳过以节省时间与流量）
+      - name: Download ComfyUI + SD1.5 (optional)
+        if: ${{ inputs.include_comfyui }}
+        run: node scripts/download-comfyui.js
+
       # ⑥ 读取版本号（供后续步骤引用）
       - name: Get version
         id: version
@@ -108,12 +119,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ⑧ 上传构建产物到 GitHub Artifacts
+      # ⑧ 上传构建产物（win target=dir：整包 >2GB 时 NSIS makensis mmap 会失败）
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: LinScio-MedComm-${{ steps.version.outputs.ver }}-win-x64
-          path: |
-            releases/v${{ steps.version.outputs.ver }}/*.exe
-            releases/v${{ steps.version.outputs.ver }}/*.exe.blockmap
+          path: releases/v${{ steps.version.outputs.ver }}/win-unpacked
           retention-days: 14

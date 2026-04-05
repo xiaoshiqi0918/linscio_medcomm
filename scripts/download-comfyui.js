@@ -9,8 +9,10 @@
  *
  * 环境变量:
  *   SKIP_PREBUILD_COMFYUI=1   跳过下载
- *   COMFYUI_RELEASE_URL       覆盖 ComfyUI 下载地址
+ *   COMFYUI_RELEASE_URL       覆盖 ComfyUI 下载地址（仅此 URL）
+ *   COMFYUI_SKIP_MIRROR=1     不用国内镜像，只从 GitHub 官方下
  *   SD15_MODEL_URL            覆盖 SD1.5 模型下载地址
+ *   SD15_SKIP_MIRROR=1        不用 hf-mirror，只从 Hugging Face 官方下
  */
 const fs = require('fs')
 const path = require('path')
@@ -23,15 +25,63 @@ const COMFYUI_OUT = path.join(BUILD_DIR, 'comfyui')
 const WORKFLOWS_SRC = path.join(__dirname, '..', 'workflows', 'comfyui', 'scenes')
 
 const COMFYUI_VERSION = '0.3.10'
-const COMFYUI_GITHUB_URL = process.env.COMFYUI_RELEASE_URL
-  || `https://github.com/comfyanonymous/ComfyUI/archive/refs/tags/v${COMFYUI_VERSION}.tar.gz`
 
-const SD15_MODEL_URL = process.env.SD15_MODEL_URL
-  || 'https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors'
+/** v1-5-pruned-emaonly.safetensors is ~4GB; reject tiny/corrupt/HTML placeholder files */
+const SD15_MIN_BYTES = 200 * 1024 * 1024
 
-function download(url, dest) {
+const SD15_OFFICIAL =
+  'https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors'
+
+function comfyuiDownloadUrls() {
+  if (process.env.COMFYUI_RELEASE_URL) {
+    return [process.env.COMFYUI_RELEASE_URL]
+  }
+  const v = COMFYUI_VERSION
+  const official = `https://github.com/comfyanonymous/ComfyUI/archive/refs/tags/v${v}.tar.gz`
+  if (process.env.COMFYUI_SKIP_MIRROR === '1') {
+    return [official]
+  }
+  const rel = `github.com/comfyanonymous/ComfyUI/archive/refs/tags/v${v}.tar.gz`
+  return [
+    `https://mirror.ghproxy.com/https://${rel}`,
+    `https://ghfast.top/https://${rel}`,
+    official,
+  ]
+}
+
+function sd15DownloadUrls() {
+  if (process.env.SD15_MODEL_URL) {
+    return [process.env.SD15_MODEL_URL]
+  }
+  if (process.env.SD15_SKIP_MIRROR === '1') {
+    return [SD15_OFFICIAL]
+  }
+  return [
+    `https://hf-mirror.com/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors`,
+    SD15_OFFICIAL,
+  ]
+}
+
+function isTransientNetError(err) {
+  const c = err && err.code
+  return (
+    c === 'ECONNRESET'
+    || c === 'ETIMEDOUT'
+    || c === 'ECONNREFUSED'
+    || c === 'EPIPE'
+    || c === 'ENETUNREACH'
+    || c === 'EAI_AGAIN'
+  )
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+function download(url, dest, options = {}) {
+  const { skipExistCheck = false } = options
   return new Promise((resolve, reject) => {
-    if (fs.existsSync(dest)) {
+    if (!skipExistCheck && fs.existsSync(dest)) {
       console.log('[download-comfyui] Cached:', path.basename(dest))
       resolve(dest)
       return
@@ -103,6 +153,61 @@ function download(url, dest) {
   })
 }
 
+/**
+ * Try each URL in order; per URL retry transient errors a few times.
+ */
+async function downloadWithMirrors(urls, dest) {
+  if (fs.existsSync(dest)) {
+    console.log('[download-comfyui] Cached:', path.basename(dest))
+    return dest
+  }
+  let lastErr
+  for (let u = 0; u < urls.length; u++) {
+    const url = urls[u]
+    const perSourceAttempts = 3
+    for (let attempt = 1; attempt <= perSourceAttempts; attempt++) {
+      if (fs.existsSync(dest)) {
+        try {
+          fs.unlinkSync(dest)
+        } catch {
+          /* ok */
+        }
+      }
+      try {
+        await download(url, dest, { skipExistCheck: true })
+        return dest
+      } catch (e) {
+        lastErr = e
+        if (fs.existsSync(dest)) {
+          try {
+            fs.unlinkSync(dest)
+          } catch {
+            /* ok */
+          }
+        }
+        const transient = isTransientNetError(e)
+        const msg = e.code || e.message
+        if (transient && attempt < perSourceAttempts) {
+          const ms = 2000 * attempt
+          console.warn(
+            `[download-comfyui] ${msg} — retry ${attempt}/${perSourceAttempts} in ${ms}ms`,
+          )
+          await sleep(ms)
+        } else {
+          console.warn(
+            `[download-comfyui] Source ${u + 1}/${urls.length} failed: ${msg}`,
+          )
+          break
+        }
+      }
+    }
+    if (u < urls.length - 1) {
+      console.log('[download-comfyui] Trying next mirror...')
+    }
+  }
+  throw lastErr || new Error('All download sources failed')
+}
+
 function extract(archive, dest) {
   fs.mkdirSync(dest, { recursive: true })
   if (archive.endsWith('.tar.gz') || archive.endsWith('.tgz')) {
@@ -114,15 +219,31 @@ function extract(archive, dest) {
   }
 }
 
+function sd15ModelPath() {
+  return path.join(COMFYUI_OUT, 'models', 'checkpoints', 'v1-5-pruned-emaonly.safetensors')
+}
+
+function sd15ModelOk() {
+  const p = sd15ModelPath()
+  if (!fs.existsSync(p)) return false
+  try {
+    return fs.statSync(p).size >= SD15_MIN_BYTES
+  } catch {
+    return false
+  }
+}
+
 function copySceneWorkflows() {
   const userWorkflowDir = path.join(COMFYUI_OUT, 'user', 'default', 'workflows')
   fs.mkdirSync(userWorkflowDir, { recursive: true })
-  if (fs.existsSync(WORKFLOWS_SRC)) {
-    for (const f of fs.readdirSync(WORKFLOWS_SRC)) {
-      if (f.endsWith('.json')) {
-        fs.copyFileSync(path.join(WORKFLOWS_SRC, f), path.join(userWorkflowDir, f))
-        console.log('[download-comfyui] Copied workflow:', f)
-      }
+  if (!fs.existsSync(WORKFLOWS_SRC)) {
+    console.warn('[download-comfyui] No workflow source dir:', WORKFLOWS_SRC)
+    return
+  }
+  for (const f of fs.readdirSync(WORKFLOWS_SRC)) {
+    if (f.endsWith('.json')) {
+      fs.copyFileSync(path.join(WORKFLOWS_SRC, f), path.join(userWorkflowDir, f))
+      console.log('[download-comfyui] Copied workflow:', f)
     }
   }
 }
@@ -151,9 +272,32 @@ async function main() {
 
   const mainPy = path.join(COMFYUI_OUT, 'main.py')
   if (fs.existsSync(mainPy) && !force) {
-    console.log('[download-comfyui] ComfyUI already exists, skip (use --force to re-download)')
+    console.log('[download-comfyui] ComfyUI core already present (use --force to re-fetch archive)')
+    fs.mkdirSync(path.dirname(sd15ModelPath()), { recursive: true })
+    if (!sd15ModelOk()) {
+      if (fs.existsSync(sd15ModelPath())) {
+        console.warn('[download-comfyui] SD1.5 checkpoint missing or too small — re-downloading')
+        try {
+          fs.unlinkSync(sd15ModelPath())
+        } catch {
+          /* ok */
+        }
+      }
+      console.log('[download-comfyui] === Step 2: SD1.5 Model (incremental) ===')
+      await downloadWithMirrors(sd15DownloadUrls(), sd15ModelPath())
+      if (!sd15ModelOk()) {
+        throw new Error('SD1.5 checkpoint still invalid after download (size check failed)')
+      }
+      console.log('[download-comfyui] SD1.5 model ready')
+    } else {
+      const sz = fs.statSync(sd15ModelPath()).size
+      console.log('[download-comfyui] SD1.5 checkpoint OK (' + (sz / 1e9).toFixed(2) + ' GB)')
+    }
+    console.log('[download-comfyui] === Scene Workflows (refresh) ===')
     copySceneWorkflows()
+    console.log('[download-comfyui] === Bridge Extension (refresh) ===')
     installBridgeExtension()
+    console.log('[download-comfyui] Done!')
     return
   }
 
@@ -162,7 +306,7 @@ async function main() {
   // 1. Download ComfyUI
   console.log('[download-comfyui] === Step 1: ComfyUI ===')
   const comfyArchive = path.join(BUILD_DIR, `comfyui-v${COMFYUI_VERSION}.tar.gz`)
-  await download(COMFYUI_GITHUB_URL, comfyArchive)
+  await downloadWithMirrors(comfyuiDownloadUrls(), comfyArchive)
 
   if (fs.existsSync(COMFYUI_OUT)) {
     console.log('[download-comfyui] Removing existing ComfyUI dir')
@@ -198,8 +342,11 @@ async function main() {
 
   // 3. Download SD1.5 model
   console.log('[download-comfyui] === Step 2: SD1.5 Model ===')
-  const modelDest = path.join(COMFYUI_OUT, 'models', 'checkpoints', 'v1-5-pruned-emaonly.safetensors')
-  await download(SD15_MODEL_URL, modelDest)
+  const modelDest = sd15ModelPath()
+  await downloadWithMirrors(sd15DownloadUrls(), modelDest)
+  if (!sd15ModelOk()) {
+    throw new Error('SD1.5 checkpoint invalid after download (size check failed)')
+  }
   console.log('[download-comfyui] SD1.5 model ready')
 
   // 4. Copy scene workflows
