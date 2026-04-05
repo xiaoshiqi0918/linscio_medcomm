@@ -203,8 +203,38 @@ if errorlevel 1 (
 del /q build\.tmp-req-win.txt 2>nul
 echo   Done.
 
-REM == 4/7  Alembic check ========================================
-echo [4/7] Alembic migration check...
+REM == 4/7  ComfyUI Python deps ====================================
+if "%SKIP_COMFYUI%"=="1" (
+    echo [4/7] Skipping ComfyUI deps per --no-comfyui flag
+) else (
+    echo [4/7] Installing ComfyUI deps into embedded Python...
+    echo   Installing PyTorch CPU for Windows...
+    build\python\python.exe -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --find-links https://download.pytorch.org/whl/cpu torch torchvision torchaudio --no-warn-script-location --quiet
+    if errorlevel 1 (
+        echo   [WARN] Tuna mirror failed, trying PyTorch official index...
+        build\python\python.exe -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio --no-warn-script-location --quiet
+    )
+    if errorlevel 1 (
+        echo [ERROR] Failed to install PyTorch!
+        pause
+        exit /b 1
+    )
+    echo   Installing remaining ComfyUI requirements...
+    if exist "build\comfyui\requirements.txt" (
+        build\python\python.exe -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-warn-script-location -r build\comfyui\requirements.txt --quiet
+    ) else (
+        build\python\python.exe -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-warn-script-location einops transformers tokenizers sentencepiece safetensors aiohttp pyyaml scipy tqdm psutil kornia spandrel soundfile torchsde --quiet
+    )
+    if errorlevel 1 (
+        echo [ERROR] Failed to install ComfyUI dependencies!
+        pause
+        exit /b 1
+    )
+    echo   Done.
+)
+
+REM == 4b/7  Alembic check ========================================
+echo   Alembic migration check...
 pushd "%ROOT%\backend"
 python -m alembic heads 2>nul
 popd

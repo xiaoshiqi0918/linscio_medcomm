@@ -54,13 +54,26 @@ build_one() {
     -r backend/requirements.txt --quiet 2>&1 | tail -5
   echo "  Installed $($PY -m pip list --format=columns 2>/dev/null | wc -l | tr -d ' ') packages"
 
-  echo "[3/5] Building frontend (vite)..."
+  echo "[3/6] Installing ComfyUI deps into embedded Python..."
+  if [ -f "build/comfyui/requirements.txt" ]; then
+    $PY -m pip install --no-warn-script-location \
+      -r build/comfyui/requirements.txt --quiet 2>&1 | tail -5
+  else
+    echo "  [WARN] build/comfyui/requirements.txt not found, installing core deps..."
+    $PY -m pip install --no-warn-script-location \
+      torch torchvision torchaudio einops transformers tokenizers \
+      sentencepiece safetensors aiohttp pyyaml scipy tqdm psutil \
+      kornia spandrel soundfile torchsde --quiet 2>&1 | tail -5
+  fi
+  echo "  ComfyUI deps installed"
+
+  echo "[4/6] Building frontend (vite)..."
   npx vite build --outDir dist 2>&1 | tail -3
 
-  echo "[4/5] Packaging with electron-builder --mac --${ARCH}..."
+  echo "[5/6] Packaging with electron-builder --mac --${ARCH}..."
   npx electron-builder --mac "--${ARCH}" 2>&1 | grep -E '(packaging|building|target|skipped|error|⨯)' || true
 
-  echo "[5/5] Done!"
+  echo "[6/6] Done!"
   echo "  Output:"
   ls -lh "${OUT_DIR}/"*"${ARCH}"*.dmg 2>/dev/null || echo "  (no DMG found)"
   echo ""
