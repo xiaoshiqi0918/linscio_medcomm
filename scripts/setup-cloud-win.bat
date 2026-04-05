@@ -33,7 +33,7 @@ REM -- Check Python --
 where python >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python not found. Install from:
-    echo   https://www.python.org/ftp/python/3.11.11/python-3.11.11-amd64.exe
+    echo   https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe
     echo   IMPORTANT: check "Add to PATH" during install
     pause
     exit /b 1

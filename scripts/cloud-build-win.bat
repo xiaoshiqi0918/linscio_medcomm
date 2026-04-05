@@ -16,7 +16,7 @@ REM    cloud-build-win.bat --skip-setup (skip env setup, just build)
 REM
 REM  Prereqs:
 REM    - Node.js 20 LTS: https://nodejs.org/dist/v20.18.1/node-v20.18.1-x64.msi
-REM    - Python 3.11:    https://www.python.org/ftp/python/3.11.11/python-3.11.11-amd64.exe
+REM    - Python 3.11:    https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe
 REM    - Git for Windows: https://git-scm.com/download/win
 REM    - 40 GB free disk (with ComfyUI) or 10 GB (without)
 REM ================================================================
@@ -53,7 +53,7 @@ if errorlevel 1 (
 
 where python >nul 2>&1
 if errorlevel 1 (
-    echo [MISSING] Python - install from: https://www.python.org/ftp/python/3.11.11/python-3.11.11-amd64.exe
+    echo [MISSING] Python - install from: https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe
     set "MISSING=1"
 ) else (
     for /f "delims=" %%v in ('python --version') do echo [OK] %%v
