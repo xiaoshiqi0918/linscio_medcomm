@@ -39,6 +39,26 @@ router = APIRouter(prefix="/medcomm", tags=["medcomm-update-download"])
 
 DOWNLOAD_ANOMALY_THRESHOLD = 5
 
+PLATFORM_EXT = {
+    "win-x64": "zip",
+    "mac-arm64": "dmg",
+    "mac-x64": "dmg",
+}
+
+
+def _platform_file_key(base_file_key: str, version: str, platform: str | None) -> str:
+    """Derive a platform-specific COS key from the base file_key.
+
+    Convention: same directory, filename = LinScio-MedComm-{ver}-{platform}.{ext}
+    Falls back to base_file_key if platform is unknown.
+    """
+    if not platform or platform not in PLATFORM_EXT:
+        return base_file_key
+    ext = PLATFORM_EXT[platform]
+    directory = base_file_key.rsplit("/", 1)[0] if "/" in base_file_key else ""
+    fname = f"LinScio-MedComm-{version}-{platform}.{ext}"
+    return f"{directory}/{fname}" if directory else fname
+
 
 async def _check_download_anomaly(
     db: AsyncSession, user_id: int, resource_id: str
@@ -153,7 +173,8 @@ async def medcomm_update_check(
         size_mb = None
         if is_cos_configured():
             try:
-                url = generate_presign_url(release.file_key, expires_in=3600)
+                fk = _platform_file_key(release.file_key, release.version, body.platform)
+                url = generate_presign_url(fk, expires_in=3600)
                 if release.file_size:
                     size_mb = round(release.file_size / (1024 * 1024), 2)
             except Exception:
@@ -212,7 +233,8 @@ async def medcomm_download_software(
         return MedcommSoftwareDownloadResponse(success=False, error="cos_not_configured")
 
     try:
-        url = generate_presign_url(release.file_key, expires_in=3600)
+        fk = _platform_file_key(release.file_key, release.version, body.platform)
+        url = generate_presign_url(fk, expires_in=3600)
     except Exception as e:
         return MedcommSoftwareDownloadResponse(success=False, error=str(e))
 
@@ -234,8 +256,8 @@ async def medcomm_download_software(
     await db.commit()
     await db.refresh(log)
 
-    ext = release.file_key.rsplit(".", 1)[-1] if "." in release.file_key else "bin"
-    fname = f"LinScio-MedComm-{release.version}.{ext}"
+    ext = PLATFORM_EXT.get(body.platform, fk.rsplit(".", 1)[-1] if "." in fk else "bin")
+    fname = f"LinScio-MedComm-{release.version}-{body.platform or 'unknown'}.{ext}"
     size_mb = round(release.file_size / (1024 * 1024), 2) if release.file_size else None
 
     return MedcommSoftwareDownloadResponse(

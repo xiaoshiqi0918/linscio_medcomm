@@ -247,16 +247,31 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM == Create ZIP for distribution ==================================
+set "ZIP_NAME=LinScio-MedComm-%VER%-win-x64.zip"
+if exist "%OUT_DIR%\win-unpacked" (
+    echo.
+    echo Creating distributable ZIP...
+    pushd "%OUT_DIR%"
+    if exist "%ZIP_NAME%" del /q "%ZIP_NAME%"
+    powershell -NoProfile -Command "Compress-Archive -Path 'win-unpacked' -DestinationPath '%ZIP_NAME%' -Force"
+    popd
+    if exist "%OUT_DIR%\%ZIP_NAME%" (
+        echo   Created: %OUT_DIR%\%ZIP_NAME%
+    ) else (
+        echo   [WARN] ZIP creation failed, you can manually zip win-unpacked
+    )
+)
+
 echo.
 echo ==============================================
 echo   Build complete v%VER%
-echo   Zip this folder to distribute:
-echo     %ROOT%\%OUT_DIR%\win-unpacked\
-if exist "%OUT_DIR%\win-unpacked" (
-    dir /b "%OUT_DIR%\win-unpacked\*.exe" 2>nul
-) else (
-    echo   [WARN] win-unpacked not found
+echo.
+if exist "%OUT_DIR%\%ZIP_NAME%" (
+    echo   Distributable: %OUT_DIR%\%ZIP_NAME%
+    echo   Upload this ZIP to COS for distribution.
 )
+echo   Unpacked app: %OUT_DIR%\win-unpacked\
 echo ==============================================
 echo.
 pause
