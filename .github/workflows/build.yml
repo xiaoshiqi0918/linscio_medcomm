@@ -109,7 +109,9 @@ jobs:
       - name: Get version
         id: version
         shell: bash
-        run: echo "ver=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
 
       # ⑦ Electron 打包（瘦客户端，无 ComfyUI）
       - name: Build Electron (win-x64, no ComfyUI)

@@ -22,6 +22,7 @@ const codes = {
   ARCH_MISMATCH:        { code: 'MC-1006', message: '不支持的系统架构' },
   BACKEND_TIMEOUT:      { code: 'MC-1007', message: '后端服务启动超时' },
   MIGRATION_FAILED:     { code: 'MC-1008', message: '数据库迁移失败' },
+  QUARANTINE_BLOCKED:   { code: 'MC-1009', message: 'macOS 安全隔离未解除' },
 
   // --- 授权 / 许可 ---
   AUTH_NOT_ACTIVATED:   { code: 'MC-2001', message: '未激活，请先完成授权' },

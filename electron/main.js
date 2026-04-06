@@ -650,6 +650,25 @@ app.whenReady().then(async () => {
     console.warn('[MedComm] Mac Intel (x64) 版本处于有限支持阶段')
   }
 
+  // ④c macOS 隔离检测（仅打包模式）
+  if (process.platform === 'darwin' && app.isPackaged) {
+    updateSplashStatus('检查系统安全设置...')
+    const quarantineFix = require('./quarantine-fix')
+    const qResult = await quarantineFix.checkAndFix(app)
+    if (qResult.needed && !qResult.fixed) {
+      const errorCodes = require('./error-codes')
+      const cmd = quarantineFix.getManualCommand(app)
+      closeSplash()
+      dialog.showErrorBox(
+        '需要手动解除安全限制',
+        errorCodes.formatError('QUARANTINE_BLOCKED',
+          `请打开"终端"应用，粘贴以下命令并回车：\n\n${cmd}\n\n然后重新打开应用。`)
+      )
+      app.quit()
+      return
+    }
+  }
+
   // ⑤ 依赖检查（打包模式验证嵌入 Python 是否包含所需模块）
   updateSplashStatus('检查依赖...')
   const t5 = Date.now()
