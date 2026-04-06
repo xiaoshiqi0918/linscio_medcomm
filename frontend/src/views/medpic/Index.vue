@@ -31,29 +31,27 @@
       </div>
     </div>
 
-    <!-- ComfyUI 基础包未安装提示 -->
-    <div v-else-if="hardwareTier && !comfyBundleReady && !comfyStatus.available" class="bundle-prompt">
-      <div class="bundle-prompt-icon">&#x1F4E6;</div>
-      <h3>MedPic 绘图组件尚未安装</h3>
-      <p class="bundle-prompt-desc">
-        MedPic 需要下载 ComfyUI 基础组件包才能使用本地绘图功能。<br/>
-        组件包较大，下载过程可能需要几分钟。
-      </p>
-      <div v-if="bundleInstalling" class="bundle-progress">
-        <el-progress :percentage="bundleProgress.percent || 0" :status="bundleProgress.status === 'error' ? 'exception' : undefined" />
-        <span class="bundle-progress-text">
-          {{ bundleProgressText }}
-        </span>
-      </div>
-      <div v-else class="bundle-prompt-actions">
-        <el-button type="primary" @click="startBundleInstall">下载基础组件包</el-button>
-        <el-button text @click="dismissBundlePrompt">稍后再说</el-button>
-      </div>
-      <p v-if="bundleError" class="bundle-error">{{ bundleError }}</p>
-    </div>
-
     <!-- 场景选择 -->
     <div v-else-if="!selectedScene && !directComfyMode" class="scene-select-page">
+      <!-- ComfyUI 基础包未安装提示（非阻断式横幅） -->
+      <div v-if="hardwareTier && !comfyBundleReady && !comfyStatus.available && !bundleDismissed" class="bundle-banner">
+        <div class="bundle-banner-body">
+          <span class="bundle-banner-icon">&#x1F4E6;</span>
+          <div class="bundle-banner-text">
+            <strong>本地绘图组件尚未安装</strong>
+            <span>下载 ComfyUI 基础组件包以启用本地绘图（可先使用内置生成模式）</span>
+          </div>
+          <div v-if="bundleInstalling" class="bundle-banner-progress">
+            <el-progress :percentage="bundleProgress.percent || 0" :show-text="false" :stroke-width="6" style="width: 120px;" />
+            <span class="bundle-progress-text">{{ bundleProgressText }}</span>
+          </div>
+          <div v-else class="bundle-banner-actions">
+            <el-button type="primary" size="small" @click="startBundleInstall">下载组件包</el-button>
+            <el-button text size="small" @click="dismissBundlePrompt">忽略</el-button>
+          </div>
+        </div>
+        <p v-if="bundleError" class="bundle-error" style="margin: 0.5rem 0 0; font-size: 0.8rem;">{{ bundleError }}</p>
+      </div>
       <!-- 当前档位与切换 -->
       <div class="tier-bar">
         <span class="tier-bar-label">当前配置：{{ tierLabel || '未选择' }}</span>
@@ -814,7 +812,6 @@ async function startBundleInstall() {
 
 function dismissBundlePrompt() {
   bundleDismissed.value = true
-  comfyBundleReady.value = true
   try {
     localStorage.setItem('medpic_bundle_dismiss_date', new Date().toDateString())
   } catch { /* noop */ }
@@ -841,7 +838,6 @@ onMounted(async () => {
     const dismissDate = localStorage.getItem('medpic_bundle_dismiss_date')
     if (dismissDate === new Date().toDateString()) {
       bundleDismissed.value = true
-      if (!comfyBundleReady.value) comfyBundleReady.value = true
     }
   } catch { /* noop */ }
 
@@ -2118,34 +2114,52 @@ function downloadImage(url: string, idx: number) {
   color: var(--el-text-color-secondary);
 }
 
-.bundle-prompt {
-  text-align: center;
-  padding: 3rem 1rem;
-}
-.bundle-prompt-icon {
-  font-size: 3rem;
+.bundle-banner {
   margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
 }
-.bundle-prompt-desc {
-  color: #6b7280;
-  font-size: 0.9rem;
-  line-height: 1.7;
-  margin: 0.75rem 0 1.5rem;
-}
-.bundle-prompt-actions {
+.bundle-banner-body {
   display: flex;
+  align-items: center;
   gap: 0.75rem;
-  justify-content: center;
+  flex-wrap: wrap;
 }
-.bundle-progress {
-  max-width: 400px;
-  margin: 0 auto;
+.bundle-banner-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+.bundle-banner-text {
+  flex: 1;
+  min-width: 200px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.bundle-banner-text strong {
+  display: block;
+  margin-bottom: 0.15rem;
+  color: #92400e;
+}
+.bundle-banner-text span {
+  color: #78716c;
+}
+.bundle-banner-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.bundle-banner-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
 }
 .bundle-progress-text {
-  display: block;
   font-size: 0.8rem;
   color: #6b7280;
-  margin-top: 0.5rem;
+  white-space: nowrap;
 }
 .bundle-error {
   color: #dc2626;
