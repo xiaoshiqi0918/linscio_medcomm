@@ -128,12 +128,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SKIP_COMFYUI_PACK: "1"
 
-      # ⑧ 上传构建产物（NSIS .exe 安装包）
+      # ⑧ 上传构建产物（.exe + electron-updater 元数据 latest.yml、.blockmap 等）
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: LinScio-MedComm-${{ steps.version.outputs.ver }}-win-x64
-          path: releases/v${{ steps.version.outputs.ver }}/LinScio-MedComm-*.exe
+          path: releases/v${{ steps.version.outputs.ver }}/*
+          if-no-files-found: error
           retention-days: 14
 
       # ⑨ 上传到 COS（可选，需配置 secrets）
