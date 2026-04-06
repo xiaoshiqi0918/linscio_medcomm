@@ -82,13 +82,6 @@
         "filter": [
           "**/*"
         ]
-      },
-      {
-        "from": "build/comfyui",
-        "to": "comfyui",
-        "filter": [
-          "**/*"
-        ]
       }
     ],
     "protocols": [
@@ -111,14 +104,18 @@
       "artifactName": "LinScio-MedComm-${version}-mac-${arch}.dmg"
     },
     "nsis": {
-      "artifactName": "LinScio-MedComm-${version}-win-x64.exe"
+      "artifactName": "LinScio-MedComm-${version}-win-x64.exe",
+      "include": "build/installer/vcredist-check.nsh",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": true
     },
     "portable": {
       "artifactName": "LinScio-MedComm-${version}-win-x64-portable.exe"
     },
     "win": {
       "target": [
-        "dir"
+        "nsis"
       ],
       "signDlls": false,
       "signAndEditExecutable": false

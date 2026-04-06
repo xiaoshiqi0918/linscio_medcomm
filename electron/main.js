@@ -37,6 +37,9 @@ if (isDev) {
 
 const backend = require('./backend')
 const comfyui = require('./comfyui-manager')
+const comfyBundle = require('./comfyui-bundle')
+const appUpdater = require('./app-updater')
+const startupCheck = require('./startup-check')
 const imageProtocol = require('./image-protocol')
 const migration = require('./migration')
 const firstRun = require('./first-run')
@@ -488,6 +491,39 @@ ipcMain.handle('check-for-update', async () => {
   }
 })
 
+// ── 应用内更新 IPC ──
+
+ipcMain.handle('download-software-update', async (_, opts) => {
+  if (!opts?.url || !opts?.filename) {
+    return { ok: false, error: '缺少下载参数' }
+  }
+  appUpdater.cleanOldUpdates()
+  return appUpdater.downloadUpdate({
+    url: opts.url,
+    filename: opts.filename,
+    sizeBytes: opts.size_bytes || 0,
+    sha256: opts.sha256 || '',
+    onProgress: (progress) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('software-update-progress', progress)
+      }
+    },
+  })
+})
+
+ipcMain.handle('install-software-update', () => {
+  return appUpdater.installAndRestart()
+})
+
+ipcMain.handle('cancel-software-update', () => {
+  appUpdater.cancelDownload()
+  return { ok: true }
+})
+
+ipcMain.handle('get-update-status', () => {
+  return appUpdater.getStatus()
+})
+
 // ComfyUI IPC
 ipcMain.handle('get-comfyui-status', () => comfyui.getStatus())
 ipcMain.handle('get-comfyui-url', () => comfyui.getBaseUrl())
@@ -496,6 +532,51 @@ ipcMain.handle('restart-comfyui', async () => {
   await new Promise((r) => setTimeout(r, 1000))
   comfyui.start()
   return { ok: true }
+})
+
+// ComfyUI Bundle 管理 IPC
+ipcMain.handle('get-comfyui-bundle-info', () => {
+  return comfyBundle.readBundleJson()
+})
+
+ipcMain.handle('install-comfyui-bundle', async (_, opts) => {
+  try {
+    const result = await comfyBundle.installBundle({
+      downloadUrl: opts.download_url,
+      version: opts.version,
+      platform: opts.platform,
+      sizeBytes: opts.size_bytes || 0,
+      sha256: opts.sha256,
+      onProgress: (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('comfyui-bundle-progress', progress)
+        }
+      },
+    })
+    if (result.ok && !comfyui.getStatus().running) {
+      comfyui.start()
+    }
+    return result
+  } catch (e) {
+    return { ok: false, error: e.message, code: 'DOWNLOAD_FAILED' }
+  }
+})
+
+ipcMain.handle('uninstall-comfyui-bundle', () => {
+  comfyui.stop()
+  comfyBundle.uninstallBundle()
+  return { ok: true }
+})
+
+// 启动自检 IPC
+ipcMain.handle('run-startup-check', () => {
+  return startupCheck.runAllChecks()
+})
+
+// 错误码与日志路径
+ipcMain.handle('get-log-paths', () => {
+  const errorCodes = require('./error-codes')
+  return errorCodes.getLogPaths()
 })
 
 ipcMain.handle('import-local-pack', async () => {
@@ -564,14 +645,21 @@ app.whenReady().then(async () => {
   imageProtocol.setAppDataRoot(APP_DATA_ROOT)
   imageProtocol.register()
 
+  // ④b Mac Intel 开发中提示
+  if (process.platform === 'darwin' && process.arch === 'x64') {
+    console.warn('[MedComm] Mac Intel (x64) 版本处于有限支持阶段')
+  }
+
   // ⑤ 依赖检查（打包模式验证嵌入 Python 是否包含所需模块）
   updateSplashStatus('检查依赖...')
   const t5 = Date.now()
   const frResult = firstRun.runFirstRunInstall()
   if (frResult && !frResult.ok && !frResult.skipped) {
+    const errorCodes = require('./error-codes')
+    const errMsg = errorCodes.formatError(frResult.code || 'PYTHON_DEPS_MISSING', frResult.error)
     console.error('[MedComm] Dependency check failed:', frResult.error)
     closeSplash()
-    dialog.showErrorBox('启动失败 - 依赖缺失', `嵌入的 Python 缺少必要模块：\n${frResult.error}\n\n请重新安装应用。`)
+    dialog.showErrorBox('启动失败 - 依赖缺失', `${errMsg}\n\n请重新安装应用。`)
     app.quit()
     return
   }
@@ -587,9 +675,11 @@ app.whenReady().then(async () => {
   try {
     await migration.runMigrations(APP_DATA_ROOT)
   } catch (e) {
+    const errorCodes = require('./error-codes')
     console.error('[MedComm] Migration failed:', e)
     closeSplash()
-    dialog.showErrorBox('启动失败 - 数据库迁移', e.message || String(e))
+    dialog.showErrorBox('启动失败 - 数据库迁移',
+      errorCodes.formatError('MIGRATION_FAILED', e.message || String(e)))
     backend.stop()
     app.quit()
     return
@@ -615,8 +705,10 @@ app.whenReady().then(async () => {
   const healthMs = Date.now() - t9
   console.log('[MedComm] health poll:', healthMs, 'ms', healthy ? 'ok' : 'timeout')
   if (!healthy) {
+    const errorCodes = require('./error-codes')
     closeSplash()
-    dialog.showErrorBox('启动失败 - 服务超时', '后端服务在 120 秒内未就绪，请检查日志或重新启动应用。')
+    dialog.showErrorBox('启动失败 - 服务超时',
+      errorCodes.formatError('BACKEND_TIMEOUT', '后端服务在 120 秒内未就绪。\n请检查日志或重新启动应用。'))
     backend.stop()
     app.quit()
     return

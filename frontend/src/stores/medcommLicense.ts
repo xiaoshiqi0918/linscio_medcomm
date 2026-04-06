@@ -22,6 +22,11 @@ export const useMedcommLicenseStore = defineStore('medcommLicense', () => {
   const softwareUpdate = ref<SoftwareUpdateInfo | null>(null)
   const softwareUpdateDismissed = ref(false)
 
+  // 应用内更新下载状态
+  const updateDownloadStatus = ref<'idle' | 'downloading' | 'downloaded' | 'installing' | 'error'>('idle')
+  const updateDownloadProgress = ref(0)
+  const updateDownloadError = ref('')
+
   // P2: 版本策略
   const versionPolicies = ref<VersionPolicyItem[]>([])
 
@@ -70,6 +75,19 @@ export const useMedcommLicenseStore = defineStore('medcommLicense', () => {
     softwareUpdateDismissed.value = true
   }
 
+  function setUpdateDownloadStatus(status: 'idle' | 'downloading' | 'downloaded' | 'installing' | 'error', error?: string) {
+    updateDownloadStatus.value = status
+    if (error !== undefined) updateDownloadError.value = error
+    if (status === 'idle') {
+      updateDownloadProgress.value = 0
+      updateDownloadError.value = ''
+    }
+  }
+
+  function setUpdateDownloadProgress(percent: number) {
+    updateDownloadProgress.value = percent
+  }
+
   function setVersionPolicies(list: VersionPolicyItem[]) {
     versionPolicies.value = list
   }
@@ -88,6 +106,9 @@ export const useMedcommLicenseStore = defineStore('medcommLicense', () => {
     specialties.value = []
     softwareUpdate.value = null
     softwareUpdateDismissed.value = false
+    updateDownloadStatus.value = 'idle'
+    updateDownloadProgress.value = 0
+    updateDownloadError.value = ''
     versionPolicies.value = []
   }
 
@@ -106,8 +127,13 @@ export const useMedcommLicenseStore = defineStore('medcommLicense', () => {
     forcedUpdatePolicies,
     setBase,
     setSpecialties,
+    updateDownloadStatus,
+    updateDownloadProgress,
+    updateDownloadError,
     setSoftwareUpdate,
     dismissSoftwareUpdate,
+    setUpdateDownloadStatus,
+    setUpdateDownloadProgress,
     setVersionPolicies,
     dismissBanner,
     resetBannerDismiss,

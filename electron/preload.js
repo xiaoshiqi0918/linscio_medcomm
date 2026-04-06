@@ -61,6 +61,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('download-specialty', specialtyId, specialtyName, version, fromVersion),
   getPackStatus: () => ipcRenderer.invoke('get-pack-status'),
   checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
+  downloadSoftwareUpdate: (opts) => ipcRenderer.invoke('download-software-update', opts),
+  installSoftwareUpdate: () => ipcRenderer.invoke('install-software-update'),
+  cancelSoftwareUpdate: () => ipcRenderer.invoke('cancel-software-update'),
+  getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
+  onSoftwareUpdateProgress: (cb) => {
+    ipcRenderer.on('software-update-progress', (_, payload) => cb && cb(payload))
+  },
   importLocalPack: () => ipcRenderer.invoke('import-local-pack'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
@@ -68,4 +75,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getComfyUIStatus: () => ipcRenderer.invoke('get-comfyui-status'),
   getComfyUIUrl: () => ipcRenderer.invoke('get-comfyui-url'),
   restartComfyUI: () => ipcRenderer.invoke('restart-comfyui'),
+
+  // ComfyUI Bundle 管理
+  getComfyUIBundleInfo: () => ipcRenderer.invoke('get-comfyui-bundle-info'),
+  installComfyUIBundle: (opts) => ipcRenderer.invoke('install-comfyui-bundle', opts),
+  uninstallComfyUIBundle: () => ipcRenderer.invoke('uninstall-comfyui-bundle'),
+  onComfyUIBundleProgress: (cb) => {
+    ipcRenderer.on('comfyui-bundle-progress', (_, payload) => cb && cb(payload))
+  },
+
+  // 启动自检
+  runStartupCheck: () => ipcRenderer.invoke('run-startup-check'),
+
+  // 错误码与日志路径
+  getLogPaths: () => ipcRenderer.invoke('get-log-paths'),
 })

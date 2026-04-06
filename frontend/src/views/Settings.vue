@@ -50,18 +50,57 @@
       </div>
       <div v-if="isElectronEnv" class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
         <div class="about-row"><span class="label">软件版本</span> v{{ appVersion }}</div>
-        <div class="about-row" style="gap: 8px; align-items: center;">
+        <div class="about-row" style="gap: 8px; align-items: center; flex-wrap: wrap;">
           <span class="label">软件更新</span>
           <span v-if="licenseStore.hasSoftwareUpdate" style="color: #1e40af;">
             新版本 v{{ licenseStore.softwareUpdate?.latest_version }} 可用
           </span>
           <span v-else style="color: #9ca3af;">当前已是最新版本</span>
           <el-button size="small" :loading="checkingUpdate" @click="manualCheckUpdate">检查更新</el-button>
+
+          <!-- 阶段一：有更新可下载 -->
           <el-button
-            v-if="licenseStore.hasSoftwareUpdate && licenseStore.softwareUpdate?.download_url"
+            v-if="licenseStore.hasSoftwareUpdate && licenseStore.updateDownloadStatus === 'idle' && hasInAppUpdate"
             size="small" type="primary"
-            @click="downloadUpdate"
-          >下载更新</el-button>
+            @click="startInAppUpdate"
+          >立即更新</el-button>
+
+          <!-- 回退：无应用内更新信息时走浏览器 -->
+          <el-button
+            v-if="licenseStore.hasSoftwareUpdate && licenseStore.updateDownloadStatus === 'idle' && !hasInAppUpdate && licenseStore.softwareUpdate?.download_url"
+            size="small"
+            @click="downloadUpdateLegacy"
+          >浏览器下载</el-button>
+
+          <!-- 阶段二：下载中 -->
+          <template v-if="licenseStore.updateDownloadStatus === 'downloading'">
+            <el-button size="small" type="danger" plain @click="cancelUpdate">取消</el-button>
+          </template>
+
+          <!-- 阶段三：下载完成 -->
+          <el-button
+            v-if="licenseStore.updateDownloadStatus === 'downloaded'"
+            size="small" type="success"
+            @click="installUpdate"
+          >安装并重启</el-button>
+
+          <!-- 错误 -->
+          <el-button
+            v-if="licenseStore.updateDownloadStatus === 'error'"
+            size="small"
+            @click="startInAppUpdate"
+          >重试</el-button>
+        </div>
+        <!-- 进度条 -->
+        <div v-if="licenseStore.updateDownloadStatus === 'downloading'" style="margin-top: 8px;">
+          <el-progress :percentage="licenseStore.updateDownloadProgress" :stroke-width="6" />
+          <span style="font-size: 12px; color: #9ca3af;">正在下载更新...</span>
+        </div>
+        <div v-if="licenseStore.updateDownloadStatus === 'error' && licenseStore.updateDownloadError" style="margin-top: 4px;">
+          <span style="font-size: 12px; color: #ef4444;">{{ licenseStore.updateDownloadError }}</span>
+        </div>
+        <div v-if="licenseStore.softwareUpdate?.release_notes && licenseStore.hasSoftwareUpdate" style="margin-top: 8px;">
+          <span style="font-size: 12px; color: #6b7280;">更新说明：{{ licenseStore.softwareUpdate.release_notes }}</span>
         </div>
       </div>
     </el-card>
@@ -104,6 +143,27 @@
           <span class="config-label">知识库</span>
           <span>{{ contentStats.docs }} 份文档</span>
           <el-button type="primary" text size="small" @click="$router.push('/knowledge')">管理</el-button>
+        </div>
+      </div>
+    </el-card>
+
+    <!-- MedPic 绘图设置 -->
+    <el-card v-if="isElectronEnv" class="settings-card">
+      <template #header>MedPic 绘图设置</template>
+      <div class="content-config">
+        <div class="config-row">
+          <span class="config-label">硬件档位</span>
+          <el-select v-model="medpicTier" style="width: 220px;" @change="saveMedpicTier">
+            <el-option label="普通办公电脑 / 轻薄本" value="low" />
+            <el-option label="游戏本 / 主流台式机" value="standard" />
+            <el-option label="专业工作站 / 高性能主机" value="high" />
+          </el-select>
+          <span v-if="medpicTier" style="color: #6b7280; font-size: 0.8rem; margin-left: 0.5rem;">{{ medpicTierDesc }}</span>
+        </div>
+        <div class="config-row">
+          <span class="config-label">ComfyUI 组件</span>
+          <span v-if="comfyBundleVersion" style="color: #16a34a;">已安装 v{{ comfyBundleVersion }}</span>
+          <span v-else style="color: #9ca3af;">未安装</span>
         </div>
       </div>
     </el-card>
@@ -457,6 +517,34 @@ if (isElectronEnv && window.electronAPI?.getAppVersion) {
   window.electronAPI.getAppVersion().then((v: string) => { appVersion.value = v }).catch(() => {})
 }
 
+// MedPic 硬件档位
+const TIER_STORAGE_KEY = 'medpic_hardware_tier'
+const medpicTier = ref<string | null>(null)
+const comfyBundleVersion = ref<string | null>(null)
+
+const tierDescMap: Record<string, string> = {
+  low: 'SD 1.5 · 基础画质',
+  standard: 'SDXL · 良好画质',
+  high: 'SDXL / Flux · 优秀画质',
+}
+const medpicTierDesc = computed(() => tierDescMap[medpicTier.value || ''] || '')
+
+try {
+  const saved = localStorage.getItem(TIER_STORAGE_KEY)
+  if (saved) medpicTier.value = saved
+} catch { /* noop */ }
+
+function saveMedpicTier(v: string) {
+  medpicTier.value = v
+  try { localStorage.setItem(TIER_STORAGE_KEY, v) } catch { /* noop */ }
+}
+
+if (isElectronEnv && window.electronAPI?.getComfyUIBundleInfo) {
+  window.electronAPI.getComfyUIBundleInfo().then((info: any) => {
+    if (info?.version) comfyBundleVersion.value = info.version
+  }).catch(() => {})
+}
+
 // 学科包
 interface PackItem {
   specialty_id: string; name: string; local_version?: string | null;
@@ -478,6 +566,11 @@ const downloadingPack = ref<DownloadProgress | null>(null)
 
 const checkingUpdate = ref(false)
 
+const hasInAppUpdate = computed(() => {
+  const su = licenseStore.softwareUpdate
+  return !!(su?.update_download_url && su?.update_filename)
+})
+
 async function manualCheckUpdate() {
   const eApi = window.electronAPI
   if (!eApi?.checkForUpdate) {
@@ -498,10 +591,62 @@ async function manualCheckUpdate() {
   }
 }
 
-async function downloadUpdate() {
+async function downloadUpdateLegacy() {
   const url = licenseStore.softwareUpdate?.download_url
   if (url && window.electronAPI?.openExternal) {
     await window.electronAPI.openExternal(url)
+  }
+}
+
+async function startInAppUpdate() {
+  const eApi = window.electronAPI
+  const su = licenseStore.softwareUpdate
+  if (!eApi?.downloadSoftwareUpdate || !su?.update_download_url || !su?.update_filename) return
+
+  licenseStore.setUpdateDownloadStatus('downloading')
+  licenseStore.setUpdateDownloadProgress(0)
+
+  eApi.onSoftwareUpdateProgress?.((progress) => {
+    licenseStore.setUpdateDownloadProgress(progress.percent || 0)
+  })
+
+  try {
+    const result = await eApi.downloadSoftwareUpdate({
+      url: su.update_download_url,
+      filename: su.update_filename,
+      size_bytes: su.update_size_bytes || 0,
+      sha256: su.update_sha256 || '',
+    })
+    if (result.ok) {
+      licenseStore.setUpdateDownloadStatus('downloaded')
+      ElMessage.success('更新下载完成，点击「安装并重启」应用更新')
+    } else {
+      licenseStore.setUpdateDownloadStatus('error', result.error || '下载失败')
+    }
+  } catch (e: any) {
+    licenseStore.setUpdateDownloadStatus('error', e.message || '下载出错')
+  }
+}
+
+async function cancelUpdate() {
+  await window.electronAPI?.cancelSoftwareUpdate?.()
+  licenseStore.setUpdateDownloadStatus('idle')
+}
+
+async function installUpdate() {
+  const eApi = window.electronAPI
+  if (!eApi?.installSoftwareUpdate) return
+
+  licenseStore.setUpdateDownloadStatus('installing')
+  try {
+    const result = await eApi.installSoftwareUpdate()
+    if (!result.ok) {
+      licenseStore.setUpdateDownloadStatus('error', result.error || '安装失败')
+      ElMessage.error(result.error || '安装失败')
+    }
+  } catch (e: any) {
+    licenseStore.setUpdateDownloadStatus('error', e.message || '安装出错')
+    ElMessage.error(e.message || '安装出错')
   }
 }
 

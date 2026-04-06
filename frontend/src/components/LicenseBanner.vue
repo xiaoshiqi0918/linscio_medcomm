@@ -10,8 +10,10 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useMedcommLicenseStore } from '@/stores/medcommLicense'
 
+const router = useRouter()
 const store = useMedcommLicenseStore()
 
 const bannerType = computed<'expired' | 'reminder' | 'software-update' | 'force-update' | null>(() => {
@@ -43,7 +45,7 @@ const message = computed(() => {
     case 'expired':
       return '授权已到期，软件可继续使用，但无法获取主程序更新。'
     case 'software-update':
-      return `MedComm 新版本 ${store.softwareUpdate?.latest_version || ''} 已发布，请前往门户下载更新。`
+      return `MedComm 新版本 ${store.softwareUpdate?.latest_version || ''} 已发布，前往设置页更新。`
     case 'reminder': {
       const d = store.daysRemaining
       return `授权将在 ${d} 天后到期，请及时续费。`
@@ -59,7 +61,7 @@ const actionLabel = computed(() => {
     case 'reminder':
       return '前往续费'
     case 'software-update':
-      return '前往下载'
+      return '前往设置'
     case 'force-update':
       return '查看详情'
     default:
@@ -71,8 +73,8 @@ async function handleAction() {
   const api = window.electronAPI
   if (!api?.openExternal) return
 
-  if (bannerType.value === 'software-update' && store.softwareUpdate?.download_url) {
-    await api.openExternal(store.softwareUpdate.download_url)
+  if (bannerType.value === 'software-update') {
+    router.push('/settings')
     return
   }
 

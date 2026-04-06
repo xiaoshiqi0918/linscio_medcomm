@@ -1,17 +1,13 @@
-# LinScio MedComm — Windows x64 构建（备用 CI，主要在 Windows 本机打包）
+# LinScio MedComm — Windows x64 客户端 CI 构建
 #
-# 本地打包首选：scripts\build-win.bat（含 ComfyUI + 模型，与 Mac npm run electron:build 对齐）
-# CI 默认：不含 ComfyUI（~5GB）；workflow 勾选 include_comfyui 可打进安装包（耗时长）
-name: Build Windows (CI fallback)
+# 分包模式（v0.2+）：CI 仅构建瘦客户端（不含 ComfyUI），
+# ComfyUI 组件包在 Windows 云服务器上用 cloud-build-comfyui-win.bat 单独打包。
+#
+# 触发方式：手动 workflow_dispatch
+name: Build Windows Client
 
 on:
   workflow_dispatch:
-    inputs:
-      include_comfyui:
-        description: 'Embed ComfyUI + SD1.5 into the installer (~5GB download, long run)'
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   build-win:
@@ -30,6 +26,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Configure mirrors
+        shell: bash
+        run: |
+          npm config set registry https://registry.npmmirror.com
+          echo "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/" >> "$GITHUB_ENV"
+          echo "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/" >> "$GITHUB_ENV"
 
       - name: Install npm dependencies
         run: npm ci
@@ -102,27 +105,34 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # ⑤b 可选：ComfyUI + 模型（与 Mac 完整包一致；默认跳过以节省时间与流量）
-      - name: Download ComfyUI + SD1.5 (optional)
-        if: ${{ inputs.include_comfyui }}
-        run: node scripts/download-comfyui.js
-
-      # ⑥ 读取版本号（供后续步骤引用）
+      # ⑥ 读取版本号
       - name: Get version
         id: version
         shell: bash
         run: echo "ver=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
 
-      # ⑦ Electron 打包
-      - name: Build Electron (win-x64)
+      # ⑦ Electron 打包（瘦客户端，无 ComfyUI）
+      - name: Build Electron (win-x64, no ComfyUI)
         run: npx electron-builder --win --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SKIP_COMFYUI_PACK: "1"
 
-      # ⑧ 上传构建产物（win target=dir：整包 >2GB 时 NSIS makensis mmap 会失败）
+      # ⑧ 上传构建产物（NSIS .exe 安装包）
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: LinScio-MedComm-${{ steps.version.outputs.ver }}-win-x64
-          path: releases/v${{ steps.version.outputs.ver }}/win-unpacked
+          path: releases/v${{ steps.version.outputs.ver }}/LinScio-MedComm-*.exe
           retention-days: 14
+
+      # ⑨ 上传到 COS（可选，需配置 secrets）
+      - name: Upload to Tencent COS
+        if: ${{ vars.ENABLE_COS_UPLOAD == 'true' }}
+        shell: bash
+        env:
+          COS_SECRET_ID: ${{ secrets.TENCENT_COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.TENCENT_COS_SECRET_KEY }}
+          COS_BUCKET: ${{ secrets.TENCENT_COS_BUCKET }}
+          COS_REGION: ${{ secrets.TENCENT_COS_REGION }}
+        run: bash scripts/ci-cos-upload.sh

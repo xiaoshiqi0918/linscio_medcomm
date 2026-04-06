@@ -1,45 +1,80 @@
+# ═══════════════════════════════════════════════════════════
+# LinScio MedComm .gitignore
+# ═══════════════════════════════════════════════════════════
+
+# ── 依赖 ──
 node_modules/
+
+# ── 构建产物 ──
 dist/
 release/
+releases/
+
+# ── 日志 ──
 *.log
+npm-debug.log*
+
+# ── 环境变量 / 密钥（绝不提交） ──
 .env
-.env.local
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ── Python ──
 *.pyc
 __pycache__/
 .venv/
 venv/
+
+# ── 数据库（用户数据，由运行时生成） ──
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+
+# ── 系统文件 ──
 .DS_Store
 Thumbs.db
 *.swp
 *~
+
+# ── IDE ──
 .idea/
+.vscode/
+*.code-workspace
+
+# ── 测试 / 分析 ──
 .pytest_cache/
 .mypy_cache/
 coverage/
+
+# ── 应用数据（运行时生成，勿提交） ──
 *.linscio-backup
 .data/
-# 本地认证密钥（由后端在 APP_DATA 下自动生成，勿提交）
+backend/.data/
+
+# ── 认证密钥（由后端在 APP_DATA 下自动生成） ──
 backend/.auth_secret
 backend/.data/.auth_secret
-# Docker Registry 本地 htpasswd（由 portal-system/scripts/create-registry-htpasswd.sh 生成）
+
+# ── Docker / 门户子系统 ──
 portal-system/registry/auth/htpasswd
-# 与 portal-system/ 目录重复，体积大
 portal-system.zip
-secrets/
+
+# ── 构建资源（体积大，本地或 CI 生成） ──
 build/python/
 build/*.tar.gz
 build/*.zip
-# 本地预下载的平台 wheel（体积大；CI 内生成，勿提交）
 build/wheels/*
 !build/wheels/README.md
 !build/wheels/.gitkeep
 
-# ComfyUI 引擎 + 模型（~5GB，本地通过 scripts/download-comfyui.js 下载）
+# ── ComfyUI 引擎 + 模型（~5GB，本地下载或 bundle 方式） ──
 build/comfyui/
 
-# 打包产物（本地打包生成，勿提交）
-releases/
+# ── VC++ Redistributable 安装包（~25MB，需手动放置） ──
+build/installer/vc_redist.x64.exe

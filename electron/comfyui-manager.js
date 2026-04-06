@@ -1,6 +1,12 @@
 /**
  * ComfyUI 进程管理：spawn / stop / health check / 崩溃重启
- * 打包模式从 resources/comfyui 启动；开发模式使用 COMFYUI_DIR 环境变量
+ *
+ * 分包模式（v0.2+）：
+ *   打包后 ComfyUI 不再随 extraResources 分发，而是由用户按需下载到
+ *   {userData}/comfyui-bundles/v{version}/ 目录。本模块通过 bundle.json
+ *   定位当前激活的 ComfyUI 版本目录。
+ *
+ * 开发模式仍兼容 build/comfyui 或环境变量 COMFYUI_DIR。
  */
 const { spawn } = require('child_process')
 const path = require('path')
@@ -8,7 +14,6 @@ const fs = require('fs')
 const { app, net } = require('electron')
 
 const pythonResolver = require('./python-resolver')
-const { resolveUnpacked } = require('./path-utils')
 
 let comfyProcess = null
 let healthCheckTimer = null
@@ -18,14 +23,50 @@ const MAX_RESTARTS = 3
 const DEFAULT_PORT = 8188
 let activePort = DEFAULT_PORT
 
+// ---------------------------------------------------------------------------
+// Bundle 目录解析
+// ---------------------------------------------------------------------------
+
+function getBundlesRoot() {
+  return path.join(app.getPath('userData'), 'comfyui-bundles')
+}
+
+function readBundleJson() {
+  const bundlePath = path.join(getBundlesRoot(), 'bundle.json')
+  try {
+    if (fs.existsSync(bundlePath)) {
+      return JSON.parse(fs.readFileSync(bundlePath, 'utf-8'))
+    }
+  } catch { /* corrupt or missing */ }
+  return null
+}
+
+function getBundleDir() {
+  const bundle = readBundleJson()
+  if (!bundle || !bundle.version) return null
+  const dir = path.join(getBundlesRoot(), `v${bundle.version}`)
+  if (fs.existsSync(path.join(dir, 'main.py'))) return dir
+  return null
+}
+
 function getComfyUIDir() {
   if (process.env.COMFYUI_DIR) {
     return process.env.COMFYUI_DIR
   }
+
+  // 打包模式：优先读 userData 下的 bundle
   if (app && app.isPackaged) {
+    const bundleDir = getBundleDir()
+    if (bundleDir) return bundleDir
+
+    // 兼容旧版：若 resources/comfyui 仍存在（用户未迁移）
     const resourcesPath = process.resourcesPath || path.join(app.getAppPath(), '..', 'resources')
-    return path.join(resourcesPath, 'comfyui')
+    const legacyDir = path.join(resourcesPath, 'comfyui')
+    if (fs.existsSync(path.join(legacyDir, 'main.py'))) return legacyDir
+
+    return null
   }
+
   // 开发模式：build 目录、项目兄弟目录、用户 HOME
   const devPaths = [
     path.join(__dirname, '..', 'build', 'comfyui'),
@@ -38,6 +79,19 @@ function getComfyUIDir() {
   return null
 }
 
+function isBundleInstalled() {
+  return getBundleDir() !== null
+}
+
+function getInstalledBundleVersion() {
+  const bundle = readBundleJson()
+  return bundle?.version || null
+}
+
+// ---------------------------------------------------------------------------
+// Python 路径
+// ---------------------------------------------------------------------------
+
 function getComfyPythonPath() {
   if (process.env.COMFYUI_PYTHON_PATH) {
     return process.env.COMFYUI_PYTHON_PATH
@@ -45,7 +99,6 @@ function getComfyPythonPath() {
   const comfyDir = getComfyUIDir()
   if (!comfyDir) return null
 
-  // 检查 ComfyUI 目录下是否自带 venv
   const venvPaths = [
     path.join(comfyDir, 'venv', 'bin', 'python3'),
     path.join(comfyDir, 'venv', 'Scripts', 'python.exe'),
@@ -57,13 +110,16 @@ function getComfyPythonPath() {
     if (fs.existsSync(p)) return p
   }
 
-  // 打包模式复用嵌入 Python（需要确保 PyTorch 已预装）
   if (app && app.isPackaged) {
     return pythonResolver.resolvePythonPath(app)
   }
 
   return process.platform === 'win32' ? 'python' : 'python3'
 }
+
+// ---------------------------------------------------------------------------
+// 网络 / 健康检查
+// ---------------------------------------------------------------------------
 
 function getBaseUrl() {
   return `http://127.0.0.1:${activePort}`
@@ -80,6 +136,10 @@ async function checkHealth() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 启动 / 停止
+// ---------------------------------------------------------------------------
+
 function buildLaunchArgs() {
   const args = [
     'main.py',
@@ -89,9 +149,6 @@ function buildLaunchArgs() {
   ]
 
   if (process.platform === 'darwin') {
-    // MPS backend: force ALL computations to fp32 to prevent NaN accumulation
-    // that causes black images after the first generation on Apple Silicon.
-    // SD1.5 in fp32 uses ~4GB — well within 16GB unified memory.
     args.push('--force-fp32')
   }
 
@@ -133,12 +190,10 @@ async function start(envExtra = {}) {
   console.log('[ComfyUI] PID:', comfyProcess.pid)
 
   comfyProcess.stdout?.on('data', (d) => {
-    const s = d.toString()
-    process.stdout.write(`[ComfyUI] ${s}`)
+    process.stdout.write(`[ComfyUI] ${d.toString()}`)
   })
   comfyProcess.stderr?.on('data', (d) => {
-    const s = d.toString()
-    process.stderr.write(`[ComfyUI] ${s}`)
+    process.stderr.write(`[ComfyUI] ${d.toString()}`)
   })
   comfyProcess.on('error', (err) => {
     console.error('[ComfyUI] Spawn error:', err)
@@ -189,12 +244,15 @@ function startHealthCheck(onUnhealthy, onHealthy) {
 }
 
 function getStatus() {
+  const comfyDir = getComfyUIDir()
   return {
     running: comfyProcess !== null,
     port: activePort,
     pid: comfyProcess?.pid ?? null,
-    dir: getComfyUIDir(),
-    available: getComfyUIDir() !== null,
+    dir: comfyDir,
+    available: comfyDir !== null,
+    bundleInstalled: isBundleInstalled(),
+    bundleVersion: getInstalledBundleVersion(),
   }
 }
 
@@ -210,5 +268,9 @@ module.exports = {
   getStatus,
   getBaseUrl,
   getComfyUIDir,
+  getBundlesRoot,
+  readBundleJson,
+  isBundleInstalled,
+  getInstalledBundleVersion,
   setPort,
 }

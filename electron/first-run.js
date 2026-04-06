@@ -37,11 +37,19 @@ function runFirstRunInstall() {
   })
 
   if (r.error) {
-    const msg = r.error.code === 'ENOENT'
-      ? `Python 可执行文件无法启动: ${pythonPath}`
-      : `Python 启动失败: ${r.error.message}\n\n可能原因：缺少 Visual C++ 运行时库，请安装 Microsoft Visual C++ Redistributable 后重试。`
+    let msg
+    if (r.error.code === 'ENOENT') {
+      msg = `Python 可执行文件无法启动: ${pythonPath}`
+    } else if (process.platform === 'win32') {
+      msg = `Python 启动失败: ${r.error.message}\n\n`
+        + '可能原因：缺少 Visual C++ 运行时库。\n'
+        + '请访问 https://aka.ms/vs/17/release/vc_redist.x64.exe 下载安装后重启应用。\n'
+        + '错误代码: VCREDIST_MISSING'
+    } else {
+      msg = `Python 启动失败: ${r.error.message}`
+    }
     console.error('[MedComm] Python spawn error:', r.error)
-    return { ok: false, error: msg }
+    return { ok: false, error: msg, code: 'PYTHON_SPAWN_FAILED' }
   }
 
   if (r.status === 0) {

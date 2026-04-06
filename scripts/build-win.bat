@@ -1,13 +1,15 @@
 @echo off
 REM ---------------------------------------------------------------
-REM  LinScio MedComm  -  Windows x64 local build script
+REM  LinScio MedComm  -  Windows x64 客户端本地打包脚本
+REM  分包模式（v0.2+）：此脚本仅打包瘦客户端（不含 ComfyUI）
+REM  ComfyUI 组件包请用 scripts\cloud-build-comfyui-win.bat
+REM
 REM  Run from repo root:  scripts\build-win.bat
-REM  With --no-comfyui :  scripts\build-win.bat --no-comfyui
 REM
 REM  Prereqs: Git, Node 18+, Python 3.11, curl, tar
 REM           npm install at repo root beforehand
-REM  Disk   : ~25 GB free with ComfyUI, ~8 GB without
-REM  Output : releases\v<ver>\win-unpacked\
+REM  Disk   : ~8 GB free
+REM  Output : releases\v<ver>\LinScio-MedComm-<ver>-win-x64.exe
 REM
 REM  Env overrides for Python standalone download:
 REM    MEDCOMM_PY_STANDALONE_URL  - single custom URL
@@ -28,13 +30,12 @@ echo   Output: %OUT_DIR%\
 echo ==============================================
 echo.
 
-set "SKIP_COMFYUI=0"
-if "%~1"=="--no-comfyui" set "SKIP_COMFYUI=1"
+REM 分包模式：客户端构建始终不含 ComfyUI
+set "SKIP_COMFYUI=1"
 
 REM == Disk space pre-check ======================================
 set "BUILDDRIVE=%ROOT:~0,1%"
-set "MINGB=25"
-if "%SKIP_COMFYUI%"=="1" set "MINGB=8"
+set "MINGB=8"
 powershell -NoProfile -Command "$need=[int]$env:MINGB; if((Get-PSDrive $env:BUILDDRIVE).Free -lt $need*1GB){exit 1};exit 0"
 if not errorlevel 1 goto diskcheck_ok
 echo [ERROR] Drive %BUILDDRIVE%: has less than %MINGB% GB free.
@@ -269,7 +270,7 @@ if errorlevel 1 (
 
 REM == 7/7  Electron packaging ===================================
 echo [7/7] Packaging with electron-builder --win --x64...
-if "%SKIP_COMFYUI%"=="1" set SKIP_COMFYUI_PACK=1
+set SKIP_COMFYUI_PACK=1
 call npx electron-builder --win --x64
 if errorlevel 1 (
     echo [ERROR] Electron builder failed!
@@ -277,39 +278,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM == Create ZIP for distribution ==================================
-set "ZIP_NAME=LinScio-MedComm-%VER%-win-x64.zip"
-if exist "%OUT_DIR%\win-unpacked" (
-    echo.
-    echo Creating distributable ZIP...
-    pushd "%OUT_DIR%"
-    if exist "%ZIP_NAME%" del /q "%ZIP_NAME%"
-    set "SEVENZIP="
-    if exist "%ROOT%\node_modules\7zip-bin\win\x64\7za.exe" (
-        set "SEVENZIP=%ROOT%\node_modules\7zip-bin\win\x64\7za.exe"
-    )
-    if defined SEVENZIP (
-        "!SEVENZIP!" a "%ZIP_NAME%" win-unpacked
-    ) else (
-        powershell -NoProfile -Command "Compress-Archive -Path 'win-unpacked' -DestinationPath '%ZIP_NAME%' -Force"
-    )
-    popd
-    if exist "%OUT_DIR%\%ZIP_NAME%" (
-        echo   Created: %OUT_DIR%\%ZIP_NAME%
-    ) else (
-        echo   [WARN] ZIP creation failed, you can manually zip win-unpacked
-    )
-)
+set "EXE_NAME=LinScio-MedComm-%VER%-win-x64.exe"
 
 echo.
 echo ==============================================
 echo   Build complete v%VER%
 echo.
-if exist "%OUT_DIR%\%ZIP_NAME%" (
-    echo   Distributable: %OUT_DIR%\%ZIP_NAME%
-    echo   Upload this ZIP to COS for distribution.
+if exist "%OUT_DIR%\%EXE_NAME%" (
+    echo   Installer: %OUT_DIR%\%EXE_NAME%
+    echo   Upload this .exe to COS for distribution.
+) else (
+    echo   [WARN] Installer .exe not found, check electron-builder output.
+    dir "%OUT_DIR%\*.exe" 2>nul
 )
-echo   Unpacked app: %OUT_DIR%\win-unpacked\
 echo ==============================================
 echo.
 pause

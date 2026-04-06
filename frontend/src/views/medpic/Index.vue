@@ -5,11 +5,11 @@
       <p class="subtitle">选择场景，填写内容，一键生成专业医学科普图像</p>
     </div>
 
-    <!-- 首次使用：硬件档位选择 -->
-    <div v-if="!hardwareTier" class="tier-select">
-      <h3>请选择您的电脑配置</h3>
+    <!-- 首次使用 或 重新选择：硬件档位选择 -->
+    <div v-if="!hardwareTier || showTierSelector" class="tier-select">
+      <h3>{{ showTierSelector ? '重新选择电脑配置' : '请选择您的电脑配置' }}</h3>
       <p class="tier-hint">
-        这将帮助系统匹配最佳画质与速度，后续可在高级参数中修改。
+        这将帮助系统匹配最佳画质与速度，选择后可随时在此页面或设置中修改。
         <a class="tier-help-link" href="javascript:void(0)" @click="showConfigHelp = true">如何查看我的配置？</a>
       </p>
       <div class="tier-grid">
@@ -17,7 +17,8 @@
           v-for="tier in tierOptions"
           :key="tier.id"
           class="tier-card"
-          @click="selectTier(tier.id)"
+          :class="{ 'tier-card--active': hardwareTier === tier.id }"
+          @click="selectTier(tier.id); showTierSelector = false"
         >
           <div class="tier-icon">{{ tier.icon }}</div>
           <div class="tier-name">{{ tier.name }}</div>
@@ -25,10 +26,40 @@
           <div class="tier-spec">{{ tier.spec }}</div>
         </div>
       </div>
+      <div v-if="showTierSelector" style="margin-top: 1rem; text-align: center;">
+        <el-button text @click="showTierSelector = false">取消</el-button>
+      </div>
+    </div>
+
+    <!-- ComfyUI 基础包未安装提示 -->
+    <div v-else-if="hardwareTier && !comfyBundleReady && !comfyStatus.available" class="bundle-prompt">
+      <div class="bundle-prompt-icon">&#x1F4E6;</div>
+      <h3>MedPic 绘图组件尚未安装</h3>
+      <p class="bundle-prompt-desc">
+        MedPic 需要下载 ComfyUI 基础组件包才能使用本地绘图功能。<br/>
+        组件包较大，下载过程可能需要几分钟。
+      </p>
+      <div v-if="bundleInstalling" class="bundle-progress">
+        <el-progress :percentage="bundleProgress.percent || 0" :status="bundleProgress.status === 'error' ? 'exception' : undefined" />
+        <span class="bundle-progress-text">
+          {{ bundleProgressText }}
+        </span>
+      </div>
+      <div v-else class="bundle-prompt-actions">
+        <el-button type="primary" @click="startBundleInstall">下载基础组件包</el-button>
+        <el-button text @click="dismissBundlePrompt">稍后再说</el-button>
+      </div>
+      <p v-if="bundleError" class="bundle-error">{{ bundleError }}</p>
     </div>
 
     <!-- 场景选择 -->
     <div v-else-if="!selectedScene && !directComfyMode" class="scene-select-page">
+      <!-- 当前档位与切换 -->
+      <div class="tier-bar">
+        <span class="tier-bar-label">当前配置：{{ tierLabel || '未选择' }}</span>
+        <el-button text size="small" @click="showTierSelector = true">重新选择</el-button>
+      </div>
+
       <!-- 直接打开 ComfyUI 编辑器入口 -->
       <div v-if="comfyStatus.running || comfyStatus.available" class="comfy-quick-launch" @click="enterDirectComfyMode">
         <div class="comfy-quick-launch-icon">&#x1F3A8;</div>
@@ -454,7 +485,7 @@
                   </span>
                 </el-form-item>
                 <el-form-item label="硬件档位" class="form-item-half">
-                  <el-select v-model="hardwareTier">
+                  <el-select :model-value="hardwareTier" @change="(v: string) => selectTier(v)">
                     <el-option v-for="t in tierOptions" :key="t.id" :label="t.name" :value="t.id" />
                   </el-select>
                 </el-form-item>
@@ -724,10 +755,69 @@ const tierOptions: TierOption[] = [
 const TIER_STORAGE_KEY = 'medpic_hardware_tier'
 const hardwareTier = ref<string | null>(null)
 const showConfigHelp = ref(false)
+const showTierSelector = ref(false)
+
+// ComfyUI Bundle 状态
+const comfyBundleReady = ref(false)
+const bundleInstalling = ref(false)
+const bundleProgress = ref<{ status?: string; percent?: number }>({})
+const bundleError = ref('')
+const bundleDismissed = ref(false)
+
+const bundleProgressText = computed(() => {
+  const s = bundleProgress.value.status
+  if (s === 'downloading') return `下载中 ${bundleProgress.value.percent || 0}%`
+  if (s === 'verifying') return '校验文件完整性...'
+  if (s === 'extracting') return '解压中...'
+  if (s === 'done') return '安装完成'
+  return ''
+})
 
 function selectTier(id: string) {
   hardwareTier.value = id
   try { localStorage.setItem(TIER_STORAGE_KEY, id) } catch { /* noop */ }
+}
+
+async function checkBundleStatus() {
+  const api = (window as any).electronAPI
+  if (!api?.getComfyUIStatus) return
+  const status = await api.getComfyUIStatus()
+  comfyBundleReady.value = status.bundleInstalled || status.available
+}
+
+async function startBundleInstall() {
+  const api = (window as any).electronAPI
+  if (!api?.installComfyUIBundle) return
+
+  bundleInstalling.value = true
+  bundleError.value = ''
+
+  api.onComfyUIBundleProgress?.((p: any) => {
+    bundleProgress.value = p
+  })
+
+  // TODO: 从 portal API 获取实际下载地址；当前为占位逻辑
+  const result = await api.installComfyUIBundle({
+    download_url: '',
+    version: '0.1.0',
+    platform: api.platform === 'darwin' ? 'mac-arm64' : 'win-x64',
+  })
+
+  bundleInstalling.value = false
+  if (result.ok) {
+    comfyBundleReady.value = true
+    await refreshComfyStatus()
+  } else {
+    bundleError.value = result.error || '安装失败，请重试'
+  }
+}
+
+function dismissBundlePrompt() {
+  bundleDismissed.value = true
+  comfyBundleReady.value = true
+  try {
+    localStorage.setItem('medpic_bundle_dismiss_date', new Date().toDateString())
+  } catch { /* noop */ }
 }
 
 const tierLabel = computed(() => {
@@ -742,6 +832,19 @@ onMounted(async () => {
       hardwareTier.value = saved
     }
   } catch { /* noop */ }
+
+  // 检查 bundle 安装状态
+  await checkBundleStatus()
+
+  // 当日已 dismiss 则不再弹提示
+  try {
+    const dismissDate = localStorage.getItem('medpic_bundle_dismiss_date')
+    if (dismissDate === new Date().toDateString()) {
+      bundleDismissed.value = true
+      if (!comfyBundleReady.value) comfyBundleReady.value = true
+    }
+  } catch { /* noop */ }
+
   loadLoraRegistry()
   loadPresetCharacters()
   await refreshComfyStatus()
@@ -1995,6 +2098,59 @@ function downloadImage(url: string, idx: number) {
 .tier-card:hover {
   border-color: #3b82f6;
   box-shadow: 0 2px 12px rgba(59, 130, 246, 0.12);
+}
+.tier-card--active {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.04);
+}
+
+.tier-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.tier-bar-label {
+  color: var(--el-text-color-secondary);
+}
+
+.bundle-prompt {
+  text-align: center;
+  padding: 3rem 1rem;
+}
+.bundle-prompt-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+.bundle-prompt-desc {
+  color: #6b7280;
+  font-size: 0.9rem;
+  line-height: 1.7;
+  margin: 0.75rem 0 1.5rem;
+}
+.bundle-prompt-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+}
+.bundle-progress {
+  max-width: 400px;
+  margin: 0 auto;
+}
+.bundle-progress-text {
+  display: block;
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin-top: 0.5rem;
+}
+.bundle-error {
+  color: #dc2626;
+  font-size: 0.85rem;
+  margin-top: 1rem;
 }
 
 .tier-help-link {

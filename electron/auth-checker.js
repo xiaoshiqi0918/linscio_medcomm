@@ -5,6 +5,8 @@
  * 与 linscio-portal API 对齐：POST /api/license/status + Bearer access_token
  */
 const { net } = require('electron')
+const manifestCompat = require('./manifest-compat')
+const manifestCache = require('./manifest-cache')
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 5000
@@ -78,7 +80,7 @@ async function checkAuthStatus(mainWindow, globalLicenseCache, token) {
     if (globalLicenseCache?.data) {
       applyLicenseStatus(mainWindow, globalLicenseCache.data)
     }
-    console.warn('[MedComm] auth check failed:', err.message)
+    console.warn('[MedComm] auth check failed (offline?):', err.message)
   }
 }
 
@@ -156,17 +158,47 @@ async function checkSoftwareUpdate(mainWindow, token, currentVersion, localPacks
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
     if (!res.ok) return
-    const data = await res.json()
-    mainWindow.webContents.send('software-update-available', {
-      base_valid: data.base_valid,
-      has_software_update: data.has_software_update,
-      latest_version: data.latest_version,
-      download_url: data.download_url || null,
-      specialty_updates: data.specialty_updates || [],
-      drawing_pack_updates: data.drawing_pack_updates || [],
-    })
+    const raw = await res.json()
+    const data = manifestCompat.parseUpdateResponse(raw)
+    if (!data) return
+
+    // min_client_version 强制升级检查
+    if (data.min_client_version) {
+      const check = manifestCompat.checkMinClientVersion(currentVersion, data.min_client_version)
+      if (!check.ok) {
+        mainWindow.webContents.send('software-update-available', {
+          ...data,
+          force_update: true,
+          force_update_message: check.message,
+        })
+        return
+      }
+    }
+
+    // 成功获取数据后持久化到本地缓存
+    manifestCache.save(data)
+
+    mainWindow.webContents.send('software-update-available', data)
   } catch (err) {
     console.warn('[MedComm] software update check failed:', err.message)
+
+    // 网络不可用时回退到本地缓存
+    const cached = manifestCache.load()
+    if (cached && !cached.stale) {
+      console.log('[MedComm] Using cached manifest data (offline fallback)')
+      mainWindow.webContents.send('software-update-available', {
+        ...cached.data,
+        _offline: true,
+        _cached_at: cached.cached_at,
+      })
+    } else {
+      mainWindow.webContents.send('software-update-available', {
+        base_valid: true,
+        has_software_update: false,
+        _offline: true,
+        _error: '网络不可用，且本地缓存已过期。请检查网络连接后重试。',
+      })
+    }
   }
 }
 

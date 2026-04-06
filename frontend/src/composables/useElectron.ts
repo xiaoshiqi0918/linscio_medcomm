@@ -20,6 +20,20 @@ export interface SoftwareUpdateInfo {
   has_software_update: boolean
   latest_version?: string | null
   download_url?: string | null
+  update_download_url?: string | null
+  update_filename?: string | null
+  update_size_bytes?: number
+  update_sha256?: string | null
+  release_notes?: string | null
+  force_update?: boolean
+  force_update_message?: string
+}
+
+export interface SoftwareUpdateProgress {
+  percent: number
+  downloaded: number
+  total: number
+  status: 'downloading' | 'verifying' | 'done' | 'error'
 }
 
 declare global {
@@ -76,6 +90,15 @@ declare global {
       // 手动检查更新
       checkForUpdate?: () => Promise<{ ok: boolean }>
 
+      // 应用内静默更新
+      downloadSoftwareUpdate?: (opts: {
+        url: string; filename: string; size_bytes?: number; sha256?: string
+      }) => Promise<{ ok: boolean; filePath?: string; error?: string }>
+      installSoftwareUpdate?: () => Promise<{ ok: boolean; error?: string }>
+      cancelSoftwareUpdate?: () => Promise<{ ok: boolean }>
+      getUpdateStatus?: () => Promise<{ status: string; filePath?: string | null }>
+      onSoftwareUpdateProgress?: (cb: (payload: SoftwareUpdateProgress) => void) => void
+
       // 本地导入扩展包
       importLocalPack?: () => Promise<{ ok: boolean; error?: string }>
 
@@ -85,10 +108,39 @@ declare global {
       // ComfyUI 管理
       getComfyUIStatus?: () => Promise<{
         running: boolean; port: number; pid: number | null;
-        dir: string | null; available: boolean
+        dir: string | null; available: boolean;
+        bundleInstalled: boolean; bundleVersion: string | null;
       }>
       getComfyUIUrl?: () => Promise<string>
       restartComfyUI?: () => Promise<{ ok: boolean }>
+
+      // ComfyUI Bundle 管理
+      getComfyUIBundleInfo?: () => Promise<{
+        version: string; platform: string; installed_at: string; dir: string;
+      } | null>
+      installComfyUIBundle?: (opts: {
+        download_url: string; version: string; platform: string;
+        size_bytes?: number; sha256?: string;
+      }) => Promise<{ ok: boolean; error?: string; code?: string; version?: string }>
+      uninstallComfyUIBundle?: () => Promise<{ ok: boolean }>
+      onComfyUIBundleProgress?: (cb: (payload: {
+        status: 'downloading' | 'verifying' | 'extracting' | 'done' | 'error';
+        percent?: number; downloaded?: number; total?: number;
+      }) => void) => void
+
+      // 启动自检
+      runStartupCheck?: () => Promise<{
+        allPassed: boolean;
+        summary: string;
+        failures: Array<{
+          key: string; ok: boolean; code: string | null;
+          message: string; suggestion: string | null;
+        }>;
+        results: Record<string, {
+          ok: boolean; code: string | null;
+          message: string; suggestion: string | null;
+        }>;
+      }>
     }
   }
 }
