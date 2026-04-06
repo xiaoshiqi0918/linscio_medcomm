@@ -143,20 +143,15 @@ echo   输出路径: %ROOT%\%OUT_DIR%\%BUNDLE_NAME%.zip
 if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
 if exist "%OUT_DIR%\%BUNDLE_NAME%.zip" del /q "%OUT_DIR%\%BUNDLE_NAME%.zip"
 
-set "SEVENZIP="
-if exist "%ROOT%\node_modules\7zip-bin\win\x64\7za.exe" (
-    set "SEVENZIP=%ROOT%\node_modules\7zip-bin\win\x64\7za.exe"
+REM 打包交给 PowerShell：优先 tar，其次 7za（参数在 PS 里传，彻底避免 CMD delayed expansion 破坏 -xr!）
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0zip-comfyui-bundle.ps1" ^
+    -OutZip "%ROOT%\%OUT_DIR%\%BUNDLE_NAME%.zip" ^
+    -SourceDir "%ROOT%\build\comfyui"
+if errorlevel 1 (
+    echo [ERROR] 打包失败
+    pause
+    exit /b 1
 )
-
-pushd build
-if defined SEVENZIP (
-    REM 7-Zip 的 -xr! 里含 !；在 enabledelayedexpansion 下必须用 ^! 否则 CMD 会吃掉 ! 导致 7za 报 Incorrect wildcard type marker
-    "!SEVENZIP!" a "..\%OUT_DIR%\%BUNDLE_NAME%.zip" comfyui -xr^!__pycache__ -xr^!.git
-) else (
-    echo   [WARN] 未找到 node_modules\7zip-bin\...\7za.exe，使用 PowerShell 压缩（体积更大、含 .git 等，建议 npm install 后重试）
-    powershell -NoProfile -Command "Compress-Archive -Path 'comfyui' -DestinationPath '..\%OUT_DIR%\%BUNDLE_NAME%.zip' -Force"
-)
-popd
 
 if not exist "%OUT_DIR%\%BUNDLE_NAME%.zip" (
     echo [ERROR] 打包失败
