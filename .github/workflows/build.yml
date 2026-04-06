@@ -105,6 +105,14 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # ⑤b 下载 VC++ Redistributable（NSIS 安装包需捆绑）
+      - name: Download VC++ Redistributable
+        shell: bash
+        run: |
+          curl -fsSL -o build/vc_redist.x64.exe \
+            "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          ls -lh build/vc_redist.x64.exe
+
       # ⑥ 读取版本号
       - name: Get version
         id: version

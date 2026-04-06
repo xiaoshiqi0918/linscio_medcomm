@@ -76,5 +76,5 @@ build/wheels/*
 # ── ComfyUI 引擎 + 模型（~5GB，本地下载或 bundle 方式） ──
 build/comfyui/
 
-# ── VC++ Redistributable 安装包（~25MB，需手动放置） ──
-build/installer/vc_redist.x64.exe
+# ── VC++ Redistributable 安装包（~25MB，CI 自动下载） ──
+build/vc_redist.x64.exe
