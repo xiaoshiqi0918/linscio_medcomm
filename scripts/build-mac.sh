@@ -265,7 +265,7 @@ build_comfyui_bundle() {
   echo "══════════════════════════════════════════════"
 
   local COMFY_VER
-  COMFY_VER="$(node -p "require('./scripts/download-comfyui.js').COMFYUI_VERSION || '0.3.10'" 2>/dev/null || echo '0.3.10')"
+  COMFY_VER="$(node -e "const fs=require('fs'); const m=fs.readFileSync('./scripts/download-comfyui.js','utf8').match(/COMFYUI_VERSION\s*=\s*['\"]([^'\"]+)['\"]/); process.stdout.write(m?m[1]:'0.3.10')" 2>/dev/null || echo '0.3.10')"
   local BUNDLE_DIR="build/comfyui"
   local BUNDLE_NAME="comfyui-bundle-${COMFY_VER}-mac-${ARCH}"
   local BUNDLE_ZIP="${OUT_DIR}/${BUNDLE_NAME}.zip"
