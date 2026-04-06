@@ -1,5 +1,5 @@
-# ComfyUI 目录打 zip（供 cloud-build-comfyui-win.bat 调用）
-# 不在 CMD 里拼 -xr!，避免 setlocal enabledelayedexpansion 破坏 7-Zip 参数
+# Zip ComfyUI folder for cloud-build-comfyui-win.bat
+# Avoid CMD mangling 7-Zip -xr! flags; use English-only strings (PS 5.1 + GBK default code page)
 param(
     [Parameter(Mandatory)][string]$OutZip,
     [Parameter(Mandatory)][string]$SourceDir
@@ -25,7 +25,7 @@ function Invoke-SevenZip {
     }
 }
 
-# 1) Windows 自带 tar（无 CMD 特殊字符问题）
+# 1) Built-in tar (no CMD special chars)
 if (Get-Command tar -ErrorAction SilentlyContinue) {
     Push-Location $parent
     try {
@@ -37,16 +37,16 @@ if (Get-Command tar -ErrorAction SilentlyContinue) {
     if ($ok -and (Test-Path -LiteralPath $outFull)) {
         exit 0
     }
-    Write-Warning "tar 打包失败或不支持，改用 7-Zip..."
+    Write-Warning 'tar failed or unsupported; falling back to 7-Zip'
 }
 
-# 2) 7-Zip（参数在 PowerShell 中传递，-xr! 不会被 CMD 解析）
+# 2) 7-Zip via PowerShell argument arrays
 if (Test-Path -LiteralPath $sevenZip) {
     if (Invoke-SevenZip) { exit 0 }
-    Write-Error "7za failed (exit code was non-zero)"
+    Write-Error '7za failed (non-zero exit code)'
     exit 1
 }
 
-# 3) 兜底
-Write-Warning 'tar/7za 不可用，使用 Compress-Archive（体积更大、可能含 .git，建议 npm install）'
+# 3) Last resort: larger zip, may include .git
+Write-Warning 'tar and 7za unavailable; using Compress-Archive (run npm install for 7zip-bin)'
 Compress-Archive -LiteralPath $SourceDir -DestinationPath $OutZip -Force
