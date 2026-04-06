@@ -15,6 +15,16 @@ export interface VersionPolicyItem {
   policy_message?: string | null
 }
 
+export interface BundleUpdateInfo {
+  bundle_id: string
+  latest_version?: string | null
+  download_url?: string | null
+  size_bytes?: number
+  sha256?: string
+  platform?: string | null
+  changelog?: string[]
+}
+
 export interface SoftwareUpdateInfo {
   base_valid: boolean
   has_software_update: boolean
@@ -27,6 +37,7 @@ export interface SoftwareUpdateInfo {
   release_notes?: string | null
   force_update?: boolean
   force_update_message?: string
+  bundle_updates?: BundleUpdateInfo[]
 }
 
 export interface SoftwareUpdateProgress {

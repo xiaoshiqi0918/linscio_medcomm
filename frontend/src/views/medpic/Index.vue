@@ -721,6 +721,9 @@
 import { ref, computed, onMounted, onBeforeUnmount, reactive, toRaw } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
+import { useMedcommLicenseStore } from '@/stores/medcommLicense'
+
+const licenseStore = useMedcommLicenseStore()
 
 // ─── 硬件档位 ───
 
@@ -784,21 +787,30 @@ async function checkBundleStatus() {
 }
 
 async function startBundleInstall() {
-  const api = (window as any).electronAPI
-  if (!api?.installComfyUIBundle) return
+  const eApi = (window as any).electronAPI
+  if (!eApi?.installComfyUIBundle) return
+
+  const bundleUpdates = licenseStore.softwareUpdate?.bundle_updates || []
+  const comfyBundle = bundleUpdates.find((b: any) => b.bundle_id === 'comfyui-basic')
+
+  if (!comfyBundle?.download_url) {
+    bundleError.value = '未获取到组件包下载地址，请检查网络后重启应用重试'
+    return
+  }
 
   bundleInstalling.value = true
   bundleError.value = ''
 
-  api.onComfyUIBundleProgress?.((p: any) => {
+  eApi.onComfyUIBundleProgress?.((p: any) => {
     bundleProgress.value = p
   })
 
-  // TODO: 从 portal API 获取实际下载地址；当前为占位逻辑
-  const result = await api.installComfyUIBundle({
-    download_url: '',
-    version: '0.1.0',
-    platform: api.platform === 'darwin' ? 'mac-arm64' : 'win-x64',
+  const result = await eApi.installComfyUIBundle({
+    download_url: comfyBundle.download_url,
+    version: comfyBundle.latest_version || '0.3.10',
+    platform: comfyBundle.platform || (eApi.platform === 'darwin' ? 'mac-arm64' : 'win-x64'),
+    size_bytes: comfyBundle.size_bytes || 0,
+    sha256: comfyBundle.sha256 || '',
   })
 
   bundleInstalling.value = false
