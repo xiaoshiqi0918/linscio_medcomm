@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           ARM64='{"arch":"arm64","runner":"macos-14","py_url_suffix":"aarch64-apple-darwin-install_only.tar.gz","wheels_platform":"macosx_14_0_arm64","wheels_dir":"darwin-arm64"}'
-          X64='{"arch":"x64","runner":"macos-13","py_url_suffix":"x86_64-apple-darwin-install_only.tar.gz","wheels_platform":"macosx_12_0_x86_64","wheels_dir":"darwin-x64"}'
+          X64='{"arch":"x64","runner":"macos-14","py_url_suffix":"x86_64-apple-darwin-install_only.tar.gz","wheels_platform":"macosx_12_0_x86_64","wheels_dir":"darwin-x64"}'
           ARCH="${{ github.event.inputs.arch }}"
           if [ "$ARCH" = "arm64" ]; then
             echo "matrix={\"include\":[$ARM64]}" >> "$GITHUB_OUTPUT"
@@ -52,6 +52,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Rosetta 2 (x64 cross-build)
+        if: matrix.arch == 'x64'
+        run: |
+          if /usr/bin/pgrep oahd >/dev/null 2>&1; then
+            echo "Rosetta 2 already running"
+          else
+            sudo softwareupdate --install-rosetta --agree-to-license || true
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -105,8 +114,14 @@ jobs:
           if [ ! -d build/python ]; then
             mv build/cpython-${PY_VER}* build/python 2>/dev/null || mv build/cpython-3.11* build/python
           fi
-          echo "Python: $(build/python/bin/python3 --version)"
-          echo "Arch: $(file -b build/python/bin/python3 | grep -o 'arm64\|x86_64')"
+          # x64 binary runs via Rosetta on ARM runner
+          EMBED_PY="build/python/bin/python3"
+          if [ "${{ matrix.arch }}" = "x64" ]; then
+            echo "Python (Rosetta): $(arch -x86_64 $EMBED_PY --version)"
+          else
+            echo "Python: $($EMBED_PY --version)"
+          fi
+          echo "Arch: $(file -b $EMBED_PY | grep -o 'arm64\|x86_64')"
 
       # ③ Install deps into embedded Python
       - name: Install deps into embedded Python
@@ -114,16 +129,24 @@ jobs:
           TMP_REQ="build/.tmp-req.txt"
           sed 's/uvicorn\[standard\]/uvicorn/g' backend/requirements.txt > "$TMP_REQ"
 
-          build/python/bin/python3 -m pip install \
+          EMBED_PY="build/python/bin/python3"
+          # x64 embedded Python must run under Rosetta on ARM runner
+          if [ "${{ matrix.arch }}" = "x64" ]; then
+            RUN="arch -x86_64 $EMBED_PY"
+          else
+            RUN="$EMBED_PY"
+          fi
+
+          $RUN -m pip install \
             --no-index --find-links="build/wheels/${{ matrix.wheels_dir }}/" \
             --no-warn-script-location \
             -r "$TMP_REQ" --quiet 2>&1 || \
-          build/python/bin/python3 -m pip install \
+          $RUN -m pip install \
             --find-links="build/wheels/${{ matrix.wheels_dir }}/" \
             --no-warn-script-location \
             -r "$TMP_REQ" --quiet
 
-          echo "Installed: $(build/python/bin/python3 -m pip list --format=columns 2>/dev/null | wc -l) packages"
+          echo "Installed: $($RUN -m pip list --format=columns 2>/dev/null | wc -l) packages"
           rm -f "$TMP_REQ"
 
       # ④ Alembic check
