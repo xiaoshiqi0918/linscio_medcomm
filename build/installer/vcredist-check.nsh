@@ -37,19 +37,22 @@
     Delete "$PLUGINSDIR\vc_redist.x64.exe"
 
     ; 检查安装结果
-    ${If} $1 != 0
-    ${AndIf} $1 != 3010  ; 3010 = 需要重启但安装成功
+    ; 0    = 成功
+    ; 1638 = 已安装同版本或更高版本（无需操作）
+    ; 3010 = 安装成功但需要重启
+    ${If} $1 == 0
+    ${OrIf} $1 == 1638
+      DetailPrint "VC++ Redistributable 安装/验证成功 (退出码 $1)"
+    ${ElseIf} $1 == 3010
+      MessageBox MB_OK|MB_ICONINFORMATION \
+        "Visual C++ 运行库已安装，但需要重启电脑才能生效。$\n\
+        请在安装完成后重启电脑再打开应用。"
+    ${Else}
       MessageBox MB_OK|MB_ICONEXCLAMATION \
         "Visual C++ 运行库安装未成功（退出码 $1）。$\n$\n\
         应用可能无法正常运行。请在安装完成后手动安装：$\n\
         https://aka.ms/vs/17/release/vc_redist.x64.exe$\n$\n\
         安装后请重启电脑。"
-    ${EndIf}
-
-    ${If} $1 == 3010
-      MessageBox MB_OK|MB_ICONINFORMATION \
-        "Visual C++ 运行库已安装，但需要重启电脑才能生效。$\n\
-        请在安装完成后重启电脑再打开应用。"
     ${EndIf}
   ${Else}
     DetailPrint "VC++ Redistributable 已安装且 DLL 完整，跳过"
