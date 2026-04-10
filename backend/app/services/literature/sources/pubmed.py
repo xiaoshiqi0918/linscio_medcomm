@@ -116,9 +116,8 @@ async def _translate_query_to_english(query: str) -> str:
 
     try:
         from app.services.llm.openai_client import chat_completion
-        from app.services.llm.manager import resolve_model
+        from app.services.llm.manager import TaskTier
 
-        model = await resolve_model()
         messages = [
             {
                 "role": "system",
@@ -132,7 +131,7 @@ async def _translate_query_to_english(query: str) -> str:
             },
             {"role": "user", "content": query},
         ]
-        translated = await chat_completion(messages, model=model)
+        translated = await chat_completion(messages, task=TaskTier.FAST)
         translated = (translated or "").strip().strip('"').strip("'")
         if translated:
             return translated

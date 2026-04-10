@@ -90,6 +90,8 @@
       <el-button @click="load">搜索</el-button>
       <el-button @click="openExternalSearch" :disabled="trashed">外部检索</el-button>
       <el-button @click="showBrowserCaptureDialog = true" :disabled="trashed">网页采集</el-button>
+      <el-button type="warning" :loading="batchResolvingFulltext" :disabled="trashed" @click="onBatchResolveFulltext">批量获取全文</el-button>
+      <el-button type="danger" :disabled="trashed" @click="onDeleteNoFulltext">删除无全文</el-button>
     </div>
 
     <div v-if="selectedIds.length" class="batch-actions">
@@ -585,6 +587,7 @@ const addCollectionId = ref<number | null>(null)
 const addTagIds = ref<number[]>([])
 const importPolling = ref(false)
 const resolvingPaperId = ref<number | null>(null)
+const batchResolvingFulltext = ref(false)
 const manualForm = ref({
   title: '',
   authorsText: '',
@@ -1319,6 +1322,54 @@ async function onResolveFulltext(row: any) {
     ElMessage.error(e?.response?.data?.detail || '请求失败')
   } finally {
     resolvingPaperId.value = null
+  }
+}
+
+async function onBatchResolveFulltext() {
+  try {
+    await ElMessageBox.confirm(
+      '将对所有缺全文的文献批量发起全文获取，可能需要较长时间。确定继续？',
+      '批量获取全文',
+      { type: 'warning' },
+    )
+  } catch { return }
+  batchResolvingFulltext.value = true
+  try {
+    const res = await api.literature.batchResolveFulltext(activeCollectionId.value || undefined)
+    const queued = (res.data as any)?.queued || 0
+    if (queued === 0) {
+      ElMessage.info('当前没有需要获取全文的文献')
+    } else {
+      ElMessage.success(`已排队 ${queued} 篇文献的全文获取，请稍后刷新查看结果`)
+    }
+    setTimeout(() => { load(); loadCounters() }, 3000)
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '批量获取失败')
+  } finally {
+    batchResolvingFulltext.value = false
+  }
+}
+
+async function onDeleteNoFulltext() {
+  try {
+    await ElMessageBox.confirm(
+      '将把所有"缺全文"状态的文献移入回收站（不影响已有全文的文献）。确定继续？',
+      '删除无全文文献',
+      { type: 'warning', confirmButtonText: '确定删除', cancelButtonText: '取消' },
+    )
+  } catch { return }
+  try {
+    const res = await api.literature.deleteNoFulltextPapers(activeCollectionId.value || undefined)
+    const deleted = (res.data as any)?.deleted || 0
+    if (deleted === 0) {
+      ElMessage.info('当前没有缺全文的文献')
+    } else {
+      ElMessage.success(`已将 ${deleted} 篇无全文文献移入回收站`)
+    }
+    load()
+    loadCounters()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '操作失败')
   }
 }
 

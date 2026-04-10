@@ -258,7 +258,62 @@ export const api = {
       http.patch(`/api/v1/medcomm/articles/${id}/title`, { title }),
     updateArticleContent: (id: number, contentJson: any, sectionId?: number) =>
       http.patch(`/api/v1/medcomm/articles/${id}`, { content_json: contentJson }, { params: { section_id: sectionId } }),
+    recheckSection: (sectionId: number) =>
+      http.post<{ ok: boolean; verify_report: any }>(`/api/v1/medcomm/sections/${sectionId}/recheck`),
+    skipSection: (sectionId: number) =>
+      http.patch<{ ok: boolean; status: string }>(`/api/v1/medcomm/sections/${sectionId}/skip`),
+    unskipSection: (sectionId: number) =>
+      http.patch<{ ok: boolean; status: string }>(`/api/v1/medcomm/sections/${sectionId}/unskip`),
     deleteArticle: (id: number) => http.delete(`/api/v1/medcomm/articles/${id}`),
+    batchDeleteArticles: (ids: number[]) =>
+      http.post<{ ok: boolean; deleted: number }>('/api/v1/medcomm/articles/batch-delete', { ids }),
+    aiAssistStream: (data: {
+      selected_text: string
+      action: string
+      context_before?: string
+      context_after?: string
+      custom_instruction?: string
+      article_id?: number
+    }, onToken: (text: string) => void, onDone: () => void, onError: (msg: string) => void) => {
+      const ctrl = new AbortController()
+      ;(async () => {
+        try {
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+          const localHeader = await getLocalApiKeyHeader()
+          Object.assign(headers, localHeader)
+          if (_authToken) headers['Authorization'] = `Bearer ${_authToken}`
+          const resp = await fetch(`${API_BASE}/api/v1/medcomm/ai-assist`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(data),
+            signal: ctrl.signal,
+          })
+          if (!resp.ok || !resp.body) { onError(`HTTP ${resp.status}`); return }
+          const reader = resp.body.getReader()
+          const decoder = new TextDecoder()
+          let buf = ''
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buf += decoder.decode(value, { stream: true })
+            const lines = buf.split('\n')
+            buf = lines.pop() || ''
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue
+              try {
+                const evt = JSON.parse(line.slice(6))
+                if (evt.type === 'token') onToken(evt.content || '')
+                else if (evt.type === 'done') onDone()
+                else if (evt.type === 'error') onError(evt.message || '未知错误')
+              } catch { /* skip malformed */ }
+            }
+          }
+        } catch (e: any) {
+          if (e.name !== 'AbortError') onError(e.message || '请求失败')
+        }
+      })()
+      return ctrl
+    },
     exportCheck: (id: number) =>
       http.get<{ can_export: boolean; data_warnings?: any[]; absolute_terms?: any[]; message?: string }>(
         `/api/v1/medcomm/articles/${id}/export-check`
@@ -309,6 +364,17 @@ export const api = {
     resolveFulltext: (paperId: number) =>
       http.post<{ paper_id: number; status: string }>(
         `/api/v1/literature/papers/${paperId}/resolve-fulltext`,
+      ),
+    batchResolveFulltext: (collectionId?: number) =>
+      http.post<{ queued: number; paper_ids: number[] }>(
+        '/api/v1/literature/papers/batch-resolve-fulltext',
+        null,
+        { params: collectionId ? { collection_id: collectionId } : {} },
+      ),
+    deleteNoFulltextPapers: (collectionId?: number) =>
+      http.delete<{ deleted: number; paper_ids: number[] }>(
+        '/api/v1/literature/papers/no-fulltext',
+        { params: collectionId ? { collection_id: collectionId } : {} },
       ),
     importPapers: (form: FormData) =>
       http.post('/api/v1/literature/papers/import', form, { headers: { 'Content-Type': 'multipart/form-data' } }),
@@ -382,6 +448,12 @@ export const api = {
       collection_id?: number | null;
       tag_ids?: number[];
     }) => http.post('/api/v1/literature/search/save', data),
+    analyzeLiterature: (data: { paper_ids: number[]; topic_hint?: string }) =>
+      http.post('/api/v1/literature/analyze', data, {
+        responseType: 'text',
+        headers: { Accept: 'text/event-stream' },
+        timeout: 180000,
+      }),
   },
   knowledge: {
     getDocs: () => http.get('/api/v1/knowledge/docs'),
@@ -511,10 +583,19 @@ export const api = {
       panels: Array<{ panel_index: number; scene_desc: string; dialogue?: string }>
       style?: string
       seed_base?: number | null
+      preferred_provider?: string
+      comfy_workflow_path?: string
+      comfy_mode?: string
+      comfy_base_url?: string
+      comfy_prompt_node_id?: string
+      comfy_prompt_input_key?: string
+      comfy_negative_node_id?: string
+      comfy_negative_input_key?: string
+      comfy_ksampler_node_id?: string
     }) => http.post<{ tasks: Array<{ task_id: string; panel_index: number }> }>('/api/v1/imagegen/comic/batch', data),
-    getSuggestions: (sectionId: number) =>
+    getSuggestions: (sectionId: number, enhance = false) =>
       http.get<{ suggestions: Array<{ anchor_text: string; image_type: string; style: string; index?: number }>; fallback: boolean }>(
-        `/api/v1/imagegen/suggestions/${sectionId}`
+        `/api/v1/imagegen/suggestions/${sectionId}`, { params: enhance ? { enhance: 1 } : undefined }
       ),
     generate: (data: {
       prompt: string
@@ -547,13 +628,14 @@ export const api = {
       seed_base?: number | null
       panel_index?: number | null
       loras?: Array<[string, number]>
-    }) => http.post<{ urls: string[]; is_fallback?: boolean; seeds?: number[] }>('/api/v1/imagegen/generate', data),
+    }) => http.post<{ urls: string[]; is_fallback?: boolean; provider?: string; provider_fallback?: string; seeds?: number[] }>('/api/v1/imagegen/generate', data),
     aiPrompts: (data: {
       scene_idea: string
       style?: string
       image_type?: string
       target_audience?: string
       content_format?: string
+      provider?: string
     }) =>
       http.post<{
         positive: string
@@ -580,17 +662,6 @@ export const api = {
       http.get<{ terms: number; examples: number; docs: number; by_specialty: Record<string, { terms: number; examples: number; docs: number; updated_at?: string }> }>(
         '/api/v1/data/content-stats'
       ),
-  },
-  publish: {
-    getRecords: (articleId?: number) =>
-      http.get('/api/v1/publish/records', { params: articleId ? { article_id: articleId } : {} }),
-    createRecord: (data: any) => http.post('/api/v1/publish/records', data),
-    updateRecord: (id: number, readCount?: number, publishUrl?: string) => {
-      const params: Record<string, number | string> = {}
-      if (readCount !== undefined) params.read_count = readCount
-      if (publishUrl !== undefined) params.publish_url = publishUrl
-      return http.patch(`/api/v1/publish/records/${id}`, {}, { params })
-    },
   },
   medpic: {
     buildPrompt: (data: {

@@ -22,9 +22,11 @@ export function useStreamGenerate() {
       onError?: (msg: string) => void
       onVerifyReport?: (report: unknown) => void
       onOllamaWarning?: (message: string) => void
+      onLiteratureWarning?: (data: { level: string; bound_count: number; message: string }) => void
       onClaimSkipped?: (reason: string) => void
       onReadingLevelSkipped?: (reason: string) => void
       onTitleGenerated?: (title: string) => void
+      onImageSuggestions?: (suggestions: Array<Record<string, unknown>>) => void
     } = {}
   ) {
     generating.value = true
@@ -74,9 +76,20 @@ export function useStreamGenerate() {
                   streamedText.value += evt.text
                   callbacks.onDelta?.(evt.text)
                 } else if (evt.type === 'done' && evt.content) {
+                  if (Array.isArray(evt.image_suggestions) && evt.image_suggestions.length) {
+                    callbacks.onImageSuggestions?.(evt.image_suggestions)
+                  }
                   callbacks.onDone?.(evt.content)
                 } else if (evt.type === 'verify_report' && evt.report) {
                   callbacks.onVerifyReport?.(evt.report)
+                } else if (evt.type === 'literature_warning') {
+                  const level = evt.level === 'critical' ? 'error' : 'warning'
+                  ElMessage({ type: level, message: evt.message, duration: 8000, showClose: true })
+                  callbacks.onLiteratureWarning?.({
+                    level: evt.level,
+                    bound_count: evt.bound_count,
+                    message: evt.message,
+                  })
                 } else if (evt.type === 'ollama_warning' && evt.message) {
                   ollamaWarning.value = evt.message
                   callbacks.onOllamaWarning?.(evt.message)

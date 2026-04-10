@@ -91,9 +91,8 @@ _LANG_NAMES = {"zh": "中文", "en": "English", "ja": "日本語", "de": "Deutsc
 
 async def _llm_translate(text: str, target_lang: str, source_lang: str) -> str:
     from app.services.llm.openai_client import chat_completion
-    from app.services.llm.manager import resolve_model
+    from app.services.llm.manager import TaskTier
 
-    model = await resolve_model()
     target_name = _LANG_NAMES.get(target_lang, target_lang)
     messages = [
         {
@@ -111,10 +110,10 @@ async def _llm_translate(text: str, target_lang: str, source_lang: str) -> str:
         {"role": "user", "content": text},
     ]
     try:
-        return await chat_completion(messages, model=model)
+        return await chat_completion(messages, task=TaskTier.FAST)
     except Exception as e:
         raise RuntimeError(
-            f"LLM 翻译失败（模型: {model}）: {e}。"
+            f"LLM 翻译失败: {e}。"
             f"请确认该模型的 API Key 已配置，或在设置中配置翻译专用 Key（推荐 DeepL）。"
         ) from e
 

@@ -10,7 +10,7 @@ from app.api.v1.auth import get_current_user
 from app.models.user import User
 from app.services.user_settings import UserSettingService
 
-from app.services.llm.manager import DOMESTIC_PROVIDERS, set_user_default_model
+from app.services.llm.manager import DOMESTIC_PROVIDERS, MODEL_MAX_TOKENS, set_user_default_model
 
 router = APIRouter()
 
@@ -152,6 +152,7 @@ async def connection_self_check():
         "SILICONFLOW_API_KEY": bool(os.environ.get("SILICONFLOW_API_KEY", "").strip()),
         "OPENROUTER_API_KEY": bool(os.environ.get("OPENROUTER_API_KEY", "").strip()),
         "QINIU_MAAS_API_KEY": bool(os.environ.get("QINIU_MAAS_API_KEY", "").strip()),
+        "GOOGLE_API_KEY": bool(os.environ.get("GOOGLE_API_KEY", "").strip()),
     }
     translate_keys: dict[str, bool] = {
         "DEEPL_API_KEY": bool(os.environ.get("DEEPL_API_KEY", "").strip()),
@@ -193,6 +194,7 @@ async def test_api_key(req: TestApiKeyRequest | None = None):
         "moonshot": (os.environ.get("MOONSHOT_API_KEY", ""), "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
         "siliconflow": (os.environ.get("SILICONFLOW_API_KEY", ""), "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
         "dashscope": (os.environ.get("DASHSCOPE_API_KEY", ""), "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-turbo"),
+        "google_ai": (os.environ.get("GOOGLE_API_KEY", ""), "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.5-flash"),
     }
     cfg = PROVIDER_CONFIGS.get(provider)
     if not cfg:
@@ -214,40 +216,90 @@ async def test_api_key(req: TestApiKeyRequest | None = None):
         return {"valid": False, "error": str(e), "provider": provider}
 
 
+# DOMESTIC_PROVIDERS 中 model_id 不够直观的，映射为用户友好的显示名称
+_DISPLAY_NAMES: dict[str, str] = {
+    "deepseek-chat": "DeepSeek V3",
+    "deepseek-coder": "DeepSeek Coder",
+    "deepseek-reasoner": "DeepSeek R1",
+    "kimi-latest": "Kimi K2",
+    "moonshot-v1-8k": "Moonshot v1 8K",
+    "moonshot-v1-32k": "Moonshot v1 32K",
+    "moonshot-v1-128k": "Moonshot v1 128K",
+    "qwen3-235b-a22b": "Qwen3 235B",
+    "qwen-turbo": "Qwen Turbo",
+    "qwen-turbo-latest": "Qwen Turbo (Latest)",
+    "qwen-plus": "Qwen Plus",
+    "qwen-plus-latest": "Qwen Plus (Latest)",
+    "qwen-max": "Qwen Max",
+    "qwen-max-latest": "Qwen Max (Latest)",
+    "qwen-long": "Qwen Long",
+    "glm-4": "GLM-4",
+    "glm-4-flash": "GLM-4 Flash",
+    "glm-4-plus": "GLM-4 Plus",
+    "glm-4-air": "GLM-4 Air",
+    "glm-3-turbo": "GLM-3 Turbo",
+}
+
+
+def _fmt_tokens(model_id: str) -> int:
+    """查找模型的最大上下文 tokens 数。"""
+    return MODEL_MAX_TOKENS.get(model_id, 0)
+
+
+def _model_entry(model_id: str, name: str, provider: str) -> dict:
+    t = _fmt_tokens(model_id)
+    entry: dict = {"id": model_id, "name": name, "provider": provider}
+    if t:
+        entry["max_tokens"] = t
+    return entry
+
+
 @router.get("/llm-models")
 async def list_llm_models():
     """
-    列出可用的 LLM 模型（根据已配置的 API Key）
-    国内大模型：智谱 GLM、通义千问、月之暗面 Kimi、深度求索、硅基流动
+    列出可用的 LLM 模型（根据已配置的 API Key），包含 max_tokens 供前端参考。
     """
-    available = []
+    available: list[dict] = []
+    added_ids: set[str] = set()
+
+    def _add(model_id: str, name: str, provider: str):
+        if model_id in added_ids:
+            return
+        available.append(_model_entry(model_id, name, provider))
+        added_ids.add(model_id)
+
     # OpenAI
     if os.environ.get("OPENAI_API_KEY"):
-        available.extend([
-            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "openai"},
-            {"id": "gpt-4o", "name": "GPT-4o", "provider": "openai"},
-            {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "provider": "openai"},
-            {"id": "gpt-4.1", "name": "GPT-4.1", "provider": "openai"},
-        ])
+        _add("gpt-4o-mini", "GPT-4o Mini", "openai")
+        _add("gpt-4o", "GPT-4o", "openai")
+        _add("gpt-4.1-mini", "GPT-4.1 Mini", "openai")
+        _add("gpt-4.1", "GPT-4.1", "openai")
     # Anthropic
     if os.environ.get("ANTHROPIC_API_KEY"):
-        available.extend([
-            {"id": "claude-3-5-sonnet-20241022", "name": "Claude 3.5 Sonnet", "provider": "anthropic"},
-            {"id": "claude-3-5-haiku-20241022", "name": "Claude 3.5 Haiku", "provider": "anthropic"},
-        ])
-    # 国内大模型
+        _add("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", "anthropic")
+        _add("claude-3-5-haiku-20241022", "Claude 3.5 Haiku", "anthropic")
+    # Google AI Studio
+    if os.environ.get("GOOGLE_API_KEY"):
+        _add("gemini-2.5-flash", "Gemini 2.5 Flash", "google_ai")
+        _add("gemini-2.5-pro", "Gemini 2.5 Pro", "google_ai")
+        _add("gemini-2.0-flash", "Gemini 2.0 Flash", "google_ai")
+    # DOMESTIC_PROVIDERS（跳过已添加的模型，避免重复）
     for model_id, (_, env_key) in DOMESTIC_PROVIDERS.items():
-        if os.environ.get(env_key):
-            name = model_id.split("/", 1)[1] if "/" in model_id else model_id
-            provider = (
-                "openrouter" if model_id.startswith("openrouter/") else
-                "qiniu" if model_id.startswith("qiniu/") else
-                "siliconflow" if model_id.startswith(("Qwen/", "deepseek-ai/", "THUDM/")) else
-                "zhipu" if "glm" in model_id else
-                "dashscope" if "qwen" in model_id else
-                "moonshot" if "moonshot" in model_id else
-                "deepseek" if "deepseek" in model_id else
-                "domestic"
-            )
-            available.append({"id": model_id, "name": name, "provider": provider})
+        if model_id in added_ids:
+            continue
+        if not os.environ.get(env_key):
+            continue
+        name = _DISPLAY_NAMES.get(model_id) or (model_id.split("/", 1)[1] if "/" in model_id else model_id)
+        provider = (
+            "openrouter" if model_id.startswith("openrouter/") else
+            "qiniu" if model_id.startswith("qiniu/") else
+            "siliconflow" if model_id.startswith(("Qwen/", "deepseek-ai/", "THUDM/", "meta-llama/")) else
+            "google_ai" if "gemini" in model_id else
+            "zhipu" if "glm" in model_id else
+            "dashscope" if "qwen" in model_id else
+            "moonshot" if ("moonshot" in model_id or "kimi" in model_id) else
+            "deepseek" if "deepseek" in model_id else
+            "domestic"
+        )
+        _add(model_id, name, provider)
     return {"models": available}

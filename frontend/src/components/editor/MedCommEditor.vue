@@ -49,7 +49,28 @@ import { MedCommImageContext } from '@/components/editor/extensions/MedCommImage
 import EditorToolbar from './EditorToolbar.vue'
 import { ElMessage } from 'element-plus'
 import { api, axiosErrorDetail } from '@/api'
+import { useArticleStore } from '@/stores/article'
 import 'tippy.js/dist/tippy.css'
+
+const articleStore = useArticleStore()
+
+let _selectionTimer: ReturnType<typeof setTimeout> | null = null
+function syncSelectionToStore(ed: any) {
+  if (_selectionTimer) clearTimeout(_selectionTimer)
+  _selectionTimer = setTimeout(() => {
+    if (!ed) { articleStore.setEditorSelection(null); return }
+    const { from, to, empty } = ed.state.selection
+    if (empty) { articleStore.setEditorSelection(null); return }
+    const text = ed.state.doc.textBetween(from, to, '\n').trim()
+    if (!text) { articleStore.setEditorSelection(null); return }
+    const docSize = ed.state.doc.content.size
+    const beforeStart = Math.max(0, from - 500)
+    const afterEnd = Math.min(docSize, to + 500)
+    const contextBefore = ed.state.doc.textBetween(beforeStart, from, '\n').trim()
+    const contextAfter = ed.state.doc.textBetween(to, afterEnd, '\n').trim()
+    articleStore.setEditorSelection({ text, from, to, contextBefore, contextAfter })
+  }, 150)
+}
 
 const CORPUS_SELECTION_MAX = 500
 
@@ -188,6 +209,9 @@ const editor = useEditor({
   onUpdate: ({ editor }) => {
     emit('update:modelValue', editor.getJSON())
   },
+  onSelectionUpdate: ({ editor }) => {
+    syncSelectionToStore(editor)
+  },
 })
 
 watch(
@@ -281,12 +305,76 @@ function normalizeCitationRefs(indexByPaperId: Record<string, number>) {
   return updates.length
 }
 
+function getComicPanels(): Array<{ panelIndex: number; sceneDesc: string; dialogue: string; narration: string; imagePath: string | null; pos: number }> {
+  const inst = editor.value
+  if (!inst) return []
+  const panels: Array<{ panelIndex: number; sceneDesc: string; dialogue: string; narration: string; imagePath: string | null; pos: number }> = []
+  inst.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'comicPanel') {
+      const a = node.attrs
+      const textContent = node.textContent?.trim() || ''
+      panels.push({
+        panelIndex: Number(a.panelIndex ?? panels.length + 1),
+        sceneDesc: String(a.sceneDesc || ''),
+        dialogue: String(a.dialogue || ''),
+        narration: String(a.narration || ''),
+        imagePath: a.imagePath as string | null,
+        pos,
+      })
+      if (!a.sceneDesc && !a.dialogue && !a.narration && textContent) {
+        panels[panels.length - 1].sceneDesc = textContent
+      }
+    }
+  })
+  return panels
+}
+
+function updateComicPanelImage(panelIndex: number, imagePath: string) {
+  const inst = editor.value
+  if (!inst) return false
+  let updated = false
+  inst.state.doc.descendants((node, pos) => {
+    if (updated) return false
+    if (node.type.name === 'comicPanel' && Number(node.attrs.panelIndex) === panelIndex) {
+      inst.view.dispatch(
+        inst.state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, imagePath })
+      )
+      updated = true
+      return false
+    }
+  })
+  return updated
+}
+
+function replaceRange(from: number, to: number, text: string) {
+  const inst = editor.value
+  if (!inst) return false
+  inst.chain().focus()
+    .deleteRange({ from, to })
+    .insertContentAt(from, text)
+    .run()
+  return true
+}
+
+function insertAtCursor(text: string) {
+  const inst = editor.value
+  if (!inst) return false
+  inst.chain().focus().insertContent(text).run()
+  return true
+}
+
 defineExpose({
   insertCitationRef,
   normalizeCitationRefs,
+  getComicPanels,
+  updateComicPanelImage,
+  replaceRange,
+  insertAtCursor,
 })
 
 onBeforeUnmount(() => {
+  if (_selectionTimer) clearTimeout(_selectionTimer)
+  articleStore.setEditorSelection(null)
   editor.value?.destroy()
 })
 

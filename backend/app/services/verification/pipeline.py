@@ -152,10 +152,14 @@ async def _verify_claims(content: str, rag_context: list, article_id: int | None
 
 
 async def _verify_data_placeholders(content: str) -> tuple[str, list]:
-    """检测 [DATA:] 占位符"""
+    """检测 [DATA:] 和 [[待补充:...]] 占位符"""
     import re
-    matches = list(re.finditer(r"\[DATA:[^\]]*\]", content))
-    return content, [{"text": m.group(), "message": "需补充权威数据"} for m in matches]
+    warnings = []
+    for m in re.finditer(r"\[DATA:[^\]]*\]", content):
+        warnings.append({"text": m.group(), "message": "需补充权威数据"})
+    for m in re.finditer(r"\[\[待补充[：:][^\]]*\]\]", content):
+        warnings.append({"text": m.group(), "message": "需补充文献支持"})
+    return content, warnings
 
 
 async def _detect_absolute_terms(content: str) -> tuple[str, list]:
@@ -188,6 +192,7 @@ async def _verify_claims_llm(content: str, rag_context: list[dict]) -> tuple[str
     """医学声明核实（LLM）"""
     from app.agents.prompts.verification import CLAIM_VERIFY_PROMPT
     from app.services.llm.openai_client import chat_completion
+    from app.services.llm.manager import TaskTier
 
     rag_str = _format_rag_context(rag_context)
     prompt = CLAIM_VERIFY_PROMPT.format(content=content[:4000], rag_context=rag_str)
@@ -195,6 +200,7 @@ async def _verify_claims_llm(content: str, rag_context: list[dict]) -> tuple[str
         resp = await chat_completion(
             messages=[{"role": "user", "content": prompt}],
             stream=False,
+            task=TaskTier.BALANCED,
         )
         raw = (resp or "").strip()
         m = re.search(r"\{[\s\S]*\}", raw)
@@ -246,6 +252,7 @@ async def _verify_fact_llm(
     """数据占位符 + 绝对化表述检测（LLM）"""
     from app.agents.prompts.verification import FACT_VERIFY_PROMPT
     from app.services.llm.openai_client import chat_completion
+    from app.services.llm.manager import TaskTier
 
     prompt = FACT_VERIFY_PROMPT.format(
         content=content[:4000],
@@ -255,6 +262,7 @@ async def _verify_fact_llm(
         resp = await chat_completion(
             messages=[{"role": "user", "content": prompt}],
             stream=False,
+            task=TaskTier.BALANCED,
         )
         raw = (resp or "").strip()
         m = re.search(r"\{[\s\S]*\}", raw)
@@ -281,6 +289,7 @@ async def _check_reading_level_llm(content: str, target_audience: str) -> dict:
     )
     from app.agents.prompts.audiences import AUDIENCE_PROFILES
     from app.services.llm.openai_client import chat_completion
+    from app.services.llm.manager import TaskTier
 
     audience = AUDIENCE_PROFILES.get(target_audience, AUDIENCE_PROFILES["public"])
     spec = AUDIENCE_LEVEL_SPECS.get(target_audience, DEFAULT_LEVEL_SPEC)
@@ -296,6 +305,7 @@ async def _check_reading_level_llm(content: str, target_audience: str) -> dict:
         resp = await chat_completion(
             messages=[{"role": "user", "content": prompt}],
             stream=False,
+            task=TaskTier.BALANCED,
         )
         raw = (resp or "").strip()
         m = re.search(r"\{[\s\S]*\}", raw)
@@ -353,7 +363,7 @@ async def run_export_check(content: str) -> dict[str, Any]:
     has_warnings = len(data_warnings) > 0 or len(absolute_terms) > 0
     msg = ""
     if data_warnings:
-        msg += f"存在 {len(data_warnings)} 处 [DATA:] 占位符需补充；"
+        msg += f"存在 {len(data_warnings)} 处数据/文献占位符需补充；"
     if absolute_terms:
         msg += f"存在 {len(absolute_terms)} 处绝对化表述建议修改。"
     return {
@@ -361,4 +371,272 @@ async def run_export_check(content: str) -> dict[str, Any]:
         "data_warnings": data_warnings,
         "absolute_terms": absolute_terms,
         "message": msg.strip() or None,
+    }
+
+
+def _strip_markdown(text: str) -> str:
+    """剥离 Markdown 格式标记，保留纯文本用于模式检测"""
+    import re
+    text = re.sub(r"#{1,6}\s*", "", text)
+    text = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", text)
+    text = re.sub(r"_{1,3}([^_]+)_{1,3}", r"\1", text)
+    text = re.sub(r"^>\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    return text
+
+
+def detect_ai_patterns(content: str) -> dict[str, Any]:
+    """
+    检测高频 AI 写作模式，返回各类别匹配详情及整体评分。
+    评分 0-100，100 表示无明显 AI 味，低于 60 建议人工润色。
+    """
+    import re
+
+    clean = _strip_markdown(content)
+
+    results: dict[str, list[str]] = {
+        "share_call": [],
+        "list_cliche": [],
+        "mechanical_transition": [],
+        "excessive_modifier": [],
+        "ai_ending": [],
+        "ai_connector": [],
+    }
+
+    _SHARE_CALL_PATTERNS = [
+        r"转发给.{0,6}人", r"分享给.{0,6}人", r"收藏备用", r"赶紧转给",
+        r"一起.{0,4}行动吧", r"赶紧行动起来", r"快分享", r"快收藏",
+        r"分享给家人", r"转给.{0,4}需要的人",
+    ]
+    for pat in _SHARE_CALL_PATTERNS:
+        for m in re.finditer(pat, clean):
+            results["share_call"].append(m.group())
+
+    _LIST_CLICHE_PATTERNS = [
+        r"记住这[几三四五六七八九十\d]+[点件个条招步]",
+        r"做好这[几三四五六七八九十\d]+[点件个条招步]",
+        r"牢记这[几三四五六七八九十\d]+[点件个条招步]",
+        r"掌握这[几三四五六七八九十\d]+[点件个条招步]",
+        r"做到这[几三四五六七八九十\d]+[点件个条招步]",
+        r"这[几三四五六七八九十\d]+[点件个条招步].{0,4}(很重要|必须|一定|更清晰|更轻松)",
+    ]
+    for pat in _LIST_CLICHE_PATTERNS:
+        for m in re.finditer(pat, clean):
+            results["list_cliche"].append(m.group())
+
+    _MECHANICAL_TRANSITIONS = [
+        "下面我们来看", "下面我们来介绍", "接下来讲讲", "接下来我们来说说",
+        "接下来让我们", "下面我们就来", "首先我们来了解",
+        "那么到底", "话不多说", "废话不多说",
+        "那么，如何", "那么，为什么", "那么，究竟",
+    ]
+    for phrase in _MECHANICAL_TRANSITIONS:
+        if phrase in clean:
+            results["mechanical_transition"].append(phrase)
+
+    _MODIFIER_PATTERNS = [
+        r"(非常|十分|极其|特别|格外|尤其|相当).{0,2}(重要|关键|必要|有效|显著)",
+        r"(至关重要|举足轻重|不可或缺|意义重大|不容忽视)",
+        r"具有统计学意义的显著",
+        r"深刻影响",
+    ]
+    for pat in _MODIFIER_PATTERNS:
+        for m in re.finditer(pat, clean):
+            results["excessive_modifier"].append(m.group())
+
+    _AI_ENDING_PATTERNS = [
+        r"总之[，,]", r"综上所述[，,]", r"总而言之[，,]",
+        r"总结一下[，,：:].{0,60}",
+        r"最后[，,]希望",
+        r"让我们一起.{0,10}[！!。.]",
+        r"愿每一?位.{0,15}[！!。.]",
+        r"健康之路.{0,10}[！!。.]",
+        r"一步步.{0,20}(端上|走向|迈向|实现)",
+    ]
+    for pat in _AI_ENDING_PATTERNS:
+        for m in re.finditer(pat, clean, re.MULTILINE):
+            results["ai_ending"].append(m.group()[:60])
+
+    _AI_CONNECTOR_PATTERNS = [
+        r"简单说[，,]",
+        r"换句话说[，,]",
+        r"也就是说[，,]",
+        r"不仅如此[，,]",
+        r"值得一提的是[，,]",
+        r"更重要的是[，,]",
+        r"需要注意的是[，,]",
+        r"需要了解的是[，,]",
+    ]
+    for pat in _AI_CONNECTOR_PATTERNS:
+        for m in re.finditer(pat, clean):
+            results["ai_connector"].append(m.group())
+    if len(results["ai_connector"]) <= 1:
+        results["ai_connector"] = []
+
+    total_issues = sum(len(v) for v in results.values())
+
+    score = 100
+    penalty_weights = {
+        "share_call": 12,
+        "list_cliche": 8,
+        "mechanical_transition": 6,
+        "excessive_modifier": 4,
+        "ai_ending": 10,
+        "ai_connector": 3,
+    }
+    for category, items in results.items():
+        score -= len(items) * penalty_weights.get(category, 5)
+    score = max(0, score)
+
+    warnings: list[str] = []
+    if results["share_call"]:
+        example = results["share_call"][0]
+        warnings.append(f'检测到 {len(results["share_call"])} 处分享号召语（如「{example}」），建议删除或改写')
+    if results["list_cliche"]:
+        example = results["list_cliche"][0]
+        warnings.append(f'检测到 {len(results["list_cliche"])} 处清单式套话（如「{example}」），建议调整表述')
+    if results["mechanical_transition"]:
+        warnings.append(f'检测到 {len(results["mechanical_transition"])} 处机械过渡语，建议用自然衔接替换')
+    if results["excessive_modifier"]:
+        examples = "、".join(results["excessive_modifier"][:3])
+        warnings.append(f'检测到 {len(results["excessive_modifier"])} 处多重修饰/学术腔（{examples}），建议精简')
+    if results["ai_ending"]:
+        example = results["ai_ending"][0]
+        warnings.append(f'检测到 {len(results["ai_ending"])} 处 AI 套路结尾（如「{example}」），建议改写')
+    if results["ai_connector"]:
+        warnings.append(f'检测到 {len(results["ai_connector"])} 处高频 AI 连接词密集使用，建议减少')
+
+    return {
+        "score": score,
+        "total_issues": total_issues,
+        "details": {k: v for k, v in results.items() if v},
+        "warnings": warnings,
+        "needs_polish": score < 60,
+    }
+
+
+def detect_uncited_medical_facts(content: str) -> dict[str, Any]:
+    """
+    启发式检测可能缺少 [共识] 标注的医学事实性句子。
+    扫描含医学事实关键词但既无文献引用也无 [共识]/[推断]/[[待补充]] 标注的句子。
+    """
+    import re
+
+    content = _strip_markdown(content)
+
+    _MEDICAL_FACT_MARKERS = [
+        "患者应", "患者需", "建议每天", "建议每周", "建议定期",
+        "是一种常见", "是常见的", "的发病率", "的患病率", "的主要原因",
+        "可能导致", "可能引起", "有助于", "可以降低", "可以预防",
+        "属于", "分为", "包括", "主要有", "通常表现为",
+        "正常范围", "正常值", "参考值", "标准是",
+        "应避免", "应限制", "不宜", "禁忌",
+    ]
+
+    sentences = re.split(r'[。！？\n]', content)
+    uncited: list[dict[str, str]] = []
+
+    for s in sentences:
+        s = s.strip()
+        if len(s) < 15:
+            continue
+        has_marker = any(m in s for m in _MEDICAL_FACT_MARKERS)
+        if not has_marker:
+            continue
+        has_citation = bool(re.search(
+            r"\[文献\d+\]|\[共识\]|\[推断[:：]|\[\[待补充",
+            s,
+        ))
+        if not has_citation:
+            preview = s[:80] + ("…" if len(s) > 80 else "")
+            uncited.append({
+                "sentence": preview,
+                "suggestion": "此句含医学事实但未标注来源，建议补充 [共识] 或对应文献引用",
+            })
+
+    return {
+        "uncited_count": len(uncited),
+        "uncited_sentences": uncited[:15],
+        "has_issue": len(uncited) > 0,
+    }
+
+
+def extract_provenance_summary(
+    content: str,
+    available_literature_ids: list[int] | None = None,
+) -> dict[str, Any]:
+    """
+    提取溯源统计：统计 [文献N]、[共识]、[推断:...]、[[待补充:...]] 的数量。
+    对应四层 Prompt 架构的输出后处理要求。
+
+    available_literature_ids: Part 2 中实际注入的文献编号列表，用于校验引用完整性。
+
+    返回 { literature, consensus, inference, gaps, total_claims, trust_score,
+           referenced_literature_ids, orphan_references, consensus_ratio,
+           warnings, gap_details }
+    """
+    import re
+
+    lit_refs = re.findall(r"\[文献\d+\]", content)
+    consensus_refs = re.findall(r"\[共识\]", content)
+    inferences = re.findall(r"\[推断[:：][^\]]*\]", content)
+    gaps_new = re.findall(r"\[\[待补充[：:][^\]]*\]\]", content)
+    gaps_old = re.findall(r"\[DATA:[^\]]*\]", content)
+
+    lit_count = len(lit_refs)
+    cons_count = len(consensus_refs)
+    inf_count = len(inferences)
+    gap_count = len(gaps_new) + len(gaps_old)
+    total = lit_count + cons_count + inf_count + gap_count
+
+    trust_score = 0.0
+    if total > 0:
+        trust_score = round((lit_count * 1.0 + cons_count * 0.8 + inf_count * 0.5) / total, 2)
+
+    unique_lit_ids = sorted(set(
+        int(re.search(r"\d+", r).group()) for r in lit_refs if re.search(r"\d+", r)
+    ))
+
+    warnings: list[str] = []
+
+    # 引用完整性校验：检测引用了不存在的文献编号
+    orphan_refs: list[int] = []
+    if available_literature_ids is not None:
+        valid_set = set(available_literature_ids)
+        orphan_refs = [lid for lid in unique_lit_ids if lid not in valid_set]
+        if orphan_refs:
+            warnings.append(f"引用了不存在的文献编号：{orphan_refs}")
+
+    # [共识]滥用检测：比例超过 40% 触发预警
+    consensus_ratio = 0.0
+    if total > 0:
+        consensus_ratio = round(cons_count / total, 2)
+        if consensus_ratio > 0.4:
+            warnings.append(
+                f"[共识]标注比例异常偏高（{cons_count}/{total}={consensus_ratio:.0%}），"
+                "可能存在缺乏文献支撑的事实性陈述，建议补充文献或核查"
+            )
+
+    # [推断]+[[待补充]]比例预警
+    uncertain_count = inf_count + gap_count
+    if total > 0 and uncertain_count / total > 0.5:
+        warnings.append(
+            f"[推断]+[[待补充]]合计占比过高（{uncertain_count}/{total}），"
+            "说明文献不足，建议补充更多相关文献"
+        )
+
+    return {
+        "literature": lit_count,
+        "consensus": cons_count,
+        "inference": inf_count,
+        "gaps": gap_count,
+        "total_claims": total,
+        "trust_score": trust_score,
+        "referenced_literature_ids": unique_lit_ids,
+        "orphan_references": orphan_refs,
+        "consensus_ratio": consensus_ratio,
+        "warnings": warnings,
+        "gap_details": [g for g in gaps_new + gaps_old],
     }

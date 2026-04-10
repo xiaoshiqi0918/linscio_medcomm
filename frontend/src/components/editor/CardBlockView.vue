@@ -9,11 +9,21 @@
       <div class="card-actions">
         <el-button
           size="small"
+          :type="imagePath ? 'default' : 'primary'"
           :loading="generating"
           :disabled="!promptText"
           @click="handleGenerate"
         >
-          生成配图
+          {{ generating ? '生成中…' : (imagePath ? '重新生成' : '生成配图') }}
+        </el-button>
+        <el-button
+          v-if="imagePath && !generating"
+          size="small"
+          type="danger"
+          plain
+          @click="handleRemoveImage"
+        >
+          移除配图
         </el-button>
         <span v-if="error" class="err">{{ error }}</span>
       </div>
@@ -67,6 +77,10 @@ const displayUrl = computed(() => {
   if (!p) return ''
   return p.startsWith('medcomm-image://') ? api.imagegen.imageUrl(p) : p
 })
+
+function handleRemoveImage() {
+  props.updateAttributes({ imagePath: null })
+}
 
 async function handleGenerate() {
   if (!promptText.value) return

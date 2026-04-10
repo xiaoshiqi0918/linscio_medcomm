@@ -72,16 +72,21 @@ export function useImageGenerate() {
   const isFallback = ref(false)
   const lastSeeds = ref<number[]>([])
 
-  async function generate(params: ImageGenParams | string, style?: string) {
+  async function generate(
+    params: ImageGenParams | string,
+    styleOrProvider?: string,
+    opts?: { preferredProvider?: string },
+  ) {
     generating.value = true
     images.value = []
     error.value = null
     isFallback.value = false
     lastSeeds.value = []
 
+    const providerOverride = opts?.preferredProvider ?? (typeof params !== 'string' ? undefined : undefined)
     const p: ImageGenParams =
       typeof params === 'string'
-        ? { prompt: params, style: style || 'medical_illustration' }
+        ? { prompt: params, style: styleOrProvider || 'medical_illustration' }
         : { ...params, style: params.style || 'medical_illustration' }
     const scene = (p.prompt || '').trim()
     const direct = (p.user_positive_prompt || '').trim()
@@ -90,7 +95,11 @@ export function useImageGenerate() {
       generating.value = false
       return
     }
-    const payload = { ...p, ...buildImageGenBackendOptions(settingsStore) }
+    const backendOpts = buildImageGenBackendOptions(settingsStore)
+    if (providerOverride) {
+      backendOpts.preferred_provider = providerOverride
+    }
+    const payload = { ...p, ...backendOpts }
 
     try {
       const res = await api.imagegen.createTask(payload)

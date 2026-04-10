@@ -1,8 +1,8 @@
 @echo off
+chcp 65001 >nul 2>&1
 REM ---------------------------------------------------------------
 REM  LinScio MedComm  -  Windows x64 客户端本地打包脚本
-REM  分包模式（v0.2+）：此脚本仅打包瘦客户端（不含 ComfyUI）
-REM  ComfyUI 组件包请用 scripts\cloud-build-comfyui-win.bat
+REM  此脚本打包客户端安装包。
 REM
 REM  Run from repo root:  scripts\build-win.bat
 REM
@@ -30,9 +30,6 @@ echo   Output: %OUT_DIR%\
 echo ==============================================
 echo.
 
-REM 分包模式：客户端构建始终不含 ComfyUI
-set "SKIP_COMFYUI=1"
-
 REM == Disk space pre-check ======================================
 set "BUILDDRIVE=%ROOT:~0,1%"
 set "MINGB=8"
@@ -52,8 +49,22 @@ set "https_proxy="
 set "ALL_PROXY="
 set "all_proxy="
 
-REM == 1/7  Python wheels ========================================
-echo [1/7] Downloading Python wheels...
+REM == 1/7  npm install ==========================================
+echo [1/7] Checking npm dependencies...
+if not exist "node_modules" (
+    echo   node_modules not found, running npm install...
+    call npm install
+    if errorlevel 1 (
+        echo [ERROR] npm install failed!
+        pause
+        exit /b 1
+    )
+) else (
+    echo   node_modules exists, skipping.
+)
+
+REM == 2/7  Python wheels ========================================
+echo [2/7] Downloading Python wheels...
 set "WHEEL_DIR=build\wheels\win32-x64"
 if not exist "%WHEEL_DIR%" mkdir "%WHEEL_DIR%"
 if not exist "build" mkdir "build"
@@ -76,8 +87,8 @@ del /q "%WHEEL_DIR%\*.tar.gz" 2>nul
 del /q build\.tmp-req-win.txt 2>nul
 echo   Wheels ready.
 
-REM == 2/7  Embedded Python ======================================
-echo [2/7] Downloading Python standalone 3.11...
+REM == 3/7  Embedded Python ======================================
+echo [3/7] Downloading Python standalone 3.11...
 set "PY_TARBALL=build\python-standalone-win.tar.gz"
 set "PY_TAG=20241205"
 set "PY_FN=cpython-3.11.11+%PY_TAG%-x86_64-pc-windows-msvc-install_only.tar.gz"
@@ -187,8 +198,8 @@ if not exist "build\python\python.exe" (
 echo   Python:
 build\python\python.exe --version
 
-REM == 3/7  Install deps into embedded Python ====================
-echo [3/7] Installing deps into embedded Python...
+REM == 4/7  Install deps into embedded Python ====================
+echo [4/7] Installing deps into embedded Python...
 python -c "from pathlib import Path; Path('build').mkdir(exist_ok=True); t=Path('backend/requirements.txt').read_text(encoding='utf-8'); Path('build/.tmp-req-win.txt').write_text(t.replace('uvicorn[standard]','uvicorn'), encoding='utf-8')"
 build\python\python.exe -m pip install --no-index --find-links="%WHEEL_DIR%/" --no-warn-script-location -r build\.tmp-req-win.txt --quiet 2>nul
 if errorlevel 1 (
@@ -204,63 +215,37 @@ if errorlevel 1 (
 del /q build\.tmp-req-win.txt 2>nul
 echo   Done.
 
-REM == 4/7  ComfyUI Python deps ====================================
-if "%SKIP_COMFYUI%"=="1" (
-    echo [4/7] Skipping ComfyUI deps per --no-comfyui flag
-) else (
-    echo [4/7] Installing ComfyUI deps into embedded Python...
-    echo   Installing PyTorch CPU for Windows...
-    build\python\python.exe -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --find-links https://download.pytorch.org/whl/cpu torch torchvision torchaudio --no-warn-script-location --quiet
-    if errorlevel 1 (
-        echo   [WARN] Tuna mirror failed, trying PyTorch official index...
-        build\python\python.exe -m pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision torchaudio --no-warn-script-location --quiet
-    )
-    if errorlevel 1 (
-        echo [ERROR] Failed to install PyTorch!
-        pause
-        exit /b 1
-    )
-    echo   Installing remaining ComfyUI requirements...
-    if exist "build\comfyui\requirements.txt" (
-        build\python\python.exe -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-warn-script-location -r build\comfyui\requirements.txt --quiet
+REM == 4b  Bundle VC++ runtime DLLs into embedded Python =========
+REM  Third-party .pyd wheels (greenlet, pydantic-core, etc.) are compiled
+REM  with dynamic MSVC linking. By placing these DLLs next to python.exe,
+REM  Windows DLL search order finds them locally even if the system has no
+REM  VC++ Redistributable installed (fresh machines, failed silent installs).
+echo   Bundling VC++ runtime DLLs into embedded Python directory...
+set "PYDEST=build\python"
+set "DLL_COUNT=0"
+for %%F in (vcruntime140.dll vcruntime140_1.dll msvcp140.dll) do (
+    if not exist "%PYDEST%\%%F" (
+        if exist "%SystemRoot%\System32\%%F" (
+            copy /y "%SystemRoot%\System32\%%F" "%PYDEST%\%%F" >nul
+            echo     Copied %%F
+            set /a DLL_COUNT+=1
+        ) else (
+            echo     [WARN] %%F not found in System32 - build machine missing VC++ ?
+        )
     ) else (
-        build\python\python.exe -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple --no-warn-script-location einops transformers tokenizers sentencepiece safetensors aiohttp pyyaml scipy tqdm psutil kornia spandrel soundfile torchsde --quiet
+        echo     %%F already present
     )
-    if errorlevel 1 (
-        echo [ERROR] Failed to install ComfyUI dependencies!
-        pause
-        exit /b 1
-    )
-    echo   Done.
 )
+if !DLL_COUNT! gtr 0 echo   Bundled !DLL_COUNT! VC++ DLL(s) into embedded Python.
 
-REM == 4b/7  Alembic check ========================================
+REM == 4c  Alembic check ==========================================
 echo   Alembic migration check...
 pushd "%ROOT%\backend"
 python -m alembic heads 2>nul
 popd
 
-REM == 5/7  ComfyUI + SD1.5 =====================================
-if "%SKIP_COMFYUI%"=="1" (
-    echo [5/7] Skipping ComfyUI per --no-comfyui flag
-) else (
-    echo [5/7] Downloading ComfyUI + SD1.5 model...
-    if not exist "%ROOT%\scripts\download-comfyui.js" (
-        echo [ERROR] scripts\download-comfyui.js not found
-        echo   Run: git pull origin main
-        echo   Or:  scripts\build-win.bat --no-comfyui
-        pause
-        exit /b 1
-    )
-    node "%ROOT%\scripts\download-comfyui.js"
-    if errorlevel 1 (
-        pause
-        exit /b 1
-    )
-)
-
-REM == 6/7  Frontend build =======================================
-echo [6/7] Building frontend...
+REM == 5/7  Frontend build =======================================
+echo [5/7] Building frontend...
 call npm run build
 if errorlevel 1 (
     echo [ERROR] Frontend build failed!
@@ -268,12 +253,55 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM == 6/7  Download VC++ Redistributable for NSIS bundling ======
+echo [6/7] Downloading VC++ Redistributable for installer bundling...
+if not exist "build\vc_redist.x64.exe" (
+    curl -fSL --connect-timeout 30 --retry 3 -o "build\vc_redist.x64.exe" "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+    if errorlevel 1 (
+        echo [ERROR] vc_redist.x64.exe download failed!
+        echo   NSIS installer requires this file to bundle VC++ auto-install.
+        echo   Please download manually: https://aka.ms/vs/17/release/vc_redist.x64.exe
+        echo   and place it at: %ROOT%\build\vc_redist.x64.exe
+        pause
+        exit /b 1
+    )
+    echo   vc_redist.x64.exe ready.
+) else (
+    echo   vc_redist.x64.exe already exists.
+)
+
+REM == 6b  Pre-check electron-builder cache ========================
+echo   Validating electron-builder binary cache...
+if defined ELECTRON_BUILDER_BINARIES_MIRROR (
+    echo   Mirror: %ELECTRON_BUILDER_BINARIES_MIRROR%
+) else (
+    echo   [WARN] ELECTRON_BUILDER_BINARIES_MIRROR not set, downloads may be slow/fail.
+    echo   Run: setx ELECTRON_BUILDER_BINARIES_MIRROR "https://npmmirror.com/mirrors/electron-builder-binaries/"
+    set "ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/"
+)
+
+REM  Clear potentially corrupt winCodeSign / nsis cache
+for %%D in (winCodeSign nsis) do (
+    if exist "%LOCALAPPDATA%\electron-builder\Cache\%%D" (
+        powershell -NoProfile -Command "$d='%LOCALAPPDATA%\electron-builder\Cache\%%D'; $files=@(Get-ChildItem $d -Recurse -File); if($files.Count -lt 2){Remove-Item $d -Recurse -Force; Write-Host '  Cleared incomplete cache: %%D'} else {Write-Host '  Cache %%D OK'}"
+    )
+)
+
 REM == 7/7  Electron packaging ===================================
 echo [7/7] Packaging with electron-builder --win --x64...
-set SKIP_COMFYUI_PACK=1
 call npx electron-builder --win --x64
 if errorlevel 1 (
+    echo.
     echo [ERROR] Electron builder failed!
+    echo.
+    echo   常见原因及解决：
+    echo   1. 7zip/nsis/winCodeSign 缓存下载不完整
+    echo      删除 %LOCALAPPDATA%\electron-builder\Cache 后重试
+    echo   2. ELECTRON_BUILDER_BINARIES_MIRROR 未设置或不可达
+    echo      运行: setx ELECTRON_BUILDER_BINARIES_MIRROR "https://npmmirror.com/mirrors/electron-builder-binaries/"
+    echo   3. 磁盘空间不足
+    echo   4. 路径过长 - 将仓库放在磁盘根目录（如 C:\medcomm）
+    echo.
     pause
     exit /b 1
 )

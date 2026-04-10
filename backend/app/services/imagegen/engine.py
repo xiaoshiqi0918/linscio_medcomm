@@ -60,16 +60,23 @@ def _comfy_available_cloud(overrides: dict | None) -> bool:
 
 
 async def detect_providers() -> dict:
-    """检测可用 Provider"""
+    """检测可用 Provider（含 ComfyUI 运行时健康检查）"""
     wenxin_key = bool(os.environ.get("ERNIE_IMAGE_API_KEY") or os.environ.get("BAIDU_API_KEY"))
     wenxin_secret = bool(os.environ.get("ERNIE_IMAGE_SECRET") or os.environ.get("BAIDU_SECRET_KEY"))
-    ov = None  # 仅 env，与请求无关
+    ov = None
+    local_configured = _comfy_available_local(ov)
+    local_running = False
+    if local_configured:
+        base = os.environ.get("COMFYUI_BASE_URL", "").strip() or "http://127.0.0.1:8188"
+        local_running = await _comfy_health_check(base)
     return {
         "openai": bool(os.environ.get("OPENAI_API_KEY")),
+        "midjourney": bool(os.environ.get("MIDJOURNEY_PROXY_URL")),
         "wanx": bool(os.environ.get("DASHSCOPE_API_KEY")),
         "wenxin": wenxin_key and wenxin_secret,
         "siliconflow": bool(os.environ.get("SILICONFLOW_API_KEY")),
-        "comfyui_local": _comfy_available_local(ov),
+        "comfyui_local": local_configured,
+        "comfyui_local_running": local_running,
         "comfyui_cloud": _comfy_available_cloud(ov),
         "pollinations": True,
     }
@@ -263,6 +270,104 @@ async def _siliconflow(
     return []
 
 
+_mj_semaphore = asyncio.Semaphore(2)
+
+
+def _mj_aspect_ratio(width: int, height: int) -> str:
+    """将像素尺寸映射为 Midjourney --ar 参数"""
+    r = width / height
+    if r > 1.6:
+        return "16:9"
+    if r > 1.2:
+        return "4:3"
+    if r < 0.625:
+        return "9:16"
+    if r < 0.85:
+        return "3:4"
+    return "1:1"
+
+
+async def _midjourney(
+    prompt: str,
+    width: int,
+    height: int,
+    image_type: str = "generated",
+) -> list[str]:
+    """Midjourney via proxy API（兼容 midjourney-proxy / GoAPI 等常见代理格式）"""
+    base_url = os.environ.get("MIDJOURNEY_PROXY_URL", "").strip().rstrip("/")
+    api_secret = os.environ.get("MIDJOURNEY_API_SECRET", "").strip()
+    if not base_url:
+        return []
+
+    ar = _mj_aspect_ratio(width, height)
+    full_prompt = f"{prompt} --ar {ar} --v 6.1"
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if api_secret:
+        headers["mj-api-secret"] = api_secret
+
+    async with _mj_semaphore:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{base_url}/mj/submit/imagine",
+                    headers=headers,
+                    json={"prompt": full_prompt, "botType": "MID_JOURNEY"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                code = data.get("code")
+                if code not in (1, 22):
+                    _log.warning("Midjourney submit failed: code=%s desc=%s", code, data.get("description"))
+                    return []
+                task_id = data.get("result")
+                if not task_id:
+                    return []
+        except Exception as exc:
+            _log.warning("Midjourney submit error: %s", exc)
+            return []
+
+        max_wait, interval = 300, 5
+        elapsed = 0
+        image_url = None
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                while elapsed < max_wait:
+                    await asyncio.sleep(interval)
+                    elapsed += interval
+                    resp = await client.get(
+                        f"{base_url}/mj/task/{task_id}/fetch",
+                        headers=headers,
+                    )
+                    resp.raise_for_status()
+                    task = resp.json()
+                    status = task.get("status", "")
+                    if status == "SUCCESS":
+                        image_url = task.get("imageUrl")
+                        break
+                    elif status == "FAILURE":
+                        _log.warning("Midjourney task failed: %s", task.get("failReason"))
+                        return []
+        except Exception as exc:
+            _log.warning("Midjourney poll error: %s", exc)
+            return []
+
+    if not image_url:
+        _log.warning("Midjourney task timed out after %ds", max_wait)
+        return []
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.get(image_url)
+            r.raise_for_status()
+        rel = _save_local(r.content, provider="midjourney", image_type=image_type)
+        return [f"medcomm-image://{rel}"]
+    except Exception as exc:
+        _log.warning("Midjourney download error: %s", exc)
+        return []
+
+
 _log = logging.getLogger("linscio.imagegen")
 
 
@@ -279,7 +384,7 @@ def _resolve_comfy_mode(
         return "local"
     if p == "comfyui_cloud":
         return "cloud"
-    if p in ("comfyui", "comfy"):
+    if p in ("comfyui", "comfy", "auto", ""):
         m = os.environ.get("COMFYUI_MODE", "auto").strip().lower()
         if m == "cloud":
             return "cloud"
@@ -295,6 +400,16 @@ def _comfy_skip_for_mode(mode: str | None, overrides: dict | None) -> bool:
     if mode == "cloud":
         return not _comfy_available_cloud(overrides)
     return True
+
+
+async def _comfy_health_check(base_url: str, timeout: float = 3.0) -> bool:
+    """Fast ping to ComfyUI /system_stats to detect if the server is reachable."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.get(f"{base_url}/system_stats")
+            return r.status_code == 200
+    except Exception:
+        return False
 
 
 async def _comfyui(
@@ -328,6 +443,9 @@ async def _comfyui(
         base = os.environ.get("COMFYUI_BASE_URL", "").strip()
     if not base:
         base = "https://cloud.comfy.org" if mode == "cloud" else "http://127.0.0.1:8188"
+    if mode == "local" and not await _comfy_health_check(base):
+        _log.info("ComfyUI local 不可达 (%s)，跳过并降级到 API", base)
+        return []
     node_id = (o.get("comfy_prompt_node_id") or os.environ.get("COMFYUI_PROMPT_NODE_ID", "6")).strip()
     input_key = (o.get("comfy_prompt_input_key") or os.environ.get("COMFYUI_PROMPT_INPUT_KEY", "text")).strip()
     neg_node = (o.get("comfy_negative_node_id") or os.environ.get("COMFYUI_NEGATIVE_NODE_ID", "")).strip() or None
@@ -421,12 +539,16 @@ async def generate_image(
     bc = max(1, min(bc, 8))
 
     def _comfy_provider_skip() -> bool:
+        pref = (preferred_provider or "").strip().lower()
         m = _resolve_comfy_mode(preferred_provider, comfy_overrides)
+        if m is None and pref in ("auto", ""):
+            m = _resolve_comfy_mode("comfyui", comfy_overrides)
         if m is None:
             return True
         return _comfy_skip_for_mode(m, comfy_overrides)
 
     skip_openai = not os.environ.get("OPENAI_API_KEY")
+    skip_mj = not os.environ.get("MIDJOURNEY_PROXY_URL")
     skip_wanx = not os.environ.get("DASHSCOPE_API_KEY")
     skip_sf = not os.environ.get("SILICONFLOW_API_KEY")
     skip_wenxin = not (os.environ.get("ERNIE_IMAGE_API_KEY") or os.environ.get("BAIDU_API_KEY"))
@@ -434,6 +556,9 @@ async def generate_image(
 
     async def openai_fn(_iter_s: int) -> list[str]:
         return await _dalle3(api_merged, style, width, height, it)
+
+    async def midjourney_fn(_iter_s: int) -> list[str]:
+        return await _midjourney(api_merged, width, height, it)
 
     async def wanx_fn(_iter_s: int) -> list[str]:
         return await _wanx(api_merged, style, width, height, it)
@@ -444,9 +569,15 @@ async def generate_image(
     async def wenxin_fn(_iter_s: int) -> list[str]:
         return await _wenxin(api_merged, width, height, it)
 
+    _comfy_pos_rewritten = None
+
     async def comfy_fn(iter_s: int) -> list[str]:
+        nonlocal _comfy_pos_rewritten
+        if _comfy_pos_rewritten is None:
+            from app.services.imagegen.prompt_builder import rewrite_prompt_for_sd
+            _comfy_pos_rewritten = await rewrite_prompt_for_sd(base_pos, it)
         return await _comfyui(
-            base_pos,
+            _comfy_pos_rewritten,
             negative_prompt,
             it,
             preferred_provider,
@@ -464,14 +595,15 @@ async def generate_image(
         return await _pollinations(api_merged, it)
 
     ordered: list[tuple[str, object, bool]] = [
+        ("comfyui", comfy_fn, skip_comfy),
+        ("midjourney", midjourney_fn, skip_mj),
         ("openai", openai_fn, skip_openai),
         ("wanx", wanx_fn, skip_wanx),
         ("siliconflow", silicon_fn, skip_sf),
         ("wenxin", wenxin_fn, skip_wenxin),
-        ("comfyui", comfy_fn, skip_comfy),
     ]
     pref = (preferred_provider or "").strip().lower()
-    if pref and pref != "auto":
+    if pref and pref not in ("auto", ""):
         sort_key = pref
         ordered = sorted(
             ordered,
@@ -479,6 +611,13 @@ async def generate_image(
             if p[0] == sort_key or (sort_key.startswith("comfyui") and p[0] == "comfyui")
             else 1,
         )
+    elif pref in ("auto", "") and it:
+        from app.services.imagegen.image_types import is_structured_type
+        if is_structured_type(it):
+            _log.info("图像类型 %s 为结构化类型，优先使用 Midjourney/DALL·E 3", it)
+            ordered = sorted(ordered, key=lambda p: (
+                0 if p[0] == "midjourney" else 1 if p[0] == "openai" else 2 if p[0] == "comfyui" else 1
+            ))
 
     winning_fn = None
     all_urls: list[str] = []
@@ -512,7 +651,13 @@ async def generate_image(
             if urls:
                 winning_fn = fn
                 meta["provider"] = name
-                is_fb = name not in ("openai", "comfyui")
+                primary_names = {"comfyui", "midjourney"}
+                if pref and pref not in ("auto", ""):
+                    primary_names.add(pref)
+                is_fb = name not in primary_names
+                if is_fb:
+                    meta["provider_fallback"] = name
+                    _log.info("首选 provider 不可用，降级到 %s", name)
                 all_urls.extend(urls)
                 found = True
                 break

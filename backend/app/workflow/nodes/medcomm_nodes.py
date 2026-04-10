@@ -232,15 +232,17 @@ async def suggest_images_node(state: MedCommSectionState) -> MedCommSectionState
     if not content or len(content.strip()) < 100:
         return {**state, "image_suggestions": [], "next": "normalize_terms"}
 
-    # LLM 分析推荐配图
+    import logging
+    _log = logging.getLogger("uvicorn.error")
     try:
         from app.services.llm.openai_client import chat_completion
+        from app.services.llm.manager import TaskTier
         from app.agents.prompts.verification import SUGGEST_IMAGES_PROMPT
         import json
         import re
 
         prompt = SUGGEST_IMAGES_PROMPT.format(
-            verified_content=content[:5000],  # 放宽以容纳全文
+            verified_content=content[:5000],
             topic=state.get("topic", ""),
             specialty=state.get("specialty", ""),
             target_audience=state.get("target_audience", "public"),
@@ -249,6 +251,7 @@ async def suggest_images_node(state: MedCommSectionState) -> MedCommSectionState
         resp = await chat_completion(
             messages=[{"role": "user", "content": prompt}],
             stream=False,
+            task=TaskTier.FAST,
         )
         raw = (resp or "").strip()
         m = re.search(r"\[[\s\S]*\]", raw)
@@ -257,13 +260,25 @@ async def suggest_images_node(state: MedCommSectionState) -> MedCommSectionState
             for i, s in enumerate(suggestions[:3]):
                 s.setdefault("index", i)
                 s.setdefault("anchor_text", (s.get("anchor_text") or "")[:20])
-            if suggestions:  # 有推荐才返回，否则走 fallback
+            if suggestions:
+                _inject_tool_recommendation(suggestions)
+                for s in suggestions:
+                    s["_source"] = "llm"
+                _log.info("[suggest_images] LLM generated %d suggestions", len(suggestions))
                 return {**state, "image_suggestions": suggestions, "next": "normalize_terms"}
-    except Exception:
-        pass
+        _log.warning("[suggest_images] LLM returned no parseable suggestions, raw=%s", raw[:200])
+    except Exception as exc:
+        _log.warning("[suggest_images] LLM failed: %s", exc)
 
-    # Fallback：段落/句块分割
-    suggestions = _fallback_image_suggestions(content)
+    suggestions = _fallback_image_suggestions(
+        content,
+        topic=state.get("topic", ""),
+        specialty=state.get("specialty", ""),
+    )
+    _inject_tool_recommendation(suggestions)
+    for s in suggestions:
+        s["_source"] = "heuristic"
+    _log.info("[suggest_images] heuristic fallback generated %d suggestions", len(suggestions))
     return {**state, "image_suggestions": suggestions[:3], "next": "normalize_terms"}
 
 
@@ -324,36 +339,75 @@ async def _resolve_full_content_for_suggest(state: dict, current_content: str) -
         return current_content
 
 
-def _fallback_image_suggestions(content: str) -> list[dict]:
-    """无 LLM 或解析失败时，按段落/句块生成简单建议"""
-    suggestions = []
+def _inject_tool_recommendation(suggestions: list[dict]) -> None:
+    """为每条建议注入 recommended_tool / tool_label / tool_reason"""
+    from app.services.imagegen.image_types import recommend_tool
+    for s in suggestions:
+        rec = recommend_tool(
+            s.get("image_type", ""),
+            s.get("style"),
+            s.get("description"),
+            s.get("en_description"),
+        )
+        s["recommended_tool"] = rec["tool"]
+        s["tool_label"] = rec["tool_label"]
+        s["tool_reason"] = rec["reason"]
+
+
+def _fallback_image_suggestions(content: str, topic: str = "", specialty: str = "") -> list[dict]:
+    """无 LLM 或解析失败时，按段落/句块生成简单建议（含本地英文提示词）"""
+    import re
+    from app.api.v1.imagegen import _heuristic_en_prompt
+
+    _TYPE_KW: list[tuple[str, list[str]]] = [
+        ("anatomy", ["解剖", "结构", "器官", "组织", "细胞", "骨骼", "血管", "心脏", "肺", "肝", "肾"]),
+        ("pathology", ["病理", "病变", "炎症", "感染", "肿瘤", "癌", "坏死"]),
+        ("flowchart", ["步骤", "流程", "阶段", "过程", "方法", "首先", "然后"]),
+        ("comparison", ["对比", "比较", "区别", "不同", "差异", "正常", "异常"]),
+        ("infographic", ["数据", "统计", "比例", "百分", "%", "发病率"]),
+        ("symptom", ["症状", "表现", "疼痛", "不适", "发热"]),
+        ("prevention", ["预防", "防护", "建议", "饮食", "运动", "生活方式"]),
+    ]
+
+    def _infer(text: str) -> str:
+        t = text.lower()
+        for itype, kws in _TYPE_KW:
+            for kw in kws:
+                if re.search(kw, t):
+                    return itype
+        return "anatomy"
+
+    suggestions: list[dict] = []
     paras = [p.strip() for p in content.split("\n\n") if p.strip()]
     for i, para in enumerate(paras):
         if len(para) > 60:
+            itype = _infer(para)
             anchor_text = para[:20].replace("\n", " ")
+            desc = para[:80] + ("…" if len(para) > 80 else "")
             suggestions.append({
                 "index": i,
                 "anchor_text": anchor_text,
-                "image_type": "anatomy",
+                "image_type": itype,
                 "style": "medical_illustration",
-                "description": para[:50] + "…",
-                "en_description": "",
+                "description": desc,
+                "en_description": _heuristic_en_prompt(desc, itype),
                 "reason": "段落内容适合配图",
                 "priority": "medium",
             })
     if suggestions:
         return suggestions
-    # 无 \n\n 时按句号分句，取较长句
     for sent in content.replace("。", "。\n").split("\n"):
         s = sent.strip()
         if len(s) > 60:
+            itype = _infer(s)
+            desc = s[:80] + ("…" if len(s) > 80 else "")
             suggestions.append({
                 "index": len(suggestions),
                 "anchor_text": s[:20],
-                "image_type": "anatomy",
+                "image_type": itype,
                 "style": "medical_illustration",
-                "description": s[:50] + "…",
-                "en_description": "",
+                "description": desc,
+                "en_description": _heuristic_en_prompt(desc, itype),
                 "reason": "段落内容适合配图",
                 "priority": "medium",
             })

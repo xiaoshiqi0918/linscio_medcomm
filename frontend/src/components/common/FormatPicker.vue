@@ -126,7 +126,6 @@ const formatGroups = [
       { id: 'oral_script', name: '口播脚本' },
       { id: 'drama_script', name: '情景剧本' },
       { id: 'storyboard', name: '动画分镜' },
-      { id: 'audio_script', name: '播客脚本' },
     ],
   },
   {
@@ -143,8 +142,6 @@ const formatGroups = [
     name: '互动/结构类',
     formats: [
       { id: 'patient_handbook', name: '患者手册' },
-      { id: 'quiz_article', name: '自测科普' },
-      { id: 'h5_outline', name: 'H5大纲' },
     ],
   },
 ]

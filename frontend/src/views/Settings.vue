@@ -160,11 +160,6 @@
           </el-select>
           <span v-if="medpicTier" style="color: #6b7280; font-size: 0.8rem; margin-left: 0.5rem;">{{ medpicTierDesc }}</span>
         </div>
-        <div class="config-row">
-          <span class="config-label">ComfyUI 组件</span>
-          <span v-if="comfyBundleVersion" style="color: #16a34a;">已安装 v{{ comfyBundleVersion }}</span>
-          <span v-else style="color: #9ca3af;">未安装</span>
-        </div>
       </div>
     </el-card>
 
@@ -294,6 +289,10 @@
           <el-input v-model="anthropicKey" type="password" placeholder="sk-ant-xxx" show-password />
           <a class="apply-link" href="https://console.anthropic.com/settings/keys" target="_blank">申请 ↗</a>
         </el-form-item>
+        <el-form-item label="Google AI API Key">
+          <el-input v-model="googleAiKey" type="password" placeholder="AIza..." show-password />
+          <a class="apply-link" href="https://aistudio.google.com/apikey" target="_blank">申请 ↗</a>
+        </el-form-item>
 
         <div class="api-group-title">生图生成</div>
         <el-form-item label="通义万相 API Key">
@@ -366,11 +365,21 @@
             <el-select v-model="selectedLlmProvider" placeholder="先选 Provider" style="width: 180px">
               <el-option v-for="p in llmProviders" :key="p" :label="p" :value="p" />
             </el-select>
-            <el-select v-model="selectedDefaultModel" placeholder="再选模型" style="width: 320px">
-              <el-option v-for="m in filteredModelsByProvider" :key="m.id" :label="m.name" :value="m.id" />
+            <el-select v-model="selectedDefaultModel" placeholder="再选模型" style="width: 380px" popper-class="medcomm-model-dropdown">
+              <el-option v-for="m in filteredModelsByProvider" :key="m.id" :label="m.name" :value="m.id">
+                <div class="model-option-row">
+                  <span class="model-option-name">{{ m.name }}</span>
+                  <span v-if="m.max_tokens" class="model-option-tokens">{{ formatTokens(m.max_tokens) }}</span>
+                </div>
+              </el-option>
             </el-select>
           </div>
-          <span class="model-hint">所有文章生成均使用该模型，修改后即时生效。</span>
+          <span class="model-hint">
+            所有文章生成均使用该模型，修改后即时生效。
+            <span v-if="selectedModelTokens" class="model-ctx-badge">
+              上下文窗口 {{ formatTokens(selectedModelTokens) }} tokens
+            </span>
+          </span>
         </el-form-item>
         <el-form-item label="生图提供商优先">
           <div class="image-provider-field">
@@ -520,8 +529,6 @@ if (isElectronEnv && window.electronAPI?.getAppVersion) {
 // MedPic 硬件档位
 const TIER_STORAGE_KEY = 'medpic_hardware_tier'
 const medpicTier = ref<string | null>(null)
-const comfyBundleVersion = ref<string | null>(null)
-
 const tierDescMap: Record<string, string> = {
   low: 'SD 1.5 · 基础画质',
   standard: 'SDXL · 良好画质',
@@ -537,12 +544,6 @@ try {
 function saveMedpicTier(v: string) {
   medpicTier.value = v
   try { localStorage.setItem(TIER_STORAGE_KEY, v) } catch { /* noop */ }
-}
-
-if (isElectronEnv && window.electronAPI?.getComfyUIBundleInfo) {
-  window.electronAPI.getComfyUIBundleInfo().then((info: any) => {
-    if (info?.version) comfyBundleVersion.value = info.version
-  }).catch(() => {})
 }
 
 // 学科包
@@ -828,6 +829,7 @@ const siliconflowKey = ref('')
 const deepseekKey = ref('')
 const zhipuKey = ref('')
 const moonshotKey = ref('')
+const googleAiKey = ref('')
 const baiduKey = ref('')
 const baiduSecretKey = ref('')
 const openrouterKey = ref('')
@@ -839,15 +841,53 @@ const deeplKey = ref('')
 const googleTranslateKey = ref('')
 const azureTranslateKey = ref('')
 const azureTranslateRegion = ref('')
-const llmModels = ref<Array<{ id: string; name: string; provider: string }>>([])
+interface LlmModel { id: string; name: string; provider: string; max_tokens?: number }
+const llmModels = ref<LlmModel[]>([])
 const selectedDefaultModel = ref(settingsStore.defaultModel)
 const selectedLlmProvider = ref('openai')
 const selectedImageProvider = ref(settingsStore.preferredImageProvider)
 const siliconflowImageModel = ref(settingsStore.siliconflowImageModel)
+const MODEL_TOKENS: Record<string, number> = {
+  'gpt-4o-mini': 128000, 'gpt-4o': 128000, 'gpt-4.1-mini': 1047576, 'gpt-4.1': 1047576,
+  'claude-3-5-sonnet-20241022': 200000, 'claude-3-5-haiku-20241022': 200000,
+  'gemini-2.5-flash': 1048576, 'gemini-2.5-pro': 1048576, 'gemini-2.0-flash': 1048576,
+  'deepseek-chat': 64000, 'deepseek-coder': 16000, 'deepseek-reasoner': 64000,
+  'kimi-latest': 131072, 'moonshot-v1-8k': 8192, 'moonshot-v1-32k': 32768, 'moonshot-v1-128k': 131072,
+  'qwen3-235b-a22b': 131072, 'qwen-turbo': 131072, 'qwen-turbo-latest': 1000000,
+  'qwen-plus': 131072, 'qwen-plus-latest': 131072, 'qwen-max': 32768, 'qwen-max-latest': 32768, 'qwen-long': 10000000,
+  'glm-4': 128000, 'glm-4-flash': 128000, 'glm-4-plus': 128000, 'glm-4-air': 128000, 'glm-3-turbo': 128000,
+  'Qwen/Qwen2.5-7B-Instruct': 32768, 'Qwen/Qwen2.5-32B-Instruct': 32768, 'Qwen/Qwen2.5-72B-Instruct': 32768,
+  'deepseek-ai/DeepSeek-V2.5': 32768, 'deepseek-ai/DeepSeek-V3': 64000, 'deepseek-ai/DeepSeek-R1': 64000,
+  'THUDM/glm-4-9b-chat': 128000, 'THUDM/glm-4-plus': 128000,
+  'meta-llama/Llama-4-Scout-17B-16E-Instruct': 131072,
+  'openrouter/openai/gpt-4o-mini': 128000, 'openrouter/openai/gpt-4o': 128000,
+  'openrouter/anthropic/claude-3.5-sonnet': 200000, 'openrouter/anthropic/claude-3.7-sonnet': 200000,
+  'openrouter/anthropic/claude-3.7-sonnet:thinking': 200000, 'openrouter/anthropic/claude-3.5-haiku': 200000,
+  'openrouter/google/gemini-2.0-flash-001': 1048576, 'openrouter/google/gemini-2.5-flash': 1048576,
+  'openrouter/google/gemini-2.5-pro': 1048576, 'openrouter/google/gemini-1.5-pro': 2097152,
+  'openrouter/google/gemini-1.5-flash': 1048576,
+  'openrouter/meta-llama/llama-3.1-70b-instruct': 131072, 'openrouter/meta-llama/llama-3.1-405b-instruct': 131072,
+  'openrouter/deepseek/deepseek-r1': 64000, 'openrouter/deepseek/deepseek-v3': 64000,
+  'openrouter/meta-llama/llama-4-scout': 131072,
+  'qiniu/deepseek-v3': 64000, 'qiniu/deepseek-r1': 64000,
+  'qiniu/qwen2.5-72b-instruct': 32768, 'qiniu/qwen2.5-32b-instruct': 32768, 'qiniu/glm-4-plus': 128000,
+}
+
+function formatTokens(tokens: number | undefined): string {
+  if (!tokens) return ''
+  if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(tokens % 1000000 === 0 ? 0 : 1)}M`
+  if (tokens >= 1000) return `${Math.round(tokens / 1000)}K`
+  return String(tokens)
+}
+
 const llmProviders = computed(() => Array.from(new Set(llmModels.value.map((m) => m.provider))))
 const filteredModelsByProvider = computed(() =>
   llmModels.value.filter((m) => m.provider === selectedLlmProvider.value)
 )
+const selectedModelTokens = computed(() => {
+  const m = llmModels.value.find(m => m.id === selectedDefaultModel.value)
+  return m?.max_tokens || MODEL_TOKENS[selectedDefaultModel.value] || 0
+})
 const testing = ref(false)
 const saving = ref(false)
 const apiKeyResult = ref<{ valid: boolean; error?: string } | null>(null)
@@ -868,8 +908,8 @@ function hasNonAscii(value: string) {
   return false
 }
 
-function buildLocalModels() {
-  const local: Array<{ id: string; name: string; provider: string }> = []
+function buildLocalModels(): LlmModel[] {
+  const local: LlmModel[] = []
   if (openaiKey.value) {
     local.push(
       { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openai' },
@@ -900,7 +940,15 @@ function buildLocalModels() {
       { id: 'openrouter/meta-llama/llama-3.1-70b-instruct', name: 'meta-llama/llama-3.1-70b-instruct', provider: 'openrouter' },
       { id: 'openrouter/meta-llama/llama-3.1-405b-instruct', name: 'meta-llama/llama-3.1-405b-instruct', provider: 'openrouter' },
       { id: 'openrouter/deepseek/deepseek-r1', name: 'deepseek/deepseek-r1', provider: 'openrouter' },
-      { id: 'openrouter/deepseek/deepseek-v3', name: 'deepseek/deepseek-v3', provider: 'openrouter' }
+      { id: 'openrouter/deepseek/deepseek-v3', name: 'deepseek/deepseek-v3', provider: 'openrouter' },
+      { id: 'openrouter/meta-llama/llama-4-scout', name: 'meta-llama/llama-4-scout', provider: 'openrouter' }
+    )
+  }
+  if (googleAiKey.value) {
+    local.push(
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google_ai' },
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'google_ai' },
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'google_ai' }
     )
   }
   if (siliconflowKey.value) {
@@ -912,14 +960,14 @@ function buildLocalModels() {
       { id: 'deepseek-ai/DeepSeek-V3', name: 'DeepSeek-V3', provider: 'siliconflow' },
       { id: 'deepseek-ai/DeepSeek-R1', name: 'DeepSeek-R1', provider: 'siliconflow' },
       { id: 'THUDM/glm-4-9b-chat', name: 'GLM-4-9B-Chat', provider: 'siliconflow' },
-      { id: 'THUDM/glm-4-plus', name: 'GLM-4-Plus', provider: 'siliconflow' }
+      { id: 'THUDM/glm-4-plus', name: 'GLM-4-Plus', provider: 'siliconflow' },
+      { id: 'meta-llama/Llama-4-Scout-17B-16E-Instruct', name: 'Llama 4 Scout', provider: 'siliconflow' }
     )
   }
   if (deepseekKey.value) {
     local.push(
-      { id: 'deepseek-chat', name: 'DeepSeek Chat', provider: 'deepseek' },
-      { id: 'deepseek-coder', name: 'DeepSeek Coder', provider: 'deepseek' },
-      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', provider: 'deepseek' }
+      { id: 'deepseek-chat', name: 'DeepSeek V3', provider: 'deepseek' },
+      { id: 'deepseek-reasoner', name: 'DeepSeek R1', provider: 'deepseek' }
     )
   }
   if (zhipuKey.value) {
@@ -933,13 +981,18 @@ function buildLocalModels() {
   }
   if (moonshotKey.value) {
     local.push(
-      { id: 'moonshot-v1-8k', name: 'Moonshot v1 8k', provider: 'moonshot' },
+      { id: 'kimi-latest', name: 'Kimi K2', provider: 'moonshot' },
+      { id: 'moonshot-v1-128k', name: 'Moonshot v1 128k', provider: 'moonshot' },
       { id: 'moonshot-v1-32k', name: 'Moonshot v1 32k', provider: 'moonshot' },
-      { id: 'moonshot-v1-128k', name: 'Moonshot v1 128k', provider: 'moonshot' }
+      { id: 'moonshot-v1-8k', name: 'Moonshot v1 8k', provider: 'moonshot' }
     )
   }
   if (dashscopeKey.value) {
     local.push(
+      { id: 'qwen3-235b-a22b', name: 'Qwen3 235B', provider: 'dashscope' },
+      { id: 'qwen-max-latest', name: 'Qwen Max (Latest)', provider: 'dashscope' },
+      { id: 'qwen-plus-latest', name: 'Qwen Plus (Latest)', provider: 'dashscope' },
+      { id: 'qwen-turbo-latest', name: 'Qwen Turbo (Latest)', provider: 'dashscope' },
       { id: 'qwen-turbo', name: 'Qwen Turbo', provider: 'dashscope' },
       { id: 'qwen-plus', name: 'Qwen Plus', provider: 'dashscope' },
       { id: 'qwen-max', name: 'Qwen Max', provider: 'dashscope' },
@@ -955,7 +1008,7 @@ function buildLocalModels() {
       { id: 'qiniu/glm-4-plus', name: 'glm-4-plus', provider: 'qiniu' }
     )
   }
-  return local
+  return local.map(m => ({ ...m, max_tokens: m.max_tokens || MODEL_TOKENS[m.id] || 0 }))
 }
 
 onMounted(async () => {
@@ -1017,13 +1070,14 @@ onMounted(async () => {
   }
   if (hasElectronKeychain) {
     const api = (window as any).electronAPI
-    const [openai, dashscope, siliconflow, deepseek, zhipu, moonshot, baidu, baiduSecret, openrouter, qiniuMaas, anthropic, pollinations, comfyCloud, deepl, googleTrans, azureTrans, azureTransRegion] = await Promise.all([
+    const [openai, dashscope, siliconflow, deepseek, zhipu, moonshot, googleAi, baidu, baiduSecret, openrouter, qiniuMaas, anthropic, pollinations, comfyCloud, deepl, googleTrans, azureTrans, azureTransRegion] = await Promise.all([
       api.getApiKey('openai'),
       api.getApiKey('dashscope'),
       api.getApiKey('siliconflow'),
       api.getApiKey('deepseek'),
       api.getApiKey('zhipu'),
       api.getApiKey('moonshot'),
+      api.getApiKey('google_ai'),
       api.getApiKey('baidu'),
       api.getApiKey('baidu_secret'),
       api.getApiKey('openrouter'),
@@ -1042,6 +1096,7 @@ onMounted(async () => {
     if (deepseek) deepseekKey.value = deepseek
     if (zhipu) zhipuKey.value = zhipu
     if (moonshot) moonshotKey.value = moonshot
+    if (googleAi) googleAiKey.value = googleAi
     if (baidu) baiduKey.value = baidu
     if (baiduSecret) baiduSecretKey.value = baiduSecret
     if (openrouter) openrouterKey.value = openrouter
@@ -1063,26 +1118,34 @@ onMounted(async () => {
   if (!llmModels.value.length) {
     llmModels.value = buildLocalModels()
   }
+  // 智能选择最佳默认模型（偏好大上下文、主流模型）
+  const PREFERRED_DEFAULTS = [
+    'deepseek-chat', 'gemini-2.5-flash', 'kimi-latest',
+    'glm-4-flash', 'qwen-turbo', 'moonshot-v1-8k',
+    'gpt-4o-mini',
+  ]
+  function pickBestModel(): LlmModel | undefined {
+    for (const pid of PREFERRED_DEFAULTS) {
+      const found = llmModels.value.find(m => m.id === pid)
+      if (found) return found
+    }
+    return llmModels.value[0]
+  }
+
   // 兼容旧版本遗留值：default 不是实际模型 ID
-  if (selectedDefaultModel.value === 'default') {
-    const preferred =
-      llmModels.value.find((m) => m.provider === 'openrouter') ||
-      llmModels.value.find((m) => m.provider === 'openai') ||
-      llmModels.value[0]
-    if (preferred?.id) {
-      selectedDefaultModel.value = preferred.id
-      settingsStore.setDefaultModel(preferred.id)
+  if (selectedDefaultModel.value === 'default' || !selectedDefaultModel.value) {
+    const best = pickBestModel()
+    if (best?.id) {
+      selectedDefaultModel.value = best.id
+      settingsStore.setDefaultModel(best.id)
     }
   }
   if (!llmModels.value.some((m) => m.id === selectedDefaultModel.value)) {
-    const fallback =
-      llmModels.value.find((m) => m.provider === 'openrouter') ||
-      llmModels.value.find((m) => m.provider === 'openai') ||
-      llmModels.value[0]
-    if (fallback?.id) {
-      selectedDefaultModel.value = fallback.id
-      settingsStore.setDefaultModel(fallback.id)
-    } else {
+    const best = pickBestModel()
+    if (best?.id) {
+      selectedDefaultModel.value = best.id
+      settingsStore.setDefaultModel(best.id)
+    } else if (selectedDefaultModel.value) {
       llmModels.value.unshift({
         id: selectedDefaultModel.value,
         name: selectedDefaultModel.value,
@@ -1223,6 +1286,7 @@ async function saveApiKeys() {
       { account: 'deepseek', label: 'DeepSeek API Key', value: deepseekKey.value.trim() },
       { account: 'zhipu', label: '智谱 API Key', value: zhipuKey.value.trim() },
       { account: 'moonshot', label: 'Moonshot API Key', value: moonshotKey.value.trim() },
+      { account: 'google_ai', label: 'Google AI API Key', value: googleAiKey.value.trim() },
       { account: 'baidu', label: '文心图像 API Key', value: baiduKey.value.trim() },
       { account: 'baidu_secret', label: '文心图像 Secret Key', value: baiduSecretKey.value.trim() },
       { account: 'openrouter', label: 'OpenRouter API Key', value: openrouterKey.value.trim() },
@@ -1336,7 +1400,20 @@ h2 { margin-bottom: 1rem; }
 .action-row { display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem; }
 .action-row :deep(.el-button + .el-button) { margin-left: 0; }
 .model-select-row { display: flex; align-items: center; gap: 0.5rem; }
-.model-hint { margin-left: 0.75rem; color: #6b7280; font-size: 0.85rem; }
+.model-hint { margin-left: 0.75rem; color: #6b7280; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.model-ctx-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.model-option-row { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+.model-option-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.model-option-tokens { flex-shrink: 0; margin-left: 12px; color: #8492a6; font-size: 12px; font-weight: 500; }
 .privacy-tip { margin-left: 0.5rem; cursor: help; }
 .api-key-form :deep(.el-form-item__label) { white-space: nowrap; }
 .api-group-title {
@@ -1399,6 +1476,12 @@ h2 { margin-bottom: 1rem; }
 
 <!-- 下拉挂载在 body，需非 scoped 样式 -->
 <style>
+.medcomm-model-dropdown {
+  min-width: 380px !important;
+}
+.medcomm-model-dropdown .el-select-dropdown__item {
+  padding-right: 16px;
+}
 .medcomm-image-provider-dropdown {
   min-width: 400px !important;
   max-width: min(96vw, 560px);

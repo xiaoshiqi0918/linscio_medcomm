@@ -3,7 +3,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from pydantic import BaseModel
 
 from app.core.database import AsyncSessionLocal, get_domain_lock
@@ -18,6 +18,15 @@ async def get_db():
         yield session
 
 
+_PLATFORM_DEFAULT_WORD_COUNT = {
+    "wechat": 1200,
+    "xiaohongshu": 800,
+    "douyin": 300,
+    "journal": 3000,
+    "offline": 2000,
+}
+
+
 class CreateArticleRequest(BaseModel):
     content_format: str = "article"
     topic: str = ""
@@ -27,6 +36,9 @@ class CreateArticleRequest(BaseModel):
     specialty: str = ""
     template_id: int | None = None
     default_model: str | None = None
+    target_word_count: int | None = None
+    skip_sections: list[str] = []
+    analysis_report: dict | None = None
 
 
 class UpdateArticleContentRequest(BaseModel):
@@ -82,6 +94,7 @@ async def create_article(
     """新建文章"""
     lock = get_domain_lock("articles")
     async with lock:
+        twc = req.target_word_count or _PLATFORM_DEFAULT_WORD_COUNT.get(req.platform, 1500)
         article = Article(
             user_id=1,
             topic=req.topic or "未命名",
@@ -92,6 +105,9 @@ async def create_article(
             specialty=req.specialty or "",
             reading_level=req.reading_level,
             default_model=req.default_model,
+            target_word_count=twc,
+            skip_sections=req.skip_sections or None,
+            analysis_report=req.analysis_report,
             status="draft",
             current_stage="outline",
         )
@@ -109,12 +125,13 @@ async def create_article(
             else:
                 section_type = str(st)
                 title = section_type
+            sec_status = "skipped" if section_type in (req.skip_sections or []) else "pending"
             sec = ArticleSection(
                 article_id=article.id,
                 section_type=section_type,
                 title=title,
                 order_num=i + 1,
-                status="pending",
+                status=sec_status,
             )
             db.add(sec)
             await db.flush()
@@ -173,6 +190,7 @@ async def export_article_route(
         load_article_sections,
         prepend_export_title_markdown,
         prepend_export_title_plain,
+        strip_markdown,
     )
     from app.services.export import html_docx
     from app.services.literature.citation_formatter import CitationFormatter
@@ -203,7 +221,7 @@ async def export_article_route(
                 p = papers.get(pid)
                 if not p:
                     continue
-                lines.append(f"[{i}] {CitationFormatter(p).format('apa')}")
+                lines.append(f"[{i}] {CitationFormatter(p).format('popular')}")
 
         ext_result = await db.execute(
             select(ArticleExternalReference)
@@ -213,50 +231,42 @@ async def export_article_route(
         ext_refs = ext_result.scalars().all()
         offset = len(lines)
         for j, r in enumerate(ext_refs, 1):
-            authors = ""
-            try:
-                arr = json.loads(r.authors) if isinstance(r.authors, str) else (r.authors or [])
-                names = [a.get("name", "") for a in (arr or []) if isinstance(a, dict)]
-                authors = "; ".join([n for n in names if n]) if names else ""
-            except Exception:
-                authors = ""
-            year = r.year or ""
-            journal = r.journal or ""
-            doi = (r.doi or "").strip()
-            tail = f" DOI:{doi}" if doi else ""
-            base = " · ".join([x for x in [authors, journal, str(year) if year else ""] if x])
-            lines.append(f"[{offset + j}] {r.title}{(' — ' + base) if base else ''}{tail}")
+            lines.append(f"[{offset + j}] {CitationFormatter.format_external_ref(r)}")
         if not lines:
             return ""
         return "\n\n## 参考文献\n\n" + "\n".join(lines)
 
     def _merged_export(article, parts, export_fmt: str, refs_text: str = "") -> tuple[bytes, str, str]:
-        """各章节合并后的通用导出（与 HtmlDocxExporter 主路径一致，绕过形式路由差异）"""
+        """各章节合并后的通用导出"""
         base_name = (article.topic or "article").replace("/", "-")
-        body = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in parts) + (refs_text or "")
-        full_text = body
-        if export_fmt == "html":
-            html = html_docx.to_html(article, full_text)
-            return html.encode("utf-8"), "text/html; charset=utf-8", f"{base_name}.html"
-        if export_fmt == "docx":
-            try:
-                docx_parts = [(p[0], p[1]) for p in parts]
-                if refs_text:
-                    docx_parts.append(("参考文献", refs_text.replace("## 参考文献", "").strip()))
-                buf, fn = html_docx.to_docx(article, docx_parts)
-                return buf, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fn
-            except Exception:
-                fallback_body = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in parts) + (refs_text or "")
-                txt = prepend_export_title_plain(article, fallback_body)
-                return txt.encode("utf-8"), "text/plain; charset=utf-8", f"{base_name}.txt"
+        md_body = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in parts) + (refs_text or "")
+
         if export_fmt == "md":
             asset_block = (
                 "\n\n---\n\n## 配图与资源说明\n\n"
                 "- 正文中的插图若在软件内为本地或 `medcomm-image` 链接，发布到公众号/知乎/小红书前请重新上传图片并替换为平台图片地址。\n"
             )
-            full_md = prepend_export_title_markdown(article, body) + asset_block
+            full_md = prepend_export_title_markdown(article, md_body) + asset_block
             return full_md.encode("utf-8"), "text/markdown; charset=utf-8", f"{base_name}.md"
-        txt = prepend_export_title_plain(article, body)
+
+        plain_body = "\n\n".join(f"{t}\n\n{strip_markdown(b)}" for t, b, _ in parts)
+        if refs_text:
+            plain_body += "\n\n" + strip_markdown(refs_text)
+
+        if export_fmt == "html":
+            html = html_docx.to_html(article, plain_body)
+            return html.encode("utf-8"), "text/html; charset=utf-8", f"{base_name}.html"
+        if export_fmt == "docx":
+            try:
+                docx_parts = [(p[0], strip_markdown(p[1])) for p in parts]
+                if refs_text:
+                    docx_parts.append(("参考文献", strip_markdown(refs_text)))
+                buf, fn = html_docx.to_docx(article, docx_parts)
+                return buf, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fn
+            except Exception:
+                txt = prepend_export_title_plain(article, plain_body)
+                return txt.encode("utf-8"), "text/plain; charset=utf-8", f"{base_name}.txt"
+        txt = prepend_export_title_plain(article, plain_body)
         return txt.encode("utf-8"), "text/plain; charset=utf-8", f"{base_name}.txt"
 
     normalized = (fmt or "html").strip().lower()
@@ -343,8 +353,40 @@ async def get_article(
     d["content_json"] = content_json or {"type": "doc", "content": []}
     d["verify_report"] = section_verify_report
     d["current_section_id"] = target_section.id if target_section else None
-    d["sections"] = [{"id": s.id, "section_type": s.section_type, "title": s.title, "order_num": s.order_num} for s in sections]
+    d["sections"] = [{"id": s.id, "section_type": s.section_type, "title": s.title, "order_num": s.order_num, "status": s.status or "pending"} for s in sections]
     return d
+
+
+@router.patch("/sections/{section_id}/skip")
+async def skip_section(section_id: int, db: AsyncSession = Depends(get_db)):
+    """将章节标记为跳过"""
+    sec = await db.get(ArticleSection, section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="Section not found")
+    sec.status = "skipped"
+    article = await db.get(Article, sec.article_id)
+    if article:
+        current = article.skip_sections or []
+        if sec.section_type not in current:
+            article.skip_sections = current + [sec.section_type]
+    await db.commit()
+    return {"ok": True, "status": "skipped"}
+
+
+@router.patch("/sections/{section_id}/unskip")
+async def unskip_section(section_id: int, db: AsyncSession = Depends(get_db)):
+    """恢复被跳过的章节"""
+    sec = await db.get(ArticleSection, section_id)
+    if not sec:
+        raise HTTPException(status_code=404, detail="Section not found")
+    sec.status = "pending"
+    article = await db.get(Article, sec.article_id)
+    if article and article.skip_sections:
+        article.skip_sections = [s for s in article.skip_sections if s != sec.section_type]
+        if not article.skip_sections:
+            article.skip_sections = None
+    await db.commit()
+    return {"ok": True, "status": "pending"}
 
 
 @router.post("/sections/{section_id}/save")
@@ -582,12 +624,11 @@ async def update_article_content(
 
 
 _ORAL_TIME_MAP = {
-    "hook": ("00:00", "00:03"),
-    "body_1": ("00:03", "00:15"),
-    "body_2": ("00:15", "00:30"),
-    "body_3": ("00:30", "00:45"),
-    "summary": ("00:45", "00:55"),
-    "cta": ("00:55", "01:00"),
+    "golden_hook": ("00:00", "00:05"),
+    "problem_setup": ("00:05", "00:20"),
+    "core_knowledge": ("00:20", "00:50"),
+    "practical_tips": ("00:50", "01:05"),
+    "closing_hook": ("00:55", "01:05"),
 }
 
 
@@ -604,51 +645,77 @@ def _build_format_meta(section, article) -> dict:
         try:
             idx = int(st.replace("panel_", ""))
             panel_types = [t for t in types_list if t.startswith("panel_")]
-            meta = {"panel_index": idx, "total_panels": len(panel_types) or 6}
+            meta = {"panel_index": idx, "total_panels": len(panel_types) or 12}
         except ValueError:
-            meta = {"panel_index": section.order_num or 1, "total_panels": 6}
-    elif cf == "oral_script" and not meta.get("start_time"):
-        start, end = _ORAL_TIME_MAP.get(st, ("00:00", "01:00"))
-        body_idx = None
-        if st.startswith("body_"):
+            meta = {"panel_index": section.order_num or 1, "total_panels": 12}
+    elif cf == "oral_script":
+        if st == "script_plan":
+            meta["script_role"] = "planner"
+        elif st == "extras":
+            meta["script_role"] = "extras"
+        else:
+            start, end = _ORAL_TIME_MAP.get(st, ("00:00", "01:00"))
+            meta["start_time"] = start
+            meta["end_time"] = end
+            meta["script_role"] = "content"
+    elif cf == "storyboard":
+        if st == "anim_plan":
+            meta["storyboard_role"] = "planner"
+        elif st == "char_design":
+            meta["storyboard_role"] = "char"
+        elif st.startswith("reel_"):
             try:
-                body_idx = int(st.replace("body_", ""))
+                reel_idx = int(st.replace("reel_", ""))
+                meta["reel_index"] = reel_idx
+                meta["total_reels"] = 5
             except ValueError:
-                body_idx = 1
-        meta["start_time"] = start
-        meta["end_time"] = end
-        if body_idx:
-            meta["segment_number"] = body_idx
-            meta["total_segments"] = sum(1 for t in types_list if t.startswith("body_")) or 3
-    elif cf == "storyboard" and st.startswith("frame_"):
-        if not meta.get("frame_index"):
+                meta["reel_index"] = 1
+                meta["total_reels"] = 5
+            meta["storyboard_role"] = "reel"
+        elif st == "prod_notes":
+            meta["storyboard_role"] = "prod"
+    elif cf == "drama_script":
+        if st == "drama_plan":
+            meta["drama_role"] = "planner"
+        elif st == "cast_table":
+            meta["drama_role"] = "cast"
+        elif st.startswith("act_"):
             try:
-                idx = int(st.replace("frame_", ""))
-                meta["frame_index"] = idx
-                meta["total_frames"] = len([t for t in types_list if t.startswith("frame_")]) or 6
-                meta["duration"] = "10s"
+                act_idx = int(st.replace("act_", ""))
+                meta["act_index"] = act_idx
+                meta["total_acts"] = 5
             except ValueError:
-                meta["frame_index"] = section.order_num or 1
-                meta["total_frames"] = 6
-    elif cf == "drama_script" and (st.startswith("scene_") or st == "ending"):
-        if not meta.get("scene_index"):
-            meta["scene_index"] = 4 if st == "ending" else (int(st.replace("scene_", "")) if st.replace("scene_", "").isdigit() else 1)
+                meta["act_index"] = 1
+                meta["total_acts"] = 5
+            meta["drama_role"] = "act"
+        elif st == "finale":
+            meta["drama_role"] = "finale"
+        elif st == "filming_notes":
+            meta["drama_role"] = "filming"
     elif cf == "audio_script" and not meta.get("duration_sec"):
         # 默认每段约 2-3 分钟
         meta["duration_sec"] = 150
         meta["start_time"] = 0
         meta["end_time"] = 2.5
-    elif cf == "card_series" and st.startswith("card_"):
-        if not meta.get("card_index"):
-            try:
-                idx = int(st.replace("card_", ""))
-                card_types = [t for t in types_list if t.startswith("card_")]
-                meta["card_index"] = idx
-                meta["total_cards"] = len(card_types) or 5
-                meta.setdefault("color_scheme", "blue")
-            except ValueError:
-                meta["card_index"] = section.order_num or 1
-                meta["total_cards"] = 5
+    elif cf == "card_series":
+        content_card_types = [t for t in types_list if t.startswith("card_")]
+        total_visible = len(content_card_types) + 2  # cover + content cards + ending
+        meta.setdefault("total_cards", total_visible)
+        meta.setdefault("color_scheme", "blue")
+        if st.startswith("card_"):
+            if not meta.get("card_index"):
+                try:
+                    idx = int(st.replace("card_", ""))
+                    meta["card_index"] = idx
+                except ValueError:
+                    meta["card_index"] = section.order_num or 1
+            meta["card_role"] = "content"
+        elif st == "cover_card":
+            meta["card_role"] = "cover"
+        elif st == "ending_card":
+            meta["card_role"] = "ending"
+        elif st == "series_plan":
+            meta["card_role"] = "planner"
     elif cf == "quiz_article" and st.startswith("q_"):
         if not meta.get("question_index"):
             try:
@@ -667,18 +734,28 @@ def _build_format_meta(section, article) -> dict:
             except ValueError:
                 meta["page_index"] = 1
     elif cf == "picture_book":
-        if st == "planner":
-            pass  # planner 不需 format_meta
-        elif st.startswith("page_"):
-            if not meta.get("page_index"):
-                try:
-                    idx = int(st.replace("page_", ""))
-                    page_types = [t for t in types_list if t.startswith("page_")]
-                    meta["page_index"] = idx
-                    meta["total_pages"] = len(page_types) or 5
-                except ValueError:
-                    meta["page_index"] = section.order_num or 1
-                    meta["total_pages"] = 5
+        if st == "book_plan":
+            pass
+        elif st.startswith("spread_"):
+            try:
+                idx = int(st.replace("spread_", ""))
+                meta["spread_index"] = idx
+                spread_types = [t for t in types_list if t.startswith("spread_")]
+                meta["total_spreads"] = len(spread_types) or 7
+            except ValueError:
+                meta["spread_index"] = section.order_num or 1
+                meta["total_spreads"] = 7
+        elif st in ("cover", "back_cover"):
+            meta["page_role"] = st
+    elif cf == "poster":
+        meta["poster_section"] = st
+    elif cf == "long_image":
+        if st.startswith("core_"):
+            try:
+                idx = int(st.replace("core_", ""))
+                meta["block_index"] = idx
+            except ValueError:
+                meta["block_index"] = 1
 
     return meta
 
@@ -757,7 +834,10 @@ async def _get_section_text(db: AsyncSession, article_id: int, section_type: str
 
 
 async def _get_scene_setup_context(db: AsyncSession, article_id: int, platform: str) -> str:
-    return await _get_section_text(db, article_id, "scene_setup", platform)
+    text = await _get_section_text(db, article_id, "scene_setup", platform)
+    if not text:
+        text = await _get_section_text(db, article_id, "cast_table", platform)
+    return text
 
 
 async def _get_prior_sections_context(db: AsyncSession, article_id: int, content_format: str, section_type: str, platform: str) -> str:
@@ -802,12 +882,13 @@ async def _get_prior_sections_context(db: AsyncSession, article_id: int, content
     return "\n\n".join(parts) if parts else ""
 
 
-_PLANNER_FORMATS = {"storyboard", "comic_strip", "picture_book", "long_image"}
+_PLANNER_FORMATS = {"storyboard", "comic_strip", "picture_book", "long_image", "card_series", "poster", "oral_script", "drama_script", "patient_handbook"}
+_PLANNER_SECTION_TYPE = {"card_series": "series_plan", "poster": "poster_brief", "picture_book": "book_plan", "long_image": "image_plan", "oral_script": "script_plan", "drama_script": "drama_plan", "storyboard": "anim_plan", "patient_handbook": "handbook_plan"}
 
 
-async def _get_planner_context(db: AsyncSession, article_id: int, platform: str) -> dict:
+async def _get_planner_context(db: AsyncSession, article_id: int, platform: str, planner_section_type: str = "planner") -> dict:
     """读取 planner 章节的 JSON 内容，解析为 dict 供 format_meta 合并"""
-    text = await _get_section_text(db, article_id, "planner", platform)
+    text = await _get_section_text(db, article_id, planner_section_type, platform)
     if not text:
         return {}
     try:
@@ -840,19 +921,24 @@ async def generate_section_full(
     pf = article.platform or "wechat"
 
     scene_setup_context = ""
-    if cf == "drama_script" and (st.startswith("scene_") or st == "ending"):
+    if cf == "drama_script" and st not in ("drama_plan", "cast_table"):
         scene_setup_context = await _get_scene_setup_context(db, article.id, pf)
+    elif cf == "storyboard" and st not in ("anim_plan", "char_design"):
+        scene_setup_context = await _get_section_text(db, article.id, "char_design", pf)
 
-    if cf in _PLANNER_FORMATS and st != "planner":
-        planner_data = await _get_planner_context(db, article.id, pf)
+    planner_st = _PLANNER_SECTION_TYPE.get(cf, "planner")
+    if cf in _PLANNER_FORMATS and st != planner_st:
+        planner_data = await _get_planner_context(db, article.id, pf, planner_st)
         if planner_data:
             format_meta.setdefault("planner_json", planner_data)
             for key in ("story_arc", "story_type", "total_panels", "total_pages",
                         "total_sections", "main_character", "core_message",
-                        "story_title", "color_theme", "layout_style", "story_line"):
+                        "story_title", "color_theme", "layout_style", "story_line",
+                        "series_theme", "visual_style", "total_cards"):
                 if key in planner_data and key not in format_meta:
                     format_meta[key] = planner_data[key]
-            panels_or_pages = planner_data.get("panels") or planner_data.get("pages") or planner_data.get("sections") or []
+            panels_or_pages = (planner_data.get("panels") or planner_data.get("pages")
+                               or planner_data.get("sections") or planner_data.get("cards") or [])
             format_meta.setdefault("planner_items", panels_or_pages)
 
     prior_sections_context = await _get_prior_sections_context(db, article.id, cf, st, pf)
@@ -873,6 +959,8 @@ async def generate_section_full(
         "scene_setup_context": scene_setup_context,
         "prior_sections_context": prior_sections_context,
         "user_id": getattr(article, "user_id", None) or 1,
+        "target_word_count": getattr(article, "target_word_count", None),
+        "skip_sections": getattr(article, "skip_sections", None),
     }
     try:
         final = await run_medcomm_graph(initial_state)
@@ -912,19 +1000,24 @@ async def generate_section(
 
     format_meta = _build_format_meta(section, article)
     scene_setup_context = ""
-    if cf == "drama_script" and (st.startswith("scene_") or st == "ending"):
+    if cf == "drama_script" and st not in ("drama_plan", "cast_table"):
         scene_setup_context = await _get_scene_setup_context(db, article.id, pf)
+    elif cf == "storyboard" and st not in ("anim_plan", "char_design"):
+        scene_setup_context = await _get_section_text(db, article.id, "char_design", pf)
 
-    if cf in _PLANNER_FORMATS and st != "planner":
-        planner_data = await _get_planner_context(db, article.id, pf)
+    planner_st = _PLANNER_SECTION_TYPE.get(cf, "planner")
+    if cf in _PLANNER_FORMATS and st != planner_st:
+        planner_data = await _get_planner_context(db, article.id, pf, planner_st)
         if planner_data:
             format_meta.setdefault("planner_json", planner_data)
             for key in ("story_arc", "story_type", "total_panels", "total_pages",
                         "total_sections", "main_character", "core_message",
-                        "story_title", "color_theme", "layout_style", "story_line"):
+                        "story_title", "color_theme", "layout_style", "story_line",
+                        "series_theme", "visual_style", "total_cards"):
                 if key in planner_data and key not in format_meta:
                     format_meta[key] = planner_data[key]
-            panels_or_pages = planner_data.get("panels") or planner_data.get("pages") or planner_data.get("sections") or []
+            panels_or_pages = (planner_data.get("panels") or planner_data.get("pages")
+                               or planner_data.get("sections") or planner_data.get("cards") or [])
             format_meta.setdefault("planner_items", panels_or_pages)
 
     async def event_stream():
@@ -941,6 +1034,8 @@ async def generate_section(
             article_default_model=article.default_model,
             format_meta=format_meta,
             scene_setup_context=scene_setup_context,
+            target_word_count=getattr(article, "target_word_count", None),
+            skip_sections=getattr(article, "skip_sections", None),
         ):
             if evt.get("type") == "verify_report" and evt.get("report") is not None:
                 last_verify_report = evt["report"]
@@ -962,6 +1057,13 @@ async def generate_section(
                             platform=article.platform or "wechat",
                             verify_report=last_verify_report,
                         )
+                        sug_list = evt.get("image_suggestions")
+                        if sug_list:
+                            await sess.execute(
+                                update(ArticleSection)
+                                .where(ArticleSection.id == s_id)
+                                .values(image_suggestions=sug_list)
+                            )
                         await sess.commit()
             yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
@@ -979,6 +1081,108 @@ async def generate_section(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/sections/{section_id}/recheck")
+async def recheck_section(
+    section_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """对已有内容补跑 AI 味检测 + 共识缺失检测 + 溯源统计，更新 verify_report"""
+    from app.services.verification.pipeline import (
+        detect_ai_patterns,
+        extract_provenance_summary,
+        detect_uncited_medical_facts,
+    )
+
+    sec_result = await db.execute(
+        select(ArticleSection, Article)
+        .join(Article, ArticleSection.article_id == Article.id)
+        .where(ArticleSection.id == section_id)
+    )
+    row = sec_result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Section not found")
+    section, article = row
+
+    platform = article.platform or "wechat"
+    cont_result = await db.execute(
+        select(ArticleContent).where(
+            ArticleContent.section_id == section_id,
+            ArticleContent.is_current == True,
+        )
+    )
+    candidates = cont_result.scalars().all()
+    content_row = (
+        next((c for c in candidates if c.platform == platform), None)
+        or next((c for c in candidates if c.platform is None), candidates[0] if candidates else None)
+    )
+    if not content_row or not content_row.content_json:
+        raise HTTPException(status_code=404, detail="No content to check")
+
+    doc = json.loads(content_row.content_json)
+
+    _BLOCK_TYPES = {"paragraph", "heading", "blockquote", "listItem", "codeBlock"}
+
+    def _extract_text(node):
+        if isinstance(node, str):
+            return node
+        if isinstance(node, list):
+            return "".join(_extract_text(x) for x in node)
+        if isinstance(node, dict):
+            if node.get("type") == "text":
+                return node.get("text", "")
+            parts = "".join(_extract_text(x) for x in node.get("content", []))
+            if node.get("type") in _BLOCK_TYPES:
+                return parts + "\n\n"
+            return parts
+        return ""
+
+    plain_text = _extract_text(doc).strip()
+    if not plain_text:
+        raise HTTPException(status_code=404, detail="Content is empty")
+
+    ai_patterns = detect_ai_patterns(plain_text)
+    provenance = extract_provenance_summary(plain_text)
+    uncited_facts = detect_uncited_medical_facts(plain_text)
+
+    report = content_row.verify_report or {}
+    report["ai_patterns"] = ai_patterns
+    report["provenance"] = provenance
+    report["uncited_facts"] = uncited_facts
+
+    lock = get_domain_lock("articles")
+    async with lock:
+        content_row.verify_report = report
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(content_row, "verify_report")
+        await db.commit()
+
+    return {"ok": True, "verify_report": report}
+
+
+@router.post("/articles/batch-delete")
+async def batch_delete_articles(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量软删除"""
+    from datetime import datetime
+
+    ids = data.get("ids", [])
+    if not ids:
+        return {"ok": True, "deleted": 0}
+    now = datetime.utcnow()
+    lock = get_domain_lock("articles")
+    async with lock:
+        result = await db.execute(
+            select(Article).where(Article.id.in_(ids), Article.deleted_at.is_(None))
+        )
+        articles = result.scalars().all()
+        for a in articles:
+            a.deleted_at = now
+        await db.commit()
+    return {"ok": True, "deleted": len(articles)}
 
 
 @router.delete("/articles/{article_id}")
@@ -1012,9 +1216,101 @@ def article_to_dict(a: Article) -> dict:
         "status": a.status,
         "current_stage": a.current_stage,
         "image_stage": a.image_stage,
+        "target_word_count": a.target_word_count,
+        "skip_sections": a.skip_sections or [],
         "word_count": a.word_count,
         "visual_continuity_prompt": a.visual_continuity_prompt or "",
         "image_series_seed_base": a.image_series_seed_base,
+        "analysis_report": a.analysis_report,
         "created_at": a.created_at.isoformat() if a.created_at else None,
         "updated_at": a.updated_at.isoformat() if a.updated_at else None,
     }
+
+
+# ── AI 辅助写作 ──────────────────────────────────────────────────
+
+
+class AiAssistRequest(BaseModel):
+    selected_text: str
+    action: str  # continue | polish | rewrite | simplify | expand | custom
+    context_before: str = ""
+    context_after: str = ""
+    custom_instruction: str = ""
+    article_id: int | None = None
+
+
+_AI_ASSIST_PROMPTS: dict[str, str] = {
+    "continue": (
+        "你是专业的医学科普写作助手。请根据已有内容自然续写，保持风格一致、逻辑连贯。\n\n"
+        "【上文】\n{context_before}\n\n【当前段落】\n{selected_text}\n\n"
+        "请直接续写，不要输出额外说明。"
+    ),
+    "polish": (
+        "你是专业的中文润色助手。请对以下文本进行润色，使语言更流畅、专业、易读。"
+        "保持原意不变，不增删核心信息。\n\n【原文】\n{selected_text}\n\n"
+        "请直接输出润色后的文本，不要输出额外说明。"
+    ),
+    "rewrite": (
+        "你是专业的改写助手。请用不同的表达方式改写以下文本，保持核心含义不变。\n\n"
+        "【原文】\n{selected_text}\n\n请直接输出改写后的文本，不要输出额外说明。"
+    ),
+    "simplify": (
+        "你是科普通俗化助手。请将以下专业内容改写为普通读者也能轻松理解的通俗表述。\n\n"
+        "【原文】\n{selected_text}\n\n请直接输出通俗化后的文本，不要输出额外说明。"
+    ),
+    "expand": (
+        "你是专业的医学科普写作助手。请将以下内容扩展，补充更多细节、解释或例子，使读者更容易理解。\n\n"
+        "【上文】\n{context_before}\n\n【待扩展段落】\n{selected_text}\n\n"
+        "请直接输出扩展后的文本，不要输出额外说明。"
+    ),
+}
+
+
+@router.post("/ai-assist")
+async def ai_assist_stream(req: AiAssistRequest):
+    """AI 辅助写作：续写 / 润色 / 改写 / 精简 / 扩展，SSE 流式返回"""
+    import logging
+    _log = logging.getLogger(__name__)
+
+    if not req.selected_text.strip():
+        raise HTTPException(status_code=400, detail="未提供选中文本")
+
+    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.manager import TaskTier
+
+    if req.action == "custom":
+        if not req.custom_instruction.strip():
+            raise HTTPException(status_code=400, detail="自定义指令不能为空")
+        prompt = (
+            f"你是专业的医学科普写作助手。请按以下要求处理文本：\n{req.custom_instruction}\n\n"
+            f"【原文】\n{req.selected_text}\n\n请直接输出结果，不要输出额外说明。"
+        )
+    else:
+        tpl = _AI_ASSIST_PROMPTS.get(req.action)
+        if not tpl:
+            raise HTTPException(status_code=400, detail=f"不支持的操作类型: {req.action}")
+        prompt = tpl.format(
+            selected_text=req.selected_text[:3000],
+            context_before=(req.context_before or "")[-1500:],
+            context_after=(req.context_after or "")[:500],
+        )
+
+    async def _stream():
+        try:
+            gen = await chat_completion(
+                messages=[{"role": "user", "content": prompt}],
+                stream=True,
+                task=TaskTier.BALANCED,
+            )
+            async for chunk in gen:
+                yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except Exception as exc:
+            _log.warning("ai-assist stream error: %s", exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

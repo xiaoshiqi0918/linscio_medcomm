@@ -1,5 +1,5 @@
 /**
- * 启动自检：系统环境、Python、依赖、ComfyUI 健康检查
+ * 启动自检：系统环境、Python、依赖
  *
  * 返回结构化结果，由主进程决定如何展示（弹窗 / 渲染进程通知）。
  */
@@ -10,15 +10,13 @@ const { spawnSync } = require('child_process')
 const { app } = require('electron')
 
 const pythonResolver = require('./python-resolver')
-const comfyManager = require('./comfyui-manager')
+const { windowsPythonStderrCategory, windowsExitCodeCategory } = require('./python-env-hints')
 
 const ErrorCodes = {
   OS_UNSUPPORTED: 'OS_UNSUPPORTED',
   ARCH_MISMATCH: 'ARCH_MISMATCH',
   PYTHON_MISSING: 'PYTHON_MISSING',
   PYTHON_DEPS_MISSING: 'PYTHON_DEPS_MISSING',
-  COMFY_NOT_INSTALLED: 'COMFY_NOT_INSTALLED',
-  COMFY_DEPS_MISSING: 'COMFY_DEPS_MISSING',
   VCREDIST_MISSING: 'VCREDIST_MISSING',
 }
 
@@ -66,8 +64,8 @@ function checkArch() {
   }
   if (platform === 'darwin' && arch === 'x64') {
     return checkResult(true, null,
-      'Mac Intel (x64) — 部分功能处于有限支持阶段，ComfyUI 绘图功能暂不可用',
-      '如需完整绘图功能，建议使用 Apple Silicon Mac 或 Windows')
+      'Mac Intel (x64) — 部分功能处于有限支持阶段',
+      '建议使用 Apple Silicon Mac 或 Windows')
   }
   if (platform === 'win32' && arch !== 'x64') {
     return checkResult(false, ErrorCodes.ARCH_MISMATCH,
@@ -89,12 +87,31 @@ function checkPython() {
       '请重新安装应用')
   }
 
-  const r = spawnSync(pythonPath, ['--version'], { timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] })
+  const pyTimeout = process.platform === 'win32' ? 60000 : 10000
+  const r = spawnSync(pythonPath, ['--version'], { timeout: pyTimeout, stdio: ['ignore', 'pipe', 'pipe'] })
   if (r.error || r.status !== 0) {
-    const hint = process.platform === 'win32'
-      ? '可能缺少 Visual C++ 运行时库，请安装 Microsoft Visual C++ Redistributable 后重试'
-      : '请重新安装应用'
-    return checkResult(false, ErrorCodes.PYTHON_MISSING,
+    let hint
+    let code = ErrorCodes.PYTHON_MISSING
+    if (r.error?.code === 'ETIMEDOUT') {
+      code = 'PYTHON_SPAWN_TIMEOUT'
+      hint = '启动超时：常见于杀毒首次扫描内置 Python，请将应用安装目录加入排除后重试，或稍后再打开应用'
+    } else if (process.platform === 'win32') {
+      const stderr = r.stderr?.toString().trim() || ''
+      const { category: sCat, extraHint: sHint } = windowsPythonStderrCategory(stderr)
+      const { category: eCat, extraHint: eHint } = windowsExitCodeCategory(r.status)
+      if (sCat === 'vcredist') {
+        hint = sHint
+        code = ErrorCodes.VCREDIST_MISSING
+      } else if (eCat === 'vcredist' || eCat === 'vcredist_likely') {
+        hint = eHint
+        code = ErrorCodes.VCREDIST_MISSING
+      } else {
+        hint = '若持续失败，请优先将安装目录加入杀毒软件排除项再重试；仍不行可安装/修复 VC++ 2015-2022 x64'
+      }
+    } else {
+      hint = '请重新安装应用'
+    }
+    return checkResult(false, code,
       `Python 无法启动：${r.error?.message || `exit ${r.status}`}`,
       hint)
   }
@@ -110,29 +127,38 @@ function checkPythonDeps() {
 
   const pythonPath = pythonResolver.resolvePythonPath(app)
   const coreModules = 'alembic, uvicorn, fastapi, sqlalchemy, greenlet, pydantic, httpx, openai'
+  const depTimeout = process.platform === 'win32' ? 90000 : 15000
   const r = spawnSync(pythonPath, ['-c', `import ${coreModules}`], {
-    timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: depTimeout, stdio: ['ignore', 'pipe', 'pipe'],
   })
 
   if (r.error || r.status !== 0) {
     const stderr = r.stderr?.toString().trim() || ''
+    if (r.error?.code === 'ETIMEDOUT') {
+      return checkResult(false, ErrorCodes.PYTHON_DEPS_MISSING,
+        `导入依赖超时（${Math.round(depTimeout / 1000)}s）`,
+        '杀毒扫描可能导致过慢，请将安装目录加入排除后重试')
+    }
+    if (process.platform === 'win32') {
+      const { category: sCat, extraHint: sHint } = windowsPythonStderrCategory(stderr)
+      if (sCat === 'vcredist') {
+        return checkResult(false, ErrorCodes.VCREDIST_MISSING,
+          `运行库/依赖加载失败：${stderr.slice(0, 400) || r.error?.message || `exit ${r.status}`}`,
+          sHint || '请安装或修复 VC++ 2015-2022 x64')
+      }
+      const { category: eCat, extraHint: eHint } = windowsExitCodeCategory(r.status)
+      if (eCat === 'vcredist' || eCat === 'vcredist_likely') {
+        return checkResult(false, ErrorCodes.VCREDIST_MISSING,
+          `运行库/依赖加载失败：exit ${r.status}`,
+          eHint || '请安装或修复 VC++ 2015-2022 x64')
+      }
+    }
     return checkResult(false, ErrorCodes.PYTHON_DEPS_MISSING,
       `核心依赖缺失：${stderr || r.error?.message || `exit ${r.status}`}`,
       '请重新安装应用或联系支持')
   }
 
   return checkResult(true, null, '核心 Python 依赖就绪')
-}
-
-function checkComfyUI() {
-  const status = comfyManager.getStatus()
-  if (!status.available && !status.bundleInstalled) {
-    return checkResult(false, ErrorCodes.COMFY_NOT_INSTALLED,
-      'ComfyUI 基础包未安装',
-      '前往 MedPic 页面下载基础绘图组件包')
-  }
-  return checkResult(true, null,
-    `ComfyUI 就绪（版本 ${status.bundleVersion || '内置'}，目录 ${status.dir || '无'}）`)
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +171,6 @@ function runAllChecks() {
     arch: checkArch(),
     python: checkPython(),
     pythonDeps: checkPythonDeps(),
-    comfyui: checkComfyUI(),
   }
 
   const failures = Object.entries(results)
@@ -168,6 +193,5 @@ module.exports = {
   checkArch,
   checkPython,
   checkPythonDeps,
-  checkComfyUI,
   ErrorCodes,
 }

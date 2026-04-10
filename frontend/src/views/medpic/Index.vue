@@ -719,9 +719,12 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, reactive, toRaw } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
 import { useMedcommLicenseStore } from '@/stores/medcommLicense'
+
+const route = useRoute()
 
 const licenseStore = useMedcommLicenseStore()
 
@@ -791,7 +794,9 @@ async function startBundleInstall() {
   if (!eApi?.installComfyUIBundle) return
 
   const bundleUpdates = licenseStore.softwareUpdate?.bundle_updates || []
-  const comfyBundle = bundleUpdates.find((b: any) => b.bundle_id === 'comfyui-basic')
+  const comfyBundle = bundleUpdates.find(
+    (b: any) => b.bundle_id === 'comfyui-basic' || b.id === 'comfyui-basic',
+  )
 
   if (!comfyBundle?.download_url) {
     bundleError.value = '未获取到组件包下载地址，请检查网络后重启应用重试'
@@ -808,7 +813,7 @@ async function startBundleInstall() {
   const result = await eApi.installComfyUIBundle({
     download_url: comfyBundle.download_url,
     version: comfyBundle.latest_version || '0.3.10',
-    platform: comfyBundle.platform || (eApi.platform === 'darwin' ? 'mac-arm64' : 'win-x64'),
+    platform: comfyBundle.platform || (eApi.platform === 'darwin' ? (eApi.arch === 'arm64' ? 'mac-arm64' : 'mac-x64') : 'win-x64'),
     size_bytes: comfyBundle.size_bytes || 0,
     sha256: comfyBundle.sha256 || '',
   })
@@ -852,6 +857,16 @@ onMounted(async () => {
       bundleDismissed.value = true
     }
   } catch { /* noop */ }
+
+  const qPrompt = String(route.query.prompt || '').trim()
+  const qStyle = String(route.query.style || '').trim()
+  if (qPrompt) {
+    form.value.topic = qPrompt
+    step.value = 'generate'
+  }
+  if (qStyle && ['medical_illustration', 'flat_design', '3d_render', 'cartoon', 'realistic', 'data_viz'].includes(qStyle)) {
+    form.value.style = qStyle
+  }
 
   loadLoraRegistry()
   loadPresetCharacters()
@@ -1324,6 +1339,7 @@ async function generateSegmented() {
         specialty: form.value.specialty,
         target_audience: form.value.targetAudience,
         image_type: selectedScene.value?.id,
+        preferred_provider: comfyStatus.running ? 'comfyui_local' : 'auto',
         comfy_workflow_path: pp.workflow_path,
         loras: segLorasForComfy,
       })
@@ -1429,6 +1445,18 @@ async function generate() {
 
     const lorasForComfy = pp.loras?.map(l => [l.filename, l.strength]) ?? []
 
+    const STRUCTURED_TYPES = new Set(['comparison', 'infographic', 'flowchart', 'data_viz'])
+    const sceneId = selectedScene.value?.id || ''
+    const isStructured = STRUCTURED_TYPES.has(sceneId)
+    let effectiveProvider = comfyStatus.running ? 'comfyui_local' : 'auto'
+    if (isStructured && comfyStatus.running) {
+      effectiveProvider = 'auto'
+      ElMessage.info({
+        message: '对比图/信息图/流程图类型已自动切换到 API 生成（DALL·E 3 等），效果更佳',
+        duration: 5000,
+      })
+    }
+
     const res = await api.imagegen.generate({
       prompt: form.value.topic,
       user_positive_prompt: pp.positive_prompt,
@@ -1443,13 +1471,21 @@ async function generate() {
       sampler_name: pp.sampler_name,
       specialty: form.value.specialty,
       target_audience: form.value.targetAudience,
-      image_type: selectedScene.value?.id,
-      preferred_provider: comfyStatus.running ? 'comfyui_local' : undefined,
+      image_type: sceneId,
+      preferred_provider: effectiveProvider,
       comfy_workflow_path: pp.workflow_path,
       loras: lorasForComfy,
     })
 
     const urls: string[] = res.data?.urls || []
+    if (res.data?.is_fallback && res.data?.provider) {
+      const providerNames: Record<string, string> = {
+        openai: 'DALL·E 3', wanx: '通义万相', siliconflow: '硅基流动',
+        wenxin: '文心一格', pollinations: 'Pollinations',
+      }
+      const name = providerNames[res.data.provider] || res.data.provider
+      ElMessage.info({ message: `ComfyUI 不可用，已自动切换到 ${name} 生成`, duration: 4000 })
+    }
     if (urls.length) {
       let items = urls.map(u => {
         const rel = u.startsWith('medcomm-image://') ? u.slice('medcomm-image://'.length) : u

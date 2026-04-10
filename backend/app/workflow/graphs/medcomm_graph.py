@@ -39,7 +39,7 @@ def _route_after_format(s: MedCommSectionState) -> str:
 def _route_after_quality_check(s: MedCommSectionState) -> str:
     n = s.get("next", "verify_medical_claims")
     if n == "regenerate":
-        return "generate_new" if s.get("generate_mode") == "new" else "generate_continue"
+        return "regenerate_new" if s.get("generate_mode") == "new" else "regenerate_continue"
     return n
 
 

@@ -19,9 +19,12 @@ class Article(Base):
     current_stage = Column(String(20))
     image_stage = Column(String(20), default="pending")
     default_model = Column(String(50))
+    target_word_count = Column(Integer, nullable=True)
     word_count = Column(Integer, default=0)
     visual_continuity_prompt = Column(Text, nullable=True)
     image_series_seed_base = Column(Integer, nullable=True)
+    skip_sections = Column(JSON, nullable=True)
+    analysis_report = Column(JSON, nullable=True)
     deleted_at = Column(DateTime, nullable=True)  # 软删除
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
@@ -37,6 +40,7 @@ class ArticleSection(Base):
     order_num = Column(Integer, default=0)
     status = Column(String(20), default="pending")
     format_meta = Column(JSON)
+    image_suggestions = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

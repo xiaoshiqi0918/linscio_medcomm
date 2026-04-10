@@ -1063,6 +1063,7 @@ async def save_search_result(
                         url=item.url or "",
                         abstract=item.abstract or "",
                         keywords=json.dumps([], ensure_ascii=False),
+                        open_access_url=item.open_access_url or "",
                         collection_id=req.collection_id,
                         import_source=f"search_{item.source}",
                         read_status="unread",
@@ -1454,6 +1455,7 @@ def _paper_response(p: LiteraturePaper) -> dict:
         "pdf_path": p.pdf_path,
         "pdf_indexed": p.pdf_indexed,
         "fulltext_status": getattr(p, "fulltext_status", None) or "pending",
+        "open_access_url": getattr(p, "open_access_url", None) or "",
         "read_status": p.read_status,
         "collection_id": p.collection_id,
         "created_at": str(p.created_at) if p.created_at else None,
@@ -1829,6 +1831,49 @@ async def trigger_resolve_fulltext(
         raise HTTPException(status_code=404, detail="文献不存在")
     background_tasks.add_task(resolve_fulltext_for_paper, paper_id)
     return {"paper_id": paper_id, "status": "queued"}
+
+
+@router.post("/papers/batch-resolve-fulltext")
+async def batch_resolve_fulltext(
+    background_tasks: BackgroundTasks,
+    collection_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """批量获取全文：对所有 fulltext_status != 'full' 的未删除文献排队全文解析。"""
+    stmt = select(LiteraturePaper.id).where(
+        LiteraturePaper.deleted_at.is_(None),
+        LiteraturePaper.fulltext_status != "full",
+    )
+    if collection_id:
+        stmt = stmt.where(LiteraturePaper.collection_id == collection_id)
+    result = await db.execute(stmt)
+    paper_ids = [row[0] for row in result.all()]
+    for pid in paper_ids:
+        background_tasks.add_task(resolve_fulltext_for_paper, pid)
+    return {"queued": len(paper_ids), "paper_ids": paper_ids}
+
+
+@router.delete("/papers/no-fulltext")
+async def delete_no_fulltext_papers(
+    collection_id: int | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """一键删除（软删除）所有 fulltext_status == 'no_fulltext' 的文献。"""
+    stmt = select(LiteraturePaper).where(
+        LiteraturePaper.deleted_at.is_(None),
+        LiteraturePaper.fulltext_status == "no_fulltext",
+    )
+    if collection_id:
+        stmt = stmt.where(LiteraturePaper.collection_id == collection_id)
+    result = await db.execute(stmt)
+    papers = result.scalars().all()
+    now = datetime.utcnow()
+    for p in papers:
+        p.deleted_at = now
+        p.deleted_at_ts = int(now.timestamp())
+        p.updated_at = now
+    await db.commit()
+    return {"deleted": len(papers), "paper_ids": [p.id for p in papers]}
 
 
 @router.get(
@@ -2505,10 +2550,20 @@ async def list_article_bindings(
     if scope == "article":
         stmt = stmt.where(ArticleLiteratureBinding.section_id.is_(None))
     elif section_id is not None:
-        stmt = stmt.where(ArticleLiteratureBinding.section_id == section_id)
+        stmt = stmt.where(
+            (ArticleLiteratureBinding.section_id == section_id)
+            | (ArticleLiteratureBinding.section_id.is_(None))
+        )
     stmt = stmt.order_by(ArticleLiteratureBinding.priority.asc(), ArticleLiteratureBinding.id.asc())
     result = await db.execute(stmt)
     rows = result.fetchall()
+    def _parse_authors(raw):
+        try:
+            arr = json.loads(raw) if isinstance(raw, str) else (raw or [])
+            return [a.get("name", "") for a in arr if isinstance(a, dict) and a.get("name")]
+        except Exception:
+            return []
+
     return {
         "items": [
             {
@@ -2518,8 +2573,14 @@ async def list_article_bindings(
                 "paper_id": p.id,
                 "priority": b.priority,
                 "title": p.title,
-                "doi": p.doi,
+                "authors": _parse_authors(p.authors),
+                "journal": p.journal or "",
                 "year": p.year,
+                "volume": p.volume or "",
+                "issue": p.issue or "",
+                "pages": p.pages or "",
+                "doi": p.doi,
+                "url": p.url or "",
             }
             for b, p in rows
         ]
@@ -2743,3 +2804,22 @@ async def list_paper_bindings(
             for b, a, s in rows
         ]
     }
+
+
+# --- 文献分析智能体 ---
+
+class AnalyzeLiteratureRequest(BaseModel):
+    paper_ids: list[int] = Field(..., min_length=1)
+    topic_hint: str = ""
+
+
+@router.post("/analyze")
+async def analyze_literature(req: AnalyzeLiteratureRequest):
+    """SSE 流式文献分析：通读选定文献并生成结构化分析报告"""
+    from app.services.literature.analyzer import analyze_literature_stream
+
+    async def _gen():
+        async for evt in analyze_literature_stream(req.paper_ids, req.topic_hint):
+            yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")

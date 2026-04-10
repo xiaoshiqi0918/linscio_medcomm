@@ -219,9 +219,10 @@ async def generate_images_node(state: ImageGenState) -> ImageGenState:
             "urls": urls,
             "is_fallback": is_fallback,
             "used_seeds": used if isinstance(used, list) else [],
+            "gen_meta": meta if isinstance(meta, dict) else {},
         }
     except Exception as e:
-        return {**state, "error": str(e), "urls": [], "used_seeds": []}
+        return {**state, "error": str(e), "urls": [], "used_seeds": [], "gen_meta": {}}
 
 
 def postprocess_node(state: ImageGenState) -> ImageGenState:

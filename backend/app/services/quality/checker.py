@@ -192,7 +192,7 @@ def run_auto_quality_checks(
                 "severity": cliche["severity"],
                 "suggestion": cliche["suggestion"],
             })
-    if section_type in ("summary", "lesson", "cta"):
+    if section_type in ("summary", "closing_quote", "cta"):
         closing = check_closing_cliche(content)
         if closing:
             auto_issues.append({

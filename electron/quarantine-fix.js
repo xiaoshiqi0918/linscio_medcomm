@@ -3,7 +3,11 @@
  *
  * 未签名 .app 在 macOS 上首次运行时，内部二进制（嵌入 Python 等）
  * 仍带有 com.apple.quarantine 属性，导致 spawn 失败。
- * 本模块在启动早期检测该属性，并通过 osascript 请求管理员权限自动移除。
+ *
+ * 修复策略（三级递进，绝大多数情况在第 1 级静默完成）：
+ *   1. 直接 xattr -cr（用户自己拖拽安装的 app，无需 sudo）
+ *   2. osascript 提权 xattr -cr（罕见：app 被其他用户安装到 /Applications）
+ *   3. 提供手动命令（兜底）
  */
 const { spawnSync } = require('child_process')
 const { dialog } = require('electron')
@@ -12,8 +16,6 @@ const pythonResolver = require('./python-resolver')
 
 /**
  * 检测指定路径是否带有 com.apple.quarantine 扩展属性。
- * @param {string} targetPath
- * @returns {boolean}
  */
 function hasQuarantine(targetPath) {
   if (process.platform !== 'darwin') return false
@@ -30,7 +32,6 @@ function hasQuarantine(targetPath) {
 
 /**
  * 获取 .app bundle 的根路径。
- * exe 路径形如 /Applications/LinScio MedComm.app/Contents/MacOS/LinScio MedComm
  */
 function getAppBundlePath(app) {
   const exePath = app.getPath('exe')
@@ -38,11 +39,28 @@ function getAppBundlePath(app) {
 }
 
 /**
- * 通过 osascript 请求管理员权限执行 xattr -cr。
- * @param {string} appBundlePath
- * @returns {{ ok: boolean, error?: string }}
+ * 第 1 级：直接 xattr -cr（不需要密码）。
+ * 用户自己拖拽安装时文件归当前用户所有，这一步通常就能成功。
  */
-function removeQuarantine(appBundlePath) {
+function removeQuarantineDirect(appBundlePath) {
+  try {
+    const r = spawnSync('xattr', ['-cr', appBundlePath], {
+      timeout: 30000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    if (r.status === 0) return { ok: true }
+    const stderr = r.stderr?.toString().trim() || ''
+    return { ok: false, error: stderr || `exit ${r.status}` }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+}
+
+/**
+ * 第 2 级：通过 osascript 请求管理员权限执行 xattr -cr。
+ * 仅在第 1 级失败时使用（app 位于非用户所有的目录）。
+ */
+function removeQuarantineAdmin(appBundlePath) {
   const escaped = appBundlePath.replace(/'/g, "'\\''")
   const script = `do shell script "xattr -cr '${escaped}'" with administrator privileges`
 
@@ -65,9 +83,9 @@ function removeQuarantine(appBundlePath) {
 }
 
 /**
- * 主入口：检测隔离属性，若存在则弹窗引导修复。
- * @param {Electron.App} app
- * @returns {Promise<{ needed: boolean, fixed: boolean }>}
+ * 主入口：检测隔离属性，自动修复。
+ *
+ * 绝大多数情况下，第 1 级（直接 xattr -cr）即可静默完成，用户无感知。
  */
 async function checkAndFix(app) {
   if (process.platform !== 'darwin' || !app.isPackaged) {
@@ -82,12 +100,21 @@ async function checkAndFix(app) {
   console.log('[MedComm] Quarantine attribute detected on embedded Python')
   const appBundlePath = getAppBundlePath(app)
 
+  // 第 1 级：静默去除（不弹窗、不需要密码）
+  const directResult = removeQuarantineDirect(appBundlePath)
+  if (directResult.ok) {
+    console.log('[MedComm] Quarantine removed (direct, no password needed)')
+    return { needed: true, fixed: true }
+  }
+  console.warn('[MedComm] Direct xattr -cr failed:', directResult.error, '— escalating to admin')
+
+  // 第 2 级：需要管理员密码（极少触发，仅当 app 非用户所有时）
   const { response } = await dialog.showMessageBox({
     type: 'warning',
     title: '首次启动 - 安全设置',
-    message: 'LinScio MedComm 是未签名应用，macOS 会阻止部分组件运行。',
-    detail: '点击「立即修复」并输入您的 Mac 登录密码，即可一键解除限制。',
-    buttons: ['立即修复', '稍后手动处理'],
+    message: '需要管理员权限来解除 macOS 安全限制。',
+    detail: '点击「授权」并输入 Mac 登录密码，即可完成（仅需一次）。',
+    buttons: ['授权', '稍后手动处理'],
     defaultId: 0,
     cancelId: 1,
   })
@@ -96,26 +123,23 @@ async function checkAndFix(app) {
     return { needed: true, fixed: false }
   }
 
-  const result = removeQuarantine(appBundlePath)
-
-  if (result.ok) {
-    console.log('[MedComm] Quarantine attribute removed successfully')
+  const adminResult = removeQuarantineAdmin(appBundlePath)
+  if (adminResult.ok) {
+    console.log('[MedComm] Quarantine removed (admin privilege)')
     return { needed: true, fixed: true }
   }
 
-  if (result.error === 'user_canceled') {
-    console.log('[MedComm] User canceled quarantine fix password dialog')
+  if (adminResult.error === 'user_canceled') {
+    console.log('[MedComm] User canceled admin password dialog')
   } else {
-    console.error('[MedComm] Failed to remove quarantine:', result.error)
+    console.error('[MedComm] Admin xattr -cr also failed:', adminResult.error)
   }
 
   return { needed: true, fixed: false }
 }
 
 /**
- * 生成用于手动修复的终端命令文本。
- * @param {Electron.App} app
- * @returns {string}
+ * 生成用于手动修复的终端命令文本（第 3 级兜底）。
  */
 function getManualCommand(app) {
   const bundlePath = getAppBundlePath(app)
@@ -124,7 +148,8 @@ function getManualCommand(app) {
 
 module.exports = {
   hasQuarantine,
-  removeQuarantine,
+  removeQuarantineDirect,
+  removeQuarantineAdmin,
   checkAndFix,
   getManualCommand,
   getAppBundlePath,

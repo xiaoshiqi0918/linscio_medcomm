@@ -4,7 +4,7 @@
  * 编码规则：
  *   MC-1xxx  启动 / 环境
  *   MC-2xxx  授权 / 许可
- *   MC-3xxx  ComfyUI / 绘图
+ *   MC-3xxx  绘图
  *   MC-4xxx  网络 / 下载
  *   MC-5xxx  数据 / 存储
  *
@@ -18,6 +18,7 @@ const codes = {
   PYTHON_SPAWN_FAILED:  { code: 'MC-1002', message: 'Python 启动失败' },
   PYTHON_DEPS_MISSING:  { code: 'MC-1003', message: '核心 Python 依赖缺失' },
   VCREDIST_MISSING:     { code: 'MC-1004', message: '缺少 Visual C++ 运行时库' },
+  PYTHON_SPAWN_TIMEOUT: { code: 'MC-1010', message: 'Python 启动超时' },
   OS_UNSUPPORTED:       { code: 'MC-1005', message: '操作系统版本过低' },
   ARCH_MISMATCH:        { code: 'MC-1006', message: '不支持的系统架构' },
   BACKEND_TIMEOUT:      { code: 'MC-1007', message: '后端服务启动超时' },
@@ -29,12 +30,6 @@ const codes = {
   AUTH_EXPIRED:         { code: 'MC-2002', message: '授权已过期' },
   AUTH_SERVER_ERROR:    { code: 'MC-2003', message: '授权服务器异常' },
   AUTH_TOKEN_INVALID:   { code: 'MC-2004', message: '授权令牌无效' },
-
-  // --- ComfyUI / 绘图 ---
-  COMFY_NOT_INSTALLED:  { code: 'MC-3001', message: 'ComfyUI 基础包未安装' },
-  COMFY_DEPS_MISSING:   { code: 'MC-3002', message: 'ComfyUI 依赖缺失' },
-  COMFY_SPAWN_FAILED:   { code: 'MC-3003', message: 'ComfyUI 启动失败' },
-  COMFY_HEALTH_FAIL:    { code: 'MC-3004', message: 'ComfyUI 服务无响应' },
 
   // --- 网络 / 下载 ---
   NETWORK_ERROR:        { code: 'MC-4001', message: '网络连接失败' },
@@ -78,7 +73,6 @@ function getLogPaths() {
     logs: logsPath,
     userData: userDataPath,
     appData: path.join(userDataPath, 'data'),
-    bundleData: path.join(userDataPath, 'comfyui-bundles'),
     crashDumps: app.getPath('crashDumps'),
   }
 }

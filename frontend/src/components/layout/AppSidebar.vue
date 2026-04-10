@@ -9,12 +9,12 @@
         </router-link>
       </div>
       <div class="nav-group">
-        <span class="nav-group-title">绘图</span>
-        <router-link to="/medpic" class="nav-item">
-          <span class="icon">🩺</span> MedPic 医学绘图
+        <span class="nav-group-title">绘图 <span class="dev-tag">开发中</span></span>
+        <router-link to="/drawing/txt2img" class="nav-item">
+          <span class="icon">🖼️</span> 文生图
         </router-link>
-        <router-link to="/imagegen" class="nav-item">
-          <span class="icon">🎨</span> 通用图像生成
+        <router-link to="/drawing/img2img" class="nav-item">
+          <span class="icon">🔄</span> 图生图
         </router-link>
       </div>
       <div class="nav-group">
@@ -36,9 +36,6 @@
         </router-link>
         <router-link to="/personal-corpus" class="nav-item">
           <span class="icon">📌</span> 个人语料
-        </router-link>
-        <router-link to="/publish" class="nav-item">
-          <span class="icon">📬</span> 发布管理
         </router-link>
       </div>
       <div class="nav-group">
@@ -147,6 +144,16 @@ onUnmounted(() => {
 
 .icon {
   margin-right: 0.5rem;
+}
+.dev-tag {
+  font-size: 0.6rem;
+  background: rgba(251, 191, 36, 0.25);
+  color: #fbbf24;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 0.25rem;
+  vertical-align: middle;
+  line-height: 1;
 }
 
 .sidebar-footer {

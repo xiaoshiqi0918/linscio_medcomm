@@ -130,6 +130,7 @@ class AiImagePromptsRequest(BaseModel):
     image_type: str = "anatomy"
     target_audience: str = "public"
     content_format: str = "article"
+    provider: str = "api"
 
 
 def _graph_payload_from_task_kwargs(
@@ -217,7 +218,9 @@ async def _run_task(task_id: str, **kwargs) -> None:
         else:
             _tasks[task_id]["status"] = "done"
             _tasks[task_id]["images"] = [{"path": u} for u in urls]
-            _tasks[task_id]["provider_fallback"] = "pollinations" if state.get("is_fallback") else None
+            meta = state.get("gen_meta") or {}
+            _tasks[task_id]["provider"] = meta.get("provider")
+            _tasks[task_id]["provider_fallback"] = meta.get("provider_fallback") if state.get("is_fallback") else None
             _tasks[task_id]["seeds"] = state.get("used_seeds") or []
     except Exception as e:
         if task_id in _tasks and not _tasks[task_id].get("_cancelled"):
@@ -414,9 +417,12 @@ async def post_generate(req: GenerateRequest):
     )
     if state.get("error"):
         raise HTTPException(status_code=400, detail=state["error"])
+    meta = state.get("gen_meta") or {}
     return {
         "urls": state.get("urls", []),
         "is_fallback": state.get("is_fallback", False),
+        "provider": meta.get("provider"),
+        "provider_fallback": meta.get("provider_fallback"),
         "seeds": state.get("used_seeds") or [],
     }
 
@@ -430,6 +436,7 @@ async def post_ai_image_prompts(req: AiImagePromptsRequest):
         image_type=req.image_type,
         target_audience=req.target_audience,
         content_format=req.content_format,
+        provider=req.provider,
     )
     if not pos:
         raise HTTPException(status_code=502, detail="AI 提示词生成失败，请重试或手写提示词")
@@ -543,6 +550,15 @@ class ComicBatchRequest(BaseModel):
     panels: list[ComicPanelItem]
     style: str = "comic"
     seed_base: int | None = None
+    preferred_provider: str | None = None
+    comfy_workflow_path: str | None = None
+    comfy_mode: str | None = None
+    comfy_base_url: str | None = None
+    comfy_prompt_node_id: str | None = None
+    comfy_prompt_input_key: str | None = None
+    comfy_negative_node_id: str | None = None
+    comfy_negative_input_key: str | None = None
+    comfy_ksampler_node_id: str | None = None
 
 
 @router.post("/comic/batch")
@@ -584,15 +600,179 @@ async def comic_batch(req: ComicBatchRequest, db=Depends(get_db)):
             seed_base=sb,
             panel_index=panel_off,
             article_id=req.article_id,
+            preferred_provider=req.preferred_provider,
+            comfy_workflow_path=req.comfy_workflow_path,
+            comfy_mode=req.comfy_mode,
+            comfy_base_url=req.comfy_base_url,
+            comfy_prompt_node_id=req.comfy_prompt_node_id,
+            comfy_prompt_input_key=req.comfy_prompt_input_key,
+            comfy_negative_node_id=req.comfy_negative_node_id,
+            comfy_negative_input_key=req.comfy_negative_input_key,
+            comfy_ksampler_node_id=req.comfy_ksampler_node_id,
         ))
         tasks_created.append({"task_id": task_id, "panel_index": p.panel_index})
     return {"tasks": tasks_created}
 
 
+import re as _re
+
+_TYPE_KEYWORDS: list[tuple[str, list[str]]] = [
+    ("anatomy", ["解剖", "结构", "器官", "组织", "细胞", "骨骼", "肌肉", "神经", "血管", "心脏", "肺", "肝", "肾"]),
+    ("pathology", ["病理", "病变", "损伤", "炎症", "感染", "肿瘤", "癌", "坏死", "纤维化", "硬化"]),
+    ("flowchart", ["步骤", "流程", "阶段", "过程", "方法", "操作", "首先", "然后", "最后", "检查流程"]),
+    ("comparison", ["对比", "比较", "区别", "不同", "差异", "VS", "正常.*异常", "健康.*疾病"]),
+    ("infographic", ["数据", "统计", "比例", "百分", "%", "发病率", "死亡率", "研究表明", "调查"]),
+    ("symptom", ["症状", "表现", "疼痛", "不适", "发热", "咳嗽", "头晕", "乏力"]),
+    ("prevention", ["预防", "防护", "注意", "建议", "饮食", "运动", "生活方式", "习惯"]),
+]
+
+_REASON_MAP = {
+    "anatomy": "包含解剖结构描述，配图有助于理解",
+    "pathology": "涉及病理机制，图示更直观",
+    "flowchart": "描述流程/步骤，适合用流程图展示",
+    "comparison": "包含对比内容，图表更清晰",
+    "infographic": "含数据/统计信息，适合可视化",
+    "symptom": "描述症状表现，配图辅助识别",
+    "prevention": "提供预防建议，图示增强记忆",
+}
+
+# 医学中文关键词 → 英文词汇映射，用于本地生成英文绘图提示词
+_ZH_EN_MEDICAL: list[tuple[str, str]] = [
+    ("心脏", "heart"), ("肺", "lungs"), ("肝", "liver"), ("肾", "kidney"),
+    ("脑", "brain"), ("胃", "stomach"), ("肠", "intestine"), ("骨", "bone"),
+    ("血管", "blood vessel"), ("神经", "nerve"), ("肌肉", "muscle"),
+    ("细胞", "cell"), ("DNA", "DNA"), ("蛋白质", "protein"),
+    ("肿瘤", "tumor"), ("癌", "cancer"), ("炎症", "inflammation"),
+    ("感染", "infection"), ("病毒", "virus"), ("细菌", "bacteria"),
+    ("手术", "surgery"), ("治疗", "treatment"), ("诊断", "diagnosis"),
+    ("药物", "medication"), ("注射", "injection"), ("检查", "examination"),
+    ("症状", "symptom"), ("疼痛", "pain"), ("发热", "fever"),
+    ("糖尿病", "diabetes"), ("高血压", "hypertension"), ("冠心病", "coronary heart disease"),
+    ("中风", "stroke"), ("哮喘", "asthma"), ("关节炎", "arthritis"),
+    ("免疫", "immune"), ("抗体", "antibody"), ("疫苗", "vaccine"),
+    ("预防", "prevention"), ("康复", "rehabilitation"), ("护理", "nursing care"),
+    ("饮食", "diet"), ("运动", "exercise"), ("睡眠", "sleep"),
+    ("儿童", "children"), ("老年", "elderly"), ("孕妇", "pregnant women"),
+    ("患者", "patient"), ("医生", "doctor"), ("护士", "nurse"),
+]
+
+_TYPE_EN_SCENE = {
+    "anatomy": "detailed anatomical diagram, labeled cross-section view, medical textbook style",
+    "pathology": "pathological process illustration, microscopic tissue view, clinical pathology",
+    "flowchart": "medical flowchart, step-by-step clinical process diagram, clean infographic layout",
+    "comparison": "side-by-side comparison diagram, normal vs abnormal, medical educational chart",
+    "infographic": "medical data infographic, statistical visualization, clean chart design",
+    "symptom": "symptom illustration, clinical presentation diagram, patient assessment visual",
+    "prevention": "health prevention guide illustration, wellness lifestyle diagram, educational visual",
+    "illustration": "professional medical illustration, clean educational diagram, healthcare visual",
+}
+
+
+def _heuristic_en_prompt(description: str, image_type: str) -> str:
+    """基于中文描述和关键词映射，生成可用的英文 SD 绘图提示词（不依赖 LLM）"""
+    scene = _TYPE_EN_SCENE.get(image_type, _TYPE_EN_SCENE["illustration"])
+    en_terms = []
+    desc_lower = description.lower()
+    for zh, en in _ZH_EN_MEDICAL:
+        if zh in desc_lower:
+            en_terms.append(en)
+    terms_str = ", ".join(en_terms[:6]) if en_terms else "medical concept"
+    quality = "professional, detailed, clean background, high quality, scientific accuracy, educational"
+    return f"{scene}, depicting {terms_str}, {quality}"
+
+
+def _infer_image_type(para: str) -> str:
+    text = para.lower()
+    for itype, keywords in _TYPE_KEYWORDS:
+        for kw in keywords:
+            if _re.search(kw, text):
+                return itype
+    return "illustration"
+
+
+_EN_PROMPT_TEMPLATE = """你是一名专业的医学插画提示词撰写专家。请为以下中文段落各生成一条**纯英文**的AI绘图提示词（image generation prompt）。
+
+要求：
+- 纯英文，不含任何中文
+- 描述画面内容、构图、风格，可直接用于 Stable Diffusion / DALL-E
+- 每条 30-60 个英文单词
+- 只输出 JSON 数组，每项是一个字符串，顺序与输入段落对应
+
+段落列表：
+{paragraphs_json}
+"""
+
+
+async def _generate_en_prompts(descriptions: list[str], timeout: float = 15.0) -> list[str]:
+    """用 LLM 批量生成纯英文绘图提示词，超时返回空列表"""
+    import asyncio, json, logging
+    _log = logging.getLogger("uvicorn.error")
+    _log.info("[en_prompt] LLM generating for %d descriptions", len(descriptions))
+    try:
+        from app.services.llm.openai_client import chat_completion
+        from app.services.llm.manager import TaskTier
+        paras_json = json.dumps(descriptions, ensure_ascii=False)
+        prompt = _EN_PROMPT_TEMPLATE.format(paragraphs_json=paras_json)
+        messages = [{"role": "user", "content": prompt}]
+        raw = await asyncio.wait_for(
+            chat_completion(messages, task=TaskTier.FAST),
+            timeout=timeout,
+        )
+        text = raw.strip()
+        if text.startswith("```"):
+            text = _re.sub(r"^```\w*\n?", "", text)
+            text = _re.sub(r"\n?```$", "", text)
+        prompts = json.loads(text)
+        if isinstance(prompts, list) and all(isinstance(p, str) for p in prompts):
+            _log.info("[en_prompt] LLM success: %d prompts generated", len(prompts))
+            return prompts
+        _log.warning("[en_prompt] LLM unexpected format: %s", type(prompts))
+    except asyncio.TimeoutError:
+        _log.warning("[en_prompt] LLM timed out (%.0fs)", timeout)
+    except Exception as exc:
+        _log.warning("[en_prompt] LLM failed: %s", exc)
+    return []
+
+
+async def _upgrade_en_prompts_background(section_id: int, suggestions: list[dict]):
+    """后台尝试 LLM 升级英文提示词，成功则更新 DB（不阻塞主请求）"""
+    import json, logging
+    _log = logging.getLogger("uvicorn.error")
+    try:
+        descs = [s["description"] for s in suggestions]
+        en_prompts = await _generate_en_prompts(descs, timeout=15.0)
+        if not en_prompts:
+            return
+        updated = False
+        for idx, prompt_text in enumerate(en_prompts):
+            if idx < len(suggestions) and prompt_text:
+                suggestions[idx]["en_description"] = prompt_text
+                updated = True
+        if updated:
+            from app.core.database import AsyncSessionLocal
+            from sqlalchemy import update
+            async with AsyncSessionLocal() as sess:
+                await sess.execute(
+                    update(ArticleSection)
+                    .where(ArticleSection.id == section_id)
+                    .values(image_suggestions=suggestions)
+                )
+                await sess.commit()
+            _log.info("[en_prompt] background upgrade saved for section %d", section_id)
+    except Exception as exc:
+        _log.warning("[en_prompt] background upgrade failed: %s", exc)
+
+
 @router.get("/suggestions/{section_id}")
-async def get_suggestions(section_id: int, db=Depends(get_db)):
-    """获取章节配图建议（基于内容摘要）"""
-    from app.services.format_router import FORMAT_CONFIG
+async def get_suggestions(
+    section_id: int,
+    enhance: int = 0,
+    db=Depends(get_db),
+):
+    """获取章节配图建议。优先读取数据库已存储的建议，否则启发式+轻量LLM。"""
+    import json, logging, asyncio
+
+    _log = logging.getLogger("uvicorn.error")
 
     sec_result = await db.execute(
         select(ArticleSection, Article).join(Article, ArticleSection.article_id == Article.id).where(ArticleSection.id == section_id)
@@ -604,6 +784,16 @@ async def get_suggestions(section_id: int, db=Depends(get_db)):
     cf = article.content_format or "article"
     if cf in ("comic_strip", "storyboard", "card_series"):
         return {"suggestions": [], "fallback": False}
+
+    # --- 优先从 DB 读取已存储的建议（含 en_description） ---
+    if not enhance and section.image_suggestions:
+        try:
+            stored = json.loads(section.image_suggestions) if isinstance(section.image_suggestions, str) else section.image_suggestions
+            if isinstance(stored, list) and stored:
+                return {"suggestions": stored, "fallback": False}
+        except Exception:
+            pass
+
     cont_result = await db.execute(
         select(ArticleContent).where(
             ArticleContent.section_id == section_id,
@@ -613,28 +803,132 @@ async def get_suggestions(section_id: int, db=Depends(get_db)):
     content_rec = cont_result.scalar_one_or_none()
     if not content_rec or not content_rec.content_json:
         return {"suggestions": [], "fallback": False}
-    import json
+
+    BLOCK_TYPES = {"paragraph", "heading", "blockquote", "listItem", "codeBlock"}
+
+    def _extract_text(node):
+        """从 Tiptap JSON 提取纯文本，在块级节点之间插入换行以保留段落结构"""
+        if isinstance(node, str):
+            return node
+        if not isinstance(node, dict):
+            return ""
+        if node.get("type") == "text":
+            return node.get("text", "")
+        children = node.get("content", [])
+        parts = [_extract_text(c) for c in children]
+        joined = "".join(parts)
+        if node.get("type") in BLOCK_TYPES:
+            return joined + "\n\n"
+        return joined
+
     try:
         doc = json.loads(content_rec.content_json) if isinstance(content_rec.content_json, str) else content_rec.content_json
     except Exception:
         return {"suggestions": [], "fallback": False}
-    text_parts = []
-    for node in doc.get("content", []):
-        if node.get("type") == "paragraph":
-            for c in node.get("content", []):
-                if c.get("type") == "text" and c.get("text"):
-                    text_parts.append(c["text"])
-    full_text = "\n\n".join(text_parts)
+    full_text = _extract_text(doc).strip()
+    if len(full_text) < 100:
+        return {"suggestions": [], "fallback": False}
+
+    # --- 解析已存储的建议（用于判断来源） ---
+    existing_suggestions = None
+    if section.image_suggestions:
+        try:
+            existing_suggestions = json.loads(section.image_suggestions) if isinstance(section.image_suggestions, str) else section.image_suggestions
+            if not isinstance(existing_suggestions, list):
+                existing_suggestions = None
+        except Exception:
+            existing_suggestions = None
+
+    def _is_llm_source(sug_list: list | None) -> bool:
+        if not sug_list:
+            return False
+        return any(s.get("_source") == "llm" for s in sug_list)
+
+    # --- LLM 生成（仅 enhance=1 时尝试，60 秒超时） ---
+    if enhance:
+        try:
+            from app.workflow.nodes.medcomm_nodes import suggest_images_node
+            sug_state = await asyncio.wait_for(
+                suggest_images_node({
+                    "article_id": article.id,
+                    "section_id": section.id,
+                    "verified_content": full_text,
+                    "topic": article.topic or "",
+                    "content_format": cf,
+                    "target_audience": article.target_audience or "public",
+                    "platform": article.platform or "wechat",
+                    "specialty": article.specialty or "",
+                }),
+                timeout=60,
+            )
+            suggestions = sug_state.get("image_suggestions") or []
+            if suggestions:
+                try:
+                    from sqlalchemy import update as _upd
+                    await db.execute(
+                        _upd(ArticleSection)
+                        .where(ArticleSection.id == section_id)
+                        .values(image_suggestions=suggestions)
+                    )
+                    await db.commit()
+                except Exception:
+                    pass
+                return {"suggestions": suggestions, "fallback": False}
+            _log.info("[suggestions] LLM returned empty for section %d", section_id)
+        except asyncio.TimeoutError:
+            _log.warning("[suggestions] LLM timed out (60s) for section %d", section_id)
+        except Exception as exc:
+            _log.warning("[suggestions] LLM failed for section %d: %s", section_id, exc)
+
+        # LLM 失败时，优先回退到 DB 已有的 LLM 结果（而非启发式覆盖）
+        if existing_suggestions and _is_llm_source(existing_suggestions):
+            _log.info("[suggestions] LLM failed, returning existing LLM suggestions from DB")
+            return {"suggestions": existing_suggestions, "fallback": False}
+
+    # --- 启发式段落配图建议（仅在 DB 无建议时使用） ---
+    from app.services.format_router import FORMAT_CONFIG
+    from app.services.imagegen.image_types import recommend_tool
     suggestions = []
-    for i, para in enumerate(full_text.split("\n\n")):
-        if len(para.strip()) > 80:
-            anchor = para.strip()[:50]
-            cfg = FORMAT_CONFIG.get(cf, {})
-            style = cfg.get("image_style", "medical_illustration")
-            suggestions.append({
-                "anchor_text": anchor,
-                "image_type": "illustration",
-                "style": style,
-                "index": i,
-            })
-    return {"suggestions": suggestions[:5], "fallback": False}
+    paragraphs = [p for p in full_text.split("\n\n") if len(p.strip()) > 80]
+    cfg = FORMAT_CONFIG.get(cf, {})
+    style = cfg.get("image_style", "medical_illustration")
+
+    for i, para in enumerate(paragraphs):
+        anchor = para.strip()[:50]
+        it = _infer_image_type(para)
+        desc_text = para.strip()[:80] + ("…" if len(para.strip()) > 80 else "")
+        rec = recommend_tool(it, style, desc_text)
+        en_local = _heuristic_en_prompt(desc_text, it)
+        suggestions.append({
+            "anchor_text": anchor,
+            "image_type": it,
+            "style": style,
+            "description": desc_text,
+            "en_description": en_local,
+            "reason": _REASON_MAP.get(it, "段落内容适合配图"),
+            "priority": "medium",
+            "index": i,
+            "recommended_tool": rec["tool"],
+            "tool_label": rec["tool_label"],
+            "tool_reason": rec["reason"],
+            "_source": "heuristic",
+        })
+    suggestions = suggestions[:5]
+
+    # 仅在 DB 无建议时写入启发式结果，绝不覆盖已有的 LLM 结果
+    if suggestions and not existing_suggestions:
+        try:
+            from sqlalchemy import update
+            await db.execute(
+                update(ArticleSection)
+                .where(ArticleSection.id == section_id)
+                .values(image_suggestions=suggestions)
+            )
+            await db.commit()
+        except Exception:
+            pass
+        asyncio.get_event_loop().create_task(
+            _upgrade_en_prompts_background(section_id, suggestions)
+        )
+
+    return {"suggestions": suggestions, "fallback": True}

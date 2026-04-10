@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from app.services.llm.manager import resolve_model
+from app.services.llm.manager import resolve_model_for_task, TaskTier
 from app.services.llm.openai_client import chat_completion
 
 
@@ -50,10 +50,10 @@ async def generate_article_title(
     if not body.strip():
         return ""
 
-    model = await resolve_model(
+    model = await resolve_model_for_task(
+        task=TaskTier.FAST,
         article_id=article_id,
         article_default_model=article_default_model,
-        model_hint="fast",
     )
     system = (
         "你是医学科普编辑。根据用户提供的全文草稿与元数据，生成一个适合发布的文章标题。"

@@ -1,93 +1,133 @@
 """
-RAG 多源加权检索
-paper_chunks 0.6 + knowledge_chunks 0.4
-Ollama 可用时用 embeddings 对 FTS 候选重排序；不可用时仅 FTS5
+RAG 双通道检索：
+  - 文献通道（paper_chunks）：用户选中的参考文献，作为正文内容事实来源
+  - 知识通道（knowledge_chunks）：知识库/学科包内容，用于写作能力增强
+两个通道独立检索、独立注入，永不混合。
 """
 import math
 import os
 from typing import Optional
 
-RETRIEVAL_WEIGHTS = {
-    "paper_chunks": 0.6,
-    "knowledge_chunks": 0.4,
-}
-
-# 章节类型 → chunk_type 映射（用于 paper 检索过滤）
 SECTION_TO_CHUNK_TYPE = {
     "intro": ["background", "objective"],
     "body": ["methods", "results"],
     "case": ["results", "conclusion"],
     "qa": ["conclusion", "limitation"],
     "summary": ["conclusion", "abstract"],
-    "opening": ["background"],  # story, audio_script
+    "hook": ["background"],
     "development": ["methods", "results"],
-    "climax": ["results"],
+    "turning_point": ["results"],
+    "science_core": ["methods", "results", "background"],
     "resolution": ["conclusion"],
-    "lesson": ["conclusion"],
-    "myth_intro": ["background"],
-    "myth_1": ["results"],
-    "myth_2": ["results"],
-    "myth_3": ["results"],
-    "action_guide": ["conclusion"],
-    "finding": ["results"],
+    "action_list": ["conclusion"],
+    "closing_quote": ["conclusion"],
+    "rumor_present": ["background"],
+    "verdict": ["results", "conclusion"],
+    "debunk_1": ["results", "methods"],
+    "debunk_2": ["results", "methods"],
+    "debunk_3": ["results", "methods"],
+    "correct_practice": ["conclusion", "results"],
+    "anti_fraud": ["conclusion"],
+    "one_liner": ["abstract", "conclusion"],
+    "study_card": ["abstract", "methods"],
+    "why_matters": ["background", "objective"],
+    "methods": ["methods"],
+    "findings": ["results"],
     "implication": ["conclusion"],
-    "caution": ["limitation"],
+    "limitation": ["limitation"],
     "qa_intro": ["background"],
     "qa_1": ["conclusion", "limitation"],
     "qa_2": ["conclusion", "limitation"],
-    "qa_3": ["conclusion", "limitation"],
+    "qa_3": ["results", "conclusion"],
+    "qa_4": ["methods", "results"],
+    "qa_5": ["limitation", "conclusion"],
     "qa_summary": ["conclusion", "abstract"],
-    "hook": ["background"],
-    "body_1": ["methods"],
-    "body_2": ["methods", "results"],
-    "body_3": ["methods", "results"],
-    "summary": ["conclusion", "abstract"],
-    "cta": ["conclusion"],
-    "scene_setup": ["background"],
-    "scene_1": ["methods", "results"],
-    "scene_2": ["methods", "results"],
-    "scene_3": ["results"],
-    "ending": ["conclusion"],
-    "frame_1": ["background"],
-    "frame_2": ["methods", "results"],
-    "frame_3": ["methods", "results"],
-    "frame_4": ["results"],
-    "frame_5": ["results"],
-    "frame_6": ["conclusion"],
+    "script_plan": ["abstract", "background"],
+    "golden_hook": ["background"],
+    "problem_setup": ["background", "methods"],
+    "core_knowledge": ["methods", "results", "background"],
+    "practical_tips": ["conclusion", "results"],
+    "closing_hook": ["conclusion"],
+    "extras": ["abstract"],
+    "drama_plan": ["abstract", "background"],
+    "cast_table": ["background"],
+    "act_1": ["background"],
+    "act_2": ["background", "methods"],
+    "act_3": ["methods", "results"],
+    "act_4": ["methods", "results", "conclusion"],
+    "act_5": ["conclusion", "results"],
+    "finale": ["conclusion"],
+    "filming_notes": ["abstract"],
+    "anim_plan": ["abstract", "background"],
+    "char_design": ["abstract", "background"],
+    "reel_1": ["background"],
+    "reel_2": ["background", "methods"],
+    "reel_3": ["methods", "results", "conclusion"],
+    "reel_4": ["results", "conclusion"],
+    "reel_5": ["conclusion"],
+    "prod_notes": ["abstract"],
     "topic_intro": ["background"],
     "deep_dive": ["methods", "results"],
     "extension": ["conclusion"],
     "closing": ["conclusion"],
     "disease_intro": ["background"],
     "symptoms": ["results"],
+    "handbook_plan": ["abstract", "background"],
+    "disease_know": ["background"],
     "treatment": ["conclusion"],
     "daily_care": ["conclusion"],
+    "followup": ["conclusion", "limitation"],
+    "emergency": ["results", "conclusion"],
+    "faq": ["background", "conclusion"],
     "visit_tips": ["conclusion", "limitation"],
     "panel_1": ["background"],
-    "panel_2": ["methods", "results"],
-    "panel_3": ["results"],
+    "panel_2": ["background"],
+    "panel_3": ["background", "results"],
     "panel_4": ["results"],
     "panel_5": ["results"],
-    "panel_6": ["conclusion"],
+    "panel_6": ["results", "methods"],
+    "panel_7": ["results", "methods"],
+    "panel_8": ["results"],
+    "panel_9": ["conclusion", "results"],
+    "panel_10": ["conclusion"],
+    "panel_11": ["conclusion"],
+    "panel_12": ["conclusion"],
+    "series_plan": ["abstract", "conclusion"],
+    "cover_card": ["abstract", "background"],
     "card_1": ["background"],
-    "card_2": ["methods", "results"],
+    "card_2": ["results", "methods"],
     "card_3": ["results"],
     "card_4": ["results"],
-    "card_5": ["conclusion"],
-    "headline": ["background"],
-    "core_message": ["results"],
-    "data_points": ["results"],
-    "visual_desc": ["results"],
-    "page_1": ["background"],
-    "page_2": ["methods", "results"],
-    "page_3": ["results"],
-    "page_4": ["results"],
-    "page_5": ["conclusion"],
+    "card_5": ["results", "conclusion"],
+    "card_6": ["results", "conclusion"],
+    "card_7": ["conclusion"],
+    "ending_card": ["conclusion"],
+    "poster_brief": ["abstract", "background"],
+    "headline": ["background", "abstract"],
+    "body_visual": ["results", "background"],
+    "cta_footer": ["conclusion"],
+    "design_spec": ["abstract"],
+    "book_plan": ["abstract", "background"],
+    "spread_1": ["background"],
+    "spread_2": ["background", "methods"],
+    "spread_3": ["methods", "results"],
+    "spread_4": ["results"],
+    "spread_5": ["results"],
+    "spread_6": ["results", "conclusion"],
+    "spread_7": ["conclusion"],
+    "back_cover": ["conclusion"],
+    "image_plan": ["abstract", "background"],
+    "title_block": ["abstract", "background"],
+    "intro_block": ["background"],
+    "core_1": ["background", "methods"],
+    "core_2": ["methods", "results"],
+    "core_3": ["results"],
+    "core_4": ["results", "conclusion"],
+    "tips_block": ["conclusion"],
+    "warning_block": ["results", "conclusion"],
+    "summary_cta": ["conclusion"],
+    "footer_info": ["conclusion"],
     "cover": ["background"],
-    "section_1": ["methods", "results"],
-    "section_2": ["results"],
-    "section_3": ["results"],
-    "footer": ["conclusion"],
     "cover_copy": ["background"],
     "quiz_intro": ["background"],
     "q_1": ["results"],
@@ -121,7 +161,7 @@ def _cosine_sim(a: list[float], b: list[float]) -> float:
 
 
 async def _ollama_rerank_chunks(query: str, pool: list[dict], top_k: int) -> tuple[list[dict], bool]:
-    """对 FTS 候选用 Ollama /api/embeddings 重排序；成功返回 (top_k 条, True)。"""
+    """对 FTS 候选用 Ollama /api/embeddings 重排序"""
     if not pool:
         return [], False
     model = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")
@@ -161,38 +201,23 @@ async def _ollama_rerank_chunks(query: str, pool: list[dict], top_k: int) -> tup
 
 
 class RAGRetriever:
-    """RAG 多源加权检索：paper_chunks 0.6 + knowledge_chunks 0.4，Ollama 不可用时仅 FTS5"""
+    """双通道 RAG 检索器"""
 
-    async def retrieve(
+    async def retrieve_literature(
         self,
         query: str,
         article_id: Optional[int] = None,
         section_type: Optional[str] = None,
         top_k: int = 5,
-        specialty: Optional[str] = None,
     ) -> tuple[list[dict], bool]:
-        """
-        加权检索，返回 (chunks, ollama_unavailable)
-        chunks: [{content, source, score}, ...]
-        ollama_unavailable: 是否因 Ollama 不可用而仅用 FTS5
-        specialty: 文章学科，用于对同学科知识块加权
-        """
+        """文献通道：仅检索用户绑定的参考文献，返回 (chunks, ollama_unavailable)"""
         from sqlalchemy import select
         from app.models.article import ArticleSection, ArticleLiteratureBinding
-        from app.services.vector.fts5 import fts_search, paper_fts_search
+        from app.services.vector.fts5 import paper_fts_search
 
         ollama_ok = _ollama_available()
-        ollama_unavailable = not ollama_ok
-
         paper_types = SECTION_TO_CHUNK_TYPE.get(section_type) if section_type else None
 
-        kw_paper = top_k if not paper_types else max(top_k, 3)
-        kw_knowledge = top_k if not paper_types else max(top_k, 3)
-        if ollama_ok:
-            kw_paper = max(kw_paper, 15)
-            kw_knowledge = max(kw_knowledge, 15)
-
-        # 文章/章节绑定文献优先检索（若存在）
         bound_paper_ids: list[int] = []
         if article_id:
             section_id = None
@@ -218,71 +243,85 @@ class RAGRetriever:
                         )
                     else:
                         bind_stmt = bind_stmt.where(ArticleLiteratureBinding.section_id.is_(None))
-                    bind_stmt = bind_stmt.order_by(ArticleLiteratureBinding.priority.asc(), ArticleLiteratureBinding.id.asc())
+                    bind_stmt = bind_stmt.order_by(
+                        ArticleLiteratureBinding.priority.asc(),
+                        ArticleLiteratureBinding.id.asc(),
+                    )
                     bind_res = await session.execute(bind_stmt)
                     bound_paper_ids = [r[0] for r in bind_res.fetchall()]
 
-        bound_rows = []
-        if bound_paper_ids:
-            bound_rows = await paper_fts_search(
-                query,
-                top_k=max(top_k, 3),
-                with_content=True,
-                chunk_types=paper_types,
-                paper_ids=bound_paper_ids,
-                only_fulltext_literature=True,
-            )
+        if not bound_paper_ids:
+            return [], not ollama_ok
 
-        paper_rows = await paper_fts_search(
+        kw = max(top_k, 5)
+        if ollama_ok:
+            kw = max(kw, 15)
+
+        rows = await paper_fts_search(
             query,
-            top_k=kw_paper,
+            top_k=kw,
             with_content=True,
             chunk_types=paper_types,
+            paper_ids=bound_paper_ids,
             only_fulltext_literature=True,
         )
-        knowledge_rows = await fts_search(query, top_k=kw_knowledge)
 
-        wp = RETRIEVAL_WEIGHTS["paper_chunks"]
-        wk = RETRIEVAL_WEIGHTS["knowledge_chunks"]
+        chunks = [
+            {
+                "content": r.get("content", r.get("snippet", "")),
+                "source": "paper_chunks_bound",
+                "paper_id": r.get("paper_id"),
+                "chunk_id": r.get("chunk_id"),
+            }
+            for r in rows
+        ]
+
+        if ollama_ok and chunks:
+            reranked, ok = await _ollama_rerank_chunks(query, chunks, top_k)
+            if ok and reranked:
+                return reranked, False
+
+        return chunks[:top_k], not ollama_ok
+
+    async def retrieve_knowledge(
+        self,
+        query: str,
+        specialty: Optional[str] = None,
+        top_k: int = 3,
+    ) -> list[dict]:
+        """知识通道：检索知识库/学科包内容，用于写作能力增强（非内容来源）"""
+        from app.services.vector.fts5 import fts_search
+
+        rows = await fts_search(query, top_k=max(top_k, 5))
 
         scored: list[tuple[float, dict]] = []
-        # 绑定文献加权更高，确保同等条件优先入选
-        for r in bound_rows:
-            c = r.get("content", r.get("snippet", ""))
-            scored.append((min(1.0, wp + 0.25), {
-                "content": c,
-                "source": "paper_chunks_bound",
-                "score": min(1.0, wp + 0.25),
-                "paper_id": r.get("paper_id"),
-                "chunk_id": r.get("chunk_id"),
-            }))
-        for r in paper_rows:
-            c = r.get("content", r.get("snippet", ""))
-            scored.append((wp, {
-                "content": c,
-                "source": "paper_chunks",
-                "score": wp,
-                "paper_id": r.get("paper_id"),
-                "chunk_id": r.get("chunk_id"),
-            }))
-        for r in knowledge_rows:
+        for r in rows:
             c = r.get("content", r.get("snippet", ""))
             chunk_specialty = r.get("specialty")
             boost = 0.15 if (specialty and chunk_specialty == specialty) else 0.0
-            s = min(1.0, wk + boost)
-            scored.append((s, {
+            scored.append((0.5 + boost, {
                 "content": c,
                 "source": "knowledge_chunks",
-                "score": s,
+                "specialty": chunk_specialty,
                 "chunk_id": r.get("chunk_id"),
             }))
 
         scored.sort(key=lambda x: -x[0])
-        candidates = [s[1] for s in scored]
-        pool_size = max(20, top_k * 4)
-        pool = candidates[:pool_size]
-        if ollama_ok:
-            reranked, ok = await _ollama_rerank_chunks(query, pool, top_k)
-            if ok and reranked:
-                return reranked, False
-        return pool[:top_k], ollama_unavailable
+        return [s[1] for s in scored[:top_k]]
+
+    async def retrieve(
+        self,
+        query: str,
+        article_id: Optional[int] = None,
+        section_type: Optional[str] = None,
+        top_k: int = 5,
+        specialty: Optional[str] = None,
+    ) -> tuple[list[dict], bool]:
+        """兼容旧接口：返回 (literature_chunks, ollama_unavailable)
+        知识库通道需单独调用 retrieve_knowledge()"""
+        return await self.retrieve_literature(
+            query=query,
+            article_id=article_id,
+            section_type=section_type,
+            top_k=top_k,
+        )

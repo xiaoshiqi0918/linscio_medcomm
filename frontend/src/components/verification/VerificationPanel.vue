@@ -1,6 +1,8 @@
 <template>
   <div v-if="report" class="verification-panel">
     <h4>防编造检查</h4>
+
+    <!-- 医学声明 -->
     <div v-if="report.claims" class="section">
       <span class="label">医学声明：</span>
       <span v-if="report.claims.skipped">{{ report.claims.reason }}</span>
@@ -11,21 +13,78 @@
       </span>
       <span v-else>已分析</span>
     </div>
+
+    <!-- 数据占位符 摘要 -->
     <div v-if="report.data_warnings?.length" class="section">
       <span class="label">数据占位符：</span>
       <span class="warning">{{ report.data_warnings.length }} 处需补充</span>
     </div>
+
+    <!-- 绝对化表述 摘要 -->
     <div v-if="report.absolute_terms?.length" class="section">
       <span class="label">绝对化表述：</span>
       <span class="warning">{{ report.absolute_terms.length }} 处建议修改</span>
     </div>
+
+    <!-- 阅读难度 摘要 -->
     <div v-if="report.reading_level" class="section">
       <span class="label">阅读难度：</span>
       <span v-if="report.reading_level.skipped">{{ report.reading_level.reason }}</span>
       <span v-else-if="report.reading_level.passed">通过</span>
-      <span v-else class="warning">建议简化</span>
+      <span v-else class="warning">建议简化（{{ readingIssueCount }} 项）</span>
     </div>
 
+    <!-- ========== 详情列表 ========== -->
+
+    <!-- 绝对化表述 详情 -->
+    <div v-if="report.absolute_terms?.length" class="issue-block abs-block">
+      <div class="issue-title">绝对化表述</div>
+      <ul class="issue-list">
+        <li v-for="(item, idx) in report.absolute_terms" :key="'abs-' + idx" class="issue-item">
+          <span class="issue-keyword">{{ item.text }}</span>
+          <span v-if="item.suggestion" class="issue-suggestion">→ {{ item.suggestion }}</span>
+          <el-button type="primary" link size="small" @click="locate(item.text)">定位</el-button>
+        </li>
+      </ul>
+    </div>
+
+    <!-- 数据占位符 详情 -->
+    <div v-if="report.data_warnings?.length" class="issue-block data-block">
+      <div class="issue-title">数据占位符</div>
+      <ul class="issue-list">
+        <li v-for="(item, idx) in report.data_warnings" :key="'dw-' + idx" class="issue-item">
+          <span class="issue-keyword">{{ item.text }}</span>
+          <span v-if="item.message" class="issue-suggestion">{{ item.message }}</span>
+          <el-button type="primary" link size="small" @click="locate(item.text)">定位</el-button>
+        </li>
+      </ul>
+    </div>
+
+    <!-- 阅读难度 详情 -->
+    <div v-if="readingIssues.length" class="issue-block level-block">
+      <div class="issue-title">阅读难度问题</div>
+      <ul class="issue-list">
+        <li v-for="(item, idx) in readingIssues" :key="'lv-' + idx" class="issue-item">
+          <span class="issue-msg">{{ typeof item === 'string' ? item : (item.message || item.text || JSON.stringify(item)) }}</span>
+          <el-button
+            v-if="readingIssueLocatable(item)"
+            type="primary"
+            link
+            size="small"
+            @click="locate(readingIssueLocatable(item))"
+          >
+            定位
+          </el-button>
+        </li>
+      </ul>
+      <div v-if="readingSuggestions.length" class="reading-suggestions">
+        <span class="issue-suggestion" v-for="(s, idx) in readingSuggestions" :key="'ls-' + idx">
+          · {{ typeof s === 'string' ? s : (s.message || s.text || '') }}
+        </span>
+      </div>
+    </div>
+
+    <!-- 已核实声明 -->
     <div v-if="verifiedRows.length" class="evidence-block">
       <div class="evidence-title">已匹配依据（可点开核对原文片段）</div>
       <ul class="evidence-list">
@@ -40,6 +99,8 @@
         </li>
       </ul>
     </div>
+
+    <!-- 待核实声明 -->
     <div v-if="pendingRows.length" class="evidence-block pending-block">
       <div class="evidence-title">待核实</div>
       <ul class="evidence-list">
@@ -107,6 +168,26 @@ const articleStore = useArticleStore()
 const evidenceDialogVisible = ref(false)
 const activeEvidence = ref<ClaimRow | null>(null)
 
+const readingIssues = computed((): any[] => {
+  const rl = props.report?.reading_level
+  if (!rl || rl.skipped || rl.passed) return []
+  return Array.isArray(rl.issues) ? rl.issues : []
+})
+
+const readingSuggestions = computed((): any[] => {
+  const rl = props.report?.reading_level
+  if (!rl) return []
+  return Array.isArray(rl.suggestions) ? rl.suggestions : []
+})
+
+const readingIssueCount = computed(() => readingIssues.value.length)
+
+function readingIssueLocatable(item: any): string {
+  if (typeof item === 'string') return ''
+  const t = (item.text || item.term || item.sentence || '').trim()
+  return t.length >= 2 ? t : ''
+}
+
 const verifiedRows = computed((): ClaimRow[] => {
   const c = props.report?.claims
   if (!c || c.skipped) return []
@@ -162,6 +243,75 @@ function goPaper(paperId: number) {
 }
 .warning {
   color: #d97706;
+}
+.issue-block {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(217, 119, 6, 0.25);
+}
+.issue-title {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: #b45309;
+  margin-bottom: 0.3rem;
+}
+.issue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.issue-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.5rem;
+  margin: 0.3rem 0;
+  padding: 0.35rem 0.5rem;
+  background: #fffbeb;
+  border-radius: 5px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.issue-keyword {
+  font-weight: 600;
+  color: #dc2626;
+  flex-shrink: 0;
+}
+.issue-suggestion {
+  color: #059669;
+  font-size: 0.78rem;
+  flex: 1;
+}
+.issue-msg {
+  color: #374151;
+  flex: 1;
+}
+.abs-block {
+  border-top-color: rgba(220, 38, 38, 0.25);
+}
+.abs-block .issue-title {
+  color: #dc2626;
+}
+.data-block .issue-title {
+  color: #d97706;
+}
+.level-block {
+  border-top-color: rgba(99, 102, 241, 0.25);
+}
+.level-block .issue-title {
+  color: #4f46e5;
+}
+.level-block .issue-item {
+  background: #eef2ff;
+}
+.reading-suggestions {
+  margin-top: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.78rem;
+  color: #4f46e5;
+  padding-left: 0.25rem;
 }
 .evidence-block {
   margin-top: 0.75rem;

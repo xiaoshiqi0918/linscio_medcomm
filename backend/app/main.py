@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1 import medcomm, formats, system, literature, knowledge, templates, examples, terms, polish, publish, imagegen, auth, tasks, data, specialty, translate, article_snapshots, personal_corpus, medpic
+from app.api.v1 import medcomm, formats, system, literature, knowledge, templates, examples, terms, polish, imagegen, auth, tasks, data, specialty, translate, article_snapshots, personal_corpus, medpic
 from app.api import internal
 from app.core.database import init_db, get_db_path
 from app.core.config import settings
@@ -127,7 +127,6 @@ app.include_router(templates.router, prefix="/api/v1/templates", tags=["template
 app.include_router(examples.router, prefix="/api/v1/examples", tags=["examples"])
 app.include_router(terms.router, prefix="/api/v1/terms", tags=["terms"])
 app.include_router(polish.router, prefix="/api/v1/polish", tags=["polish"])
-app.include_router(publish.router, prefix="/api/v1/publish", tags=["publish"])
 app.include_router(imagegen.router, prefix="/api/v1/imagegen", tags=["imagegen"])
 app.include_router(tasks.router, prefix="/api/v1/tasks", tags=["tasks"])
 app.include_router(data.router, prefix="/api/v1/data", tags=["data"])

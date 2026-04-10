@@ -1,6 +1,12 @@
 <template>
   <div class="article-editor">
     <div class="editor-header">
+      <div class="back-row">
+        <el-button text @click="router.push('/medcomm/new')">
+          <el-icon><ArrowLeft /></el-icon>
+          返回文章配置
+        </el-button>
+      </div>
       <div class="title-edit-row">
         <el-input
           v-model="articleTitleDraft"
@@ -36,6 +42,7 @@
           </el-dropdown-menu>
         </template>
       </el-dropdown>
+      <el-button size="small" :loading="copyTxtLoading" @click="copyPlainTextExport">复制纯文本</el-button>
       <el-button size="small" :loading="copyMdLoading" @click="copyMarkdownExport">复制 Markdown</el-button>
       <el-dropdown trigger="click">
         <el-button size="small">
@@ -54,10 +61,10 @@
         type="primary"
         size="small"
         :loading="generating"
-        :disabled="!currentSectionId"
+        :disabled="!currentSectionId || isCurrentSectionSkipped"
         @click="handleGenerate"
       >
-        AI 生成
+        {{ isCurrentSectionSkipped ? '已跳过' : 'AI 生成' }}
       </el-button>
     </div>
     <div v-if="article?.sections?.length" class="section-tabs">
@@ -66,14 +73,39 @@
           v-for="s in article.sections"
           :key="s.id"
           :value="s.id"
-        >{{ s.title || s.section_type }}</el-radio-button>
+          :class="{ 'section-skipped': s.status === 'skipped' }"
+          @contextmenu.prevent="onSectionContextMenu($event, s)"
+        >
+          <span :class="{ 'skipped-label': s.status === 'skipped' }">
+            {{ s.title || s.section_type }}
+          </span>
+          <el-tag v-if="s.status === 'skipped'" size="small" type="info" style="margin-left: 4px; vertical-align: middle;">已跳过</el-tag>
+        </el-radio-button>
       </el-radio-group>
+      <div
+        v-if="sectionContextMenu.visible"
+        class="section-context-menu"
+        :style="{ left: sectionContextMenu.x + 'px', top: sectionContextMenu.y + 'px' }"
+      >
+        <div
+          v-if="sectionContextMenu.section?.status === 'skipped'"
+          class="ctx-item"
+          @click="handleUnskipSection(sectionContextMenu.section)"
+        >恢复此章节</div>
+        <div
+          v-else-if="canSkipSection(sectionContextMenu.section)"
+          class="ctx-item ctx-item-danger"
+          @click="handleSkipSection(sectionContextMenu.section)"
+        >跳过此章节</div>
+        <div v-else class="ctx-item ctx-item-disabled">必选章节，不可跳过</div>
+      </div>
     </div>
-    <el-collapse class="bindings-panel">
+    <el-collapse v-model="activeCollapseItems" class="bindings-panel">
       <el-collapse-item name="refs">
         <template #title>
-          <span>参考文献绑定</span>
-          <el-tag v-if="bindings.length" size="small" type="info" style="margin-left: 0.5rem;">{{ bindings.length }} 篇</el-tag>
+          <span>参考文献</span>
+          <el-tag v-if="bindings.length" size="small" type="success" style="margin-left: 0.5rem;">已绑定 {{ bindings.length }} 篇</el-tag>
+          <el-tag v-else size="small" type="warning" style="margin-left: 0.5rem;">未绑定</el-tag>
         </template>
         <div class="bindings-content">
           <div class="bindings-toolbar">
@@ -82,7 +114,7 @@
               <el-radio-button :value="'article'">整篇文章</el-radio-button>
             </el-radio-group>
             <div class="bindings-toolbar-actions">
-              <el-button size="small" @click="showBindDialog = true">添加文献</el-button>
+              <el-button size="small" @click="showBindDialog = true">补充文献</el-button>
               <el-button size="small" type="primary" plain @click="showExternalSearchDialog = true">
                 检索支撑文献
               </el-button>
@@ -91,7 +123,13 @@
           <ul v-if="bindings.length" class="bindings-list">
             <li v-for="b in indexedBindings" :key="b.binding_id" class="binding-item">
               <span class="binding-title">
-                [{{ b.refIndex }}] {{ b.title }}
+                <span class="binding-ref-num">[{{ b.refIndex }}]</span>
+                {{ b.title }}
+                <span v-if="b.journal || b.year" class="binding-meta">
+                  <template v-if="b.journal">{{ b.journal }}</template>
+                  <template v-if="b.journal && b.year">, </template>
+                  <template v-if="b.year">{{ b.year }}</template>
+                </span>
                 <el-tag v-if="b._kind === 'external'" size="small" type="info" style="margin-left: 6px;">外部</el-tag>
               </span>
               <span class="binding-actions">
@@ -103,67 +141,8 @@
               </span>
             </li>
           </ul>
-          <div v-else class="bindings-empty">暂无绑定文献</div>
+          <div v-else class="bindings-empty">暂无绑定文献，请在新建向导中选择或点击「补充文献」</div>
         </div>
-      </el-collapse-item>
-      <el-collapse-item name="versions">
-        <template #title>
-          <span>版本与快照</span>
-          <el-tag v-if="articleSnapshots.length" size="small" type="info" style="margin-left: 0.5rem;">{{ articleSnapshots.length }} 快照</el-tag>
-        </template>
-        <div class="version-snap-panel">
-          <p class="vs-hint">章节每次保存会滚动保留最近约 30 个版本；整篇快照由你手动打点，便于大改前备份。</p>
-          <div v-if="currentSectionId" class="vs-block">
-            <div class="vs-label">当前章节版本</div>
-            <el-button size="small" @click="fetchSectionVersions" :loading="versionsLoading">刷新列表</el-button>
-            <el-table :data="sectionVersions" size="small" max-height="200" style="margin-top: 8px">
-              <el-table-column prop="version" label="#" width="56" />
-              <el-table-column prop="version_type" label="类型" width="120" />
-              <el-table-column prop="created_at" label="时间" min-width="160" />
-              <el-table-column label="" width="100" fixed="right">
-                <template #default="{ row }">
-                  <el-button v-if="!row.is_current" type="primary" link size="small" @click="revertToVersion(row)">恢复</el-button>
-                  <el-tag v-else size="small">当前</el-tag>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-          <div class="vs-block">
-            <div class="vs-label">整篇文章快照</div>
-            <div class="vs-row">
-              <el-input v-model="snapshotLabel" placeholder="快照名称（可选）" size="small" clearable style="max-width: 240px" />
-              <el-button size="small" type="primary" :loading="snapshotSaving" @click="createArticleSnapshot">保存快照</el-button>
-              <el-button size="small" @click="fetchSnapshots" :loading="snapshotsLoading">刷新</el-button>
-            </div>
-            <el-table :data="articleSnapshots" size="small" max-height="220" style="margin-top: 8px">
-              <el-table-column prop="label" label="名称" min-width="120" show-overflow-tooltip />
-              <el-table-column prop="created_at" label="时间" min-width="160" />
-              <el-table-column label="" width="150" fixed="right">
-                <template #default="{ row }">
-                  <el-button type="primary" link size="small" @click="restoreSnapshot(row)">恢复</el-button>
-                  <el-button type="danger" link size="small" @click="deleteSnapshot(row)">删除</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-        </div>
-      </el-collapse-item>
-      <el-collapse-item name="verify">
-        <template #title>
-          <span>本节核实与依据</span>
-          <el-tag
-            v-if="sectionVerifyReport?.claims && !sectionVerifyReport.claims.skipped"
-            size="small"
-            type="success"
-            style="margin-left: 0.5rem;"
-          >
-            {{ sectionVerifyReport.claims.verified_count ?? 0 }} 已匹配
-          </el-tag>
-        </template>
-        <VerificationPanel v-if="sectionVerifyReport" :report="sectionVerifyReport" />
-        <p v-else class="verify-empty-hint">
-          保存或 AI 生成本节后，此处会显示声明核对与文献片段；也可在右侧「核实状态」查看。
-        </p>
       </el-collapse-item>
     </el-collapse>
     <el-dialog v-model="showBindDialog" title="添加参考文献" width="520px">
@@ -449,9 +428,32 @@
             placeholder="可选"
           />
         </div>
-        <el-button type="primary" size="small" :loading="savingVisualContinuity" @click="saveVisualContinuity">
-          保存到文章
-        </el-button>
+        <div class="series-visual-actions">
+          <el-button type="primary" size="small" :loading="savingVisualContinuity" @click="saveVisualContinuity">
+            保存到文章
+          </el-button>
+          <el-button
+            v-if="article?.content_format === 'comic_strip'"
+            type="success"
+            size="small"
+            :loading="batchGenerating"
+            :disabled="batchGenerating"
+            @click="handleBatchComicGenerate"
+          >
+            {{ batchGenerating ? `生成中 ${batchDoneCount}/${batchTotalCount}` : '一键批量出图' }}
+          </el-button>
+        </div>
+        <div v-if="batchGenerating || batchResults.length" class="batch-progress">
+          <el-progress
+            :percentage="batchTotalCount ? Math.round(batchDoneCount / batchTotalCount * 100) : 0"
+            :status="batchFailCount > 0 ? 'warning' : (batchDoneCount === batchTotalCount && batchTotalCount > 0 ? 'success' : undefined)"
+          />
+          <div class="batch-stats">
+            <span>总计 {{ batchTotalCount }} 格</span>
+            <span v-if="batchDoneCount" class="batch-stat-ok">成功 {{ batchDoneCount - batchFailCount }}</span>
+            <span v-if="batchFailCount" class="batch-stat-fail">失败 {{ batchFailCount }}</span>
+          </div>
+        </div>
       </el-collapse-item>
     </el-collapse>
     <div class="editor-area">
@@ -468,6 +470,24 @@
         @claim-click="onMedClaimClick"
         :content-format="article.content_format"
       />
+      <div v-if="indexedBindings.length" class="auto-references">
+        <div class="auto-references-header">
+          <span class="auto-references-title">参考文献</span>
+          <el-tag size="small" type="info">{{ indexedBindings.length }} 篇</el-tag>
+        </div>
+        <ol class="auto-references-list">
+          <li v-for="b in indexedBindings" :key="b.binding_id" class="auto-ref-item">
+            <span class="auto-ref-text">{{ formatRefCitation(b) }}</span>
+            <a
+              v-if="getRefLink(b)"
+              :href="getRefLink(b)"
+              target="_blank"
+              class="auto-ref-link"
+              title="查看原文"
+            >↗</a>
+          </li>
+        </ol>
+      </div>
     </div>
 
     <el-dialog
@@ -559,28 +579,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import MedCommEditor from '@/components/editor/MedCommEditor.vue'
-import VerificationPanel from '@/components/verification/VerificationPanel.vue'
 import FormatBadge from '@/components/common/FormatBadge.vue'
 import PlatformBadge from '@/components/common/PlatformBadge.vue'
 import StageProgressBar from '@/components/layout/StageProgressBar.vue'
-import { ArrowDown, Loading } from '@element-plus/icons-vue'
+import { ArrowDown, ArrowLeft, Loading } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, axiosErrorDetail, API_BASE, getAuthToken, getLocalApiKeyHeaderForFetch } from '@/api'
 import { useStreamGenerate } from '@/composables/useStreamGenerate'
 import { useArticleStore } from '@/stores/article'
+import { useSettingsStore } from '@/stores/settings'
+import { buildImageGenBackendOptions } from '@/composables/useImageGenerate'
 import { AUTH_USER_CHANGED_EVENT } from '@/stores/auth'
 import { extractPlainFromTiptapJson, stripOrphanCitationMarks } from '@/utils/tiptapPlainText'
 
 const route = useRoute()
 const router = useRouter()
 const articleStore = useArticleStore()
+const settingsStore = useSettingsStore()
 const article = ref<any>(null)
 const articleTitleDraft = ref('')
 const titleGenerating = ref(false)
 const copyMdLoading = ref(false)
+const copyTxtLoading = ref(false)
 const claimEvidenceVisible = ref(false)
 const claimEvidencePayload = ref<{
   paperId: number
@@ -599,10 +622,90 @@ const showSeriesVisualPanel = computed(() => {
   return cf === 'comic_strip' || cf === 'storyboard' || cf === 'card_series'
 })
 
-const sectionVerifyReport = computed(() => article.value?.verify_report ?? articleStore.verificationReport)
+const batchGenerating = ref(false)
+const batchTotalCount = ref(0)
+const batchDoneCount = ref(0)
+const batchFailCount = ref(0)
+const batchResults = ref<Array<{ panelIndex: number; taskId: string; status: string; error?: string }>>([])
+
 
 const currentSectionId = ref<number | null>(null)
 const { generating, streamedText, generateSection } = useStreamGenerate()
+
+const MANDATORY_SECTIONS_MAP: Record<string, Set<string>> = {
+  article: new Set(['intro', 'body', 'summary']),
+  story: new Set(['hook', 'development', 'turning_point', 'science_core', 'resolution']),
+  debunk: new Set(['rumor_present', 'verdict', 'debunk_1', 'debunk_2', 'correct_practice', 'anti_fraud']),
+  qa_article: new Set(['qa_intro', 'qa_1', 'qa_2', 'qa_3', 'qa_summary']),
+  research_read: new Set(['one_liner', 'study_card', 'why_matters', 'methods', 'findings', 'implication', 'limitation']),
+  comic_strip: new Set(['planner', 'panel_1', 'panel_2', 'panel_3', 'panel_4', 'panel_5', 'panel_6', 'panel_7', 'panel_8', 'panel_9']),
+  card_series: new Set(['series_plan', 'cover_card', 'card_1', 'card_2', 'card_3', 'card_4', 'card_5', 'ending_card']),
+  poster: new Set(['poster_brief', 'headline', 'body_visual', 'cta_footer', 'design_spec']),
+  picture_book: new Set(['book_plan', 'cover', 'spread_1', 'spread_2', 'spread_3', 'spread_4', 'spread_5', 'back_cover']),
+  long_image: new Set(['image_plan', 'title_block', 'intro_block', 'core_1', 'core_2', 'core_3', 'tips_block', 'summary_cta', 'footer_info']),
+  oral_script: new Set(['script_plan', 'golden_hook', 'problem_setup', 'core_knowledge', 'practical_tips', 'closing_hook', 'extras']),
+  drama_script: new Set(['drama_plan', 'cast_table', 'act_1', 'act_2', 'act_3', 'act_4', 'act_5', 'finale', 'filming_notes']),
+  storyboard: new Set(['anim_plan', 'char_design', 'reel_1', 'reel_2', 'reel_3', 'reel_4', 'reel_5', 'prod_notes']),
+  patient_handbook: new Set(['handbook_plan', 'cover', 'disease_know', 'treatment', 'daily_care', 'followup', 'emergency', 'faq', 'back_cover']),
+}
+const MANDATORY_SECTIONS = computed(() => {
+  const fmt = article.value?.content_format || 'article'
+  return MANDATORY_SECTIONS_MAP[fmt] || new Set<string>()
+})
+
+const isCurrentSectionSkipped = computed(() => {
+  if (!currentSectionId.value || !article.value?.sections) return false
+  const sec = article.value.sections.find((s: any) => s.id === currentSectionId.value)
+  return sec?.status === 'skipped'
+})
+
+const sectionContextMenu = reactive({
+  visible: false,
+  x: 0,
+  y: 0,
+  section: null as any,
+})
+
+function canSkipSection(sec: any) {
+  if (!sec) return false
+  return !MANDATORY_SECTIONS.value.has(sec.section_type)
+}
+
+function onSectionContextMenu(e: MouseEvent, sec: any) {
+  sectionContextMenu.visible = true
+  sectionContextMenu.x = e.clientX
+  sectionContextMenu.y = e.clientY
+  sectionContextMenu.section = sec
+  const closeMenu = () => {
+    sectionContextMenu.visible = false
+    document.removeEventListener('click', closeMenu)
+  }
+  setTimeout(() => document.addEventListener('click', closeMenu), 0)
+}
+
+async function handleSkipSection(sec: any) {
+  if (!sec?.id) return
+  sectionContextMenu.visible = false
+  try {
+    await api.medcomm.skipSection(sec.id)
+    ElMessage.success(`已跳过「${sec.title || sec.section_type}」`)
+    await loadArticle(currentSectionId.value ?? undefined)
+  } catch (e: any) {
+    ElMessage.error(await axiosErrorDetail(e) || '操作失败')
+  }
+}
+
+async function handleUnskipSection(sec: any) {
+  if (!sec?.id) return
+  sectionContextMenu.visible = false
+  try {
+    await api.medcomm.unskipSection(sec.id)
+    ElMessage.success(`已恢复「${sec.title || sec.section_type}」`)
+    await loadArticle(currentSectionId.value ?? undefined)
+  } catch (e: any) {
+    ElMessage.error(await axiosErrorDetail(e) || '操作失败')
+  }
+}
 const exportCheckDialogVisible = ref(false)
 const exportCheckMessage = ref('')
 const exportDataWarnings = ref<Array<{ text: string; message?: string }>>([])
@@ -617,7 +720,8 @@ const awaitLocateFeedback = ref(false)
 
 const bindings = ref<any[]>([])
 const externalRefs = ref<any[]>([])
-const bindingScope = ref<'section' | 'article'>('section')
+const bindingScope = ref<'section' | 'article'>('article')
+const activeCollapseItems = ref<string[]>(['refs'])
 const showBindDialog = ref(false)
 const papersForBind = ref<any[]>([])
 const bindSearchQ = ref('')
@@ -668,100 +772,8 @@ const externalGroupTab = ref<'all' | 'guideline' | 'review' | 'meta' | 'rct'>('a
 
 const articleId = computed(() => Number(route.params.id))
 
-const sectionVersions = ref<Array<{ id: number; version: number; version_type: string; is_current: boolean; created_at: string | null }>>([])
-const versionsLoading = ref(false)
-const articleSnapshots = ref<Array<{ id: number; label: string; created_at: string | null }>>([])
-const snapshotsLoading = ref(false)
-const snapshotSaving = ref(false)
-const snapshotLabel = ref('')
-
-async function fetchSectionVersions() {
-  if (!currentSectionId.value) return
-  versionsLoading.value = true
-  try {
-    const res = await api.medcomm.getSectionVersions(currentSectionId.value)
-    sectionVersions.value = res.data?.items || []
-  } catch (e: any) {
-    ElMessage.error(await axiosErrorDetail(e) || '加载版本失败')
-  } finally {
-    versionsLoading.value = false
-  }
-}
-
-async function revertToVersion(row: { id: number }) {
-  if (!currentSectionId.value) return
-  try {
-    await api.medcomm.revertSection(currentSectionId.value, row.id)
-    ElMessage.success('已恢复到该版本')
-    await loadArticle(currentSectionId.value ?? undefined)
-  } catch (e: any) {
-    ElMessage.error(await axiosErrorDetail(e) || '恢复失败')
-  }
-}
-
-async function fetchSnapshots() {
-  if (!articleId.value) return
-  snapshotsLoading.value = true
-  try {
-    const res = await api.medcomm.listSnapshots(articleId.value)
-    articleSnapshots.value = res.data?.items || []
-  } catch (e: any) {
-    ElMessage.error(await axiosErrorDetail(e) || '加载快照失败')
-  } finally {
-    snapshotsLoading.value = false
-  }
-}
-
-async function createArticleSnapshot() {
-  if (!articleId.value) return
-  snapshotSaving.value = true
-  try {
-    await api.medcomm.createSnapshot(articleId.value, { label: snapshotLabel.value.trim() })
-    snapshotLabel.value = ''
-    ElMessage.success('快照已保存')
-    await fetchSnapshots()
-  } catch (e: any) {
-    ElMessage.error(await axiosErrorDetail(e) || '保存快照失败')
-  } finally {
-    snapshotSaving.value = false
-  }
-}
-
-async function restoreSnapshot(row: { id: number }) {
-  if (!articleId.value) return
-  try {
-    await ElMessageBox.confirm('将从快照恢复所有章节当前平台下的内容，并产生新版本。是否继续？', '恢复快照', {
-      type: 'warning',
-      confirmButtonText: '恢复',
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return
-  }
-  try {
-    await api.medcomm.restoreSnapshot(articleId.value, row.id)
-    ElMessage.success('已从快照恢复')
-    await loadArticle(currentSectionId.value ?? undefined)
-    await fetchSectionVersions()
-    await fetchSnapshots()
-  } catch (e: any) {
-    ElMessage.error(await axiosErrorDetail(e) || '恢复失败')
-  }
-}
-
-async function deleteSnapshot(row: { id: number }) {
-  if (!articleId.value) return
-  try {
-    await api.medcomm.deleteSnapshot(articleId.value, row.id)
-    ElMessage.success('已删除')
-    await fetchSnapshots()
-  } catch (e: any) {
-    ElMessage.error(await axiosErrorDetail(e) || '删除失败')
-  }
-}
-
-watch(currentSectionId, () => {
-  sectionVersions.value = []
+watch(currentSectionId, (id) => {
+  articleStore.setSectionId(id)
 })
 
 const indexedBindings = computed(() => {
@@ -784,6 +796,41 @@ const citationIndexMap = computed<Record<string, number>>(() => {
   return m
 })
 const boundPaperIdSet = computed(() => new Set((bindings.value || []).map((b: any) => Number(b.paper_id)).filter(Boolean)))
+
+function formatRefCitation(b: any): string {
+  const authors = (b.authors || []).slice(0, 3).join(', ')
+  const authorSuffix = (b.authors || []).length > 3
+    ? ((b.authors[0] || '').match(/[\u4e00-\u9fff]/) ? ' 等' : ' et al.')
+    : ''
+  const authorStr = authors ? authors + authorSuffix : ''
+  const title = (b.title || '').replace(/\.$/, '')
+  const journal = b.journal || ''
+  const year = b.year ? String(b.year) : ''
+  const vol = b.volume || ''
+  const issue = b.issue || ''
+  const pages = b.pages || ''
+
+  let volIssuePart = ''
+  if (vol && issue && pages) volIssuePart = `${vol}(${issue}): ${pages}`
+  else if (vol && pages) volIssuePart = `${vol}: ${pages}`
+  else if (vol && issue) volIssuePart = `${vol}(${issue})`
+  else if (vol) volIssuePart = vol
+
+  let source = ''
+  if (journal && volIssuePart) source = `${journal}, ${year ? year + ', ' : ''}${volIssuePart}`
+  else if (journal && year) source = `${journal}, ${year}`
+  else if (journal) source = journal
+  else if (year) source = year
+
+  const segments = [authorStr, title, source].filter(Boolean)
+  return segments.join('. ') + '.'
+}
+
+function getRefLink(b: any): string {
+  if (b.doi) return `https://doi.org/${b.doi}`
+  if (b.url) return b.url
+  return ''
+}
 function classifyExternalType(r: any): 'guideline' | 'review' | 'meta' | 'rct' | 'other' {
   const t = ((r?.pub_types || []).join(' ') + ' ' + (r?.title || '')).toLowerCase()
   if (t.includes('guideline')) return 'guideline'
@@ -857,9 +904,40 @@ async function loadArticle(sectionId?: number) {
     visualContinuityDraft.value = res.data?.visual_continuity_prompt || ''
     imageSeriesSeedBaseDraft.value =
       res.data?.image_series_seed_base != null ? Number(res.data.image_series_seed_base) : null
-    void fetchSnapshots()
+    void loadImageSuggestions()
+
+    const vr = res.data?.verify_report
+    const sid = currentSectionId.value
+    if (sid && vr && !vr.ai_patterns) {
+      api.medcomm.recheckSection(sid).then((rr) => {
+        if (rr.data?.verify_report) {
+          articleStore.setVerificationReport(rr.data.verify_report)
+        }
+      }).catch(() => {})
+    }
   } catch {
     article.value = null
+  }
+}
+
+async function loadImageSuggestions() {
+  const cf = article.value?.content_format
+  if (!currentSectionId.value || !cf) {
+    if (!articleStore.imageSuggestions.length) articleStore.setImageSuggestions([])
+    return
+  }
+  if (['comic_strip', 'storyboard', 'card_series'].includes(cf)) {
+    articleStore.setImageSuggestions([])
+    return
+  }
+  try {
+    const res = await api.imagegen.getSuggestions(currentSectionId.value)
+    const suggestions = res.data?.suggestions || []
+    if (suggestions.length || !articleStore.imageSuggestions.length) {
+      articleStore.setImageSuggestions(suggestions)
+    }
+  } catch {
+    if (!articleStore.imageSuggestions.length) articleStore.setImageSuggestions([])
   }
 }
 
@@ -881,6 +959,108 @@ async function saveVisualContinuity() {
   } finally {
     savingVisualContinuity.value = false
   }
+}
+
+async function handleBatchComicGenerate() {
+  if (!articleId.value || !editorRef.value?.getComicPanels) return
+  const panels = editorRef.value.getComicPanels() as Array<{
+    panelIndex: number; sceneDesc: string; dialogue: string; narration: string; imagePath: string | null
+  }>
+  const validPanels = panels.filter(p => p.sceneDesc || p.dialogue || p.narration)
+  if (!validPanels.length) {
+    ElMessage.warning('未找到包含画面描述的条漫格，请先生成条漫文案')
+    return
+  }
+  const panelsWithImage = validPanels.filter(p => p.imagePath)
+  if (panelsWithImage.length > 0) {
+    try {
+      await ElMessageBox.confirm(
+        `${panelsWithImage.length} 格已有配图，重新生成将覆盖。继续？`,
+        '批量出图确认',
+        { confirmButtonText: '全部重新生成', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
+  }
+
+  batchGenerating.value = true
+  batchTotalCount.value = validPanels.length
+  batchDoneCount.value = 0
+  batchFailCount.value = 0
+  batchResults.value = []
+
+  try {
+    const providerOpts = buildImageGenBackendOptions(settingsStore)
+    const batchPayload = {
+      article_id: articleId.value,
+      panels: validPanels.map(p => ({
+        panel_index: p.panelIndex,
+        scene_desc: p.sceneDesc || [p.dialogue, p.narration].filter(Boolean).join(' '),
+        dialogue: p.dialogue || undefined,
+      })),
+      style: 'comic',
+      seed_base: imageSeriesSeedBaseDraft.value ?? undefined,
+      ...providerOpts,
+    }
+    const res = await api.imagegen.comicBatch(batchPayload)
+    const tasks: Array<{ task_id: string; panel_index: number }> = res.data?.tasks || []
+    if (!tasks.length) {
+      ElMessage.error('批量任务创建失败')
+      batchGenerating.value = false
+      return
+    }
+    batchResults.value = tasks.map(t => ({ panelIndex: t.panel_index, taskId: t.task_id, status: 'pending' }))
+
+    const pollAll = tasks.map(t => pollTaskAndWriteBack(t.task_id, t.panel_index))
+    await Promise.allSettled(pollAll)
+
+    if (batchFailCount.value === 0) {
+      ElMessage.success(`全部 ${batchTotalCount.value} 格配图生成完成`)
+    } else {
+      ElMessage.warning(`${batchDoneCount.value - batchFailCount.value} 格成功，${batchFailCount.value} 格失败`)
+    }
+  } catch (e: any) {
+    ElMessage.error(await axiosErrorDetail(e) || '批量出图请求失败')
+  } finally {
+    batchGenerating.value = false
+  }
+}
+
+async function pollTaskAndWriteBack(taskId: string, panelIndex: number) {
+  const MAX_POLL = 150
+  const INTERVAL = 2000
+  for (let i = 0; i < MAX_POLL; i++) {
+    await new Promise(r => setTimeout(r, INTERVAL))
+    try {
+      const res = await api.imagegen.getTaskStatus(taskId)
+      const data = res.data as { status: string; images?: { path: string }[]; error?: string }
+      if (data.status === 'done') {
+        const imgPath = data.images?.[0]?.path
+        if (imgPath && editorRef.value?.updateComicPanelImage) {
+          const full = imgPath.startsWith('medcomm-image://') ? imgPath : `medcomm-image://${imgPath}`
+          editorRef.value.updateComicPanelImage(panelIndex, full)
+        }
+        batchDoneCount.value++
+        const r = batchResults.value.find(br => br.taskId === taskId)
+        if (r) r.status = 'done'
+        return
+      }
+      if (data.status === 'failed') {
+        batchDoneCount.value++
+        batchFailCount.value++
+        const r = batchResults.value.find(br => br.taskId === taskId)
+        if (r) { r.status = 'failed'; r.error = data.error || '生成失败' }
+        return
+      }
+    } catch {
+      // network hiccup, retry
+    }
+  }
+  batchDoneCount.value++
+  batchFailCount.value++
+  const r = batchResults.value.find(br => br.taskId === taskId)
+  if (r) { r.status = 'failed'; r.error = '轮询超时' }
 }
 
 function onSectionChange() {
@@ -1848,6 +2028,9 @@ async function handleGenerate() {
     },
     onVerifyReport: (r) => articleStore.setVerificationReport(r),
     onOllamaWarning: (msg) => articleStore.setOllamaWarning(msg),
+    onImageSuggestions: (suggestions) => {
+      articleStore.setImageSuggestions(suggestions)
+    },
   })
 }
 
@@ -2066,6 +2249,22 @@ async function handleRejectChange(c: any) {
   } catch { /* ignore */ }
 }
 
+async function copyPlainTextExport() {
+  if (!articleId.value) return
+  copyTxtLoading.value = true
+  try {
+    const res = await api.medcomm.exportArticle(articleId.value, 'txt')
+    const blob = res.data as Blob
+    const text = await blob.text()
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制纯文本（无格式符号）')
+  } catch (e: unknown) {
+    ElMessage.error(await axiosErrorDetail(e as any) || '复制失败')
+  } finally {
+    copyTxtLoading.value = false
+  }
+}
+
 async function copyMarkdownExport() {
   if (!articleId.value) return
   copyMdLoading.value = true
@@ -2140,11 +2339,32 @@ watch(articleId, () => {
   loadBindings()
 })
 watch(bindingScope, () => loadBindings())
+watch(() => articleStore.reloadNonce, () => {
+  loadArticle(currentSectionId.value ?? undefined)
+})
 watch(
   () => articleStore.editorLocatePayload?.nonce,
   () => {
     const p = articleStore.editorLocatePayload
     if (p?.text) void locateIssueText(p.text)
+  },
+)
+watch(
+  () => articleStore.editorReplaceRequest?.nonce,
+  () => {
+    const r = articleStore.editorReplaceRequest
+    if (r && editorRef.value?.replaceRange) {
+      editorRef.value.replaceRange(r.from, r.to, r.text)
+    }
+  },
+)
+watch(
+  () => articleStore.editorInsertRequest?.nonce,
+  () => {
+    const r = articleStore.editorInsertRequest
+    if (r && editorRef.value?.insertAtCursor) {
+      editorRef.value.insertAtCursor(r.text)
+    }
   },
 )
 watch(showBindDialog, (v) => { if (v) searchPapersForBind() })
@@ -2178,6 +2398,17 @@ async function handleAuthUserChanged() {
 </script>
 
 <style scoped>
+.back-row {
+  margin-bottom: 0.5rem;
+}
+.back-row .el-button {
+  padding: 4px 8px;
+  font-size: 0.85rem;
+  color: #606266;
+}
+.back-row .el-button:hover {
+  color: var(--el-color-primary);
+}
 .translate-assist-bar {
   display: flex;
   align-items: center;
@@ -2236,29 +2467,6 @@ async function handleAuthUserChanged() {
   font-size: 0.85rem;
   padding: 0.5rem 0;
 }
-.version-snap-panel {
-  padding: 0.25rem 0;
-}
-.vs-hint {
-  color: #909399;
-  font-size: 12px;
-  line-height: 1.5;
-  margin: 0 0 0.75rem;
-}
-.vs-block {
-  margin-bottom: 1rem;
-}
-.vs-label {
-  font-weight: 600;
-  font-size: 13px;
-  margin-bottom: 0.35rem;
-}
-.vs-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-}
 .bindings-list {
   list-style: none;
   padding: 0;
@@ -2272,6 +2480,8 @@ async function handleAuthUserChanged() {
   font-size: 0.9em;
 }
 .binding-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 0.5rem; }
+.binding-ref-num { color: #409eff; font-weight: 600; margin-right: 4px; }
+.binding-meta { color: #9ca3af; font-size: 12px; margin-left: 4px; }
 .binding-actions { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .external-search-filters {
   display: flex;
@@ -2343,12 +2553,6 @@ async function handleAuthUserChanged() {
   background: #fafafa;
 }
 
-.verify-empty-hint {
-  margin: 0;
-  font-size: 0.85rem;
-  color: #6b7280;
-  line-height: 1.5;
-}
 
 .claim-evidence-body {
   font-size: 0.875rem;
@@ -2378,11 +2582,60 @@ async function handleAuthUserChanged() {
   padding: 0.5rem 1rem;
   border-bottom: 1px solid #eee;
   background: #fafafa;
+  position: relative;
 }
 
 .section-tabs :deep(.el-radio-group) {
   display: flex;
   flex-wrap: wrap;
+}
+
+.section-skipped :deep(.el-radio-button__inner) {
+  opacity: 0.5;
+  background: #f5f5f5 !important;
+}
+
+.skipped-label {
+  text-decoration: line-through;
+  color: #9ca3af;
+}
+
+.section-context-menu {
+  position: fixed;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+  padding: 4px 0;
+  z-index: 2000;
+  min-width: 140px;
+}
+
+.ctx-item {
+  padding: 6px 16px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: #374151;
+}
+
+.ctx-item:hover {
+  background: #f0f9ff;
+  color: #409eff;
+}
+
+.ctx-item-danger:hover {
+  background: #fef2f2;
+  color: #f56c6c;
+}
+
+.ctx-item-disabled {
+  color: #c0c4cc;
+  cursor: not-allowed;
+}
+
+.ctx-item-disabled:hover {
+  background: transparent;
+  color: #c0c4cc;
 }
 
 .stream-preview {
@@ -2420,6 +2673,34 @@ async function handleAuthUserChanged() {
 .series-seed-label {
   font-size: 0.875rem;
   color: #374151;
+}
+
+.series-visual-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.batch-progress {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0;
+}
+
+.batch-stats {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.batch-stat-ok {
+  color: #10b981;
+}
+
+.batch-stat-fail {
+  color: #ef4444;
 }
 
 .editor-area {
@@ -2471,4 +2752,57 @@ async function handleAuthUserChanged() {
 .pc-text.del { color: #f56c6c; text-decoration: line-through; }
 .pc-text.ins { color: #67c23a; }
 .pc-actions { margin-top: 0.35rem; display: flex; gap: 0.5rem; }
+
+.auto-references {
+  margin: 1.5rem 0 1rem;
+  padding: 1rem 1.25rem;
+  background: #fafafa;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+.auto-references-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+.auto-references-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #374151;
+}
+.auto-references-list {
+  margin: 0;
+  padding-left: 1.5rem;
+}
+.auto-ref-item {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: #4b5563;
+  margin-bottom: 0.35rem;
+}
+.auto-ref-item::marker {
+  color: #9ca3af;
+}
+.auto-ref-text {
+  word-break: break-word;
+}
+.auto-ref-link {
+  flex-shrink: 0;
+  margin-left: 6px;
+  color: #409eff;
+  text-decoration: none;
+  font-size: 13px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+.auto-ref-link:hover {
+  opacity: 1;
+}
+.auto-ref-item {
+  display: flex;
+  align-items: baseline;
+}
 </style>

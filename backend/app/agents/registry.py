@@ -6,19 +6,30 @@ from typing import Optional
 from app.agents.base import BaseAgent
 from app.agents.medcomm.format_agent import FormatAgent
 from app.agents.comic.comic_agent import ComicPanelWriter
+from app.agents.card.card_agent import CardSeriesWriter
+from app.agents.poster.poster_agent import PosterWriter
+from app.agents.picture_book.picture_book_agent import PictureBookWriter
+from app.agents.long_image.long_image_agent import LongImageWriter
+from app.agents.oral_script.oral_script_agent import OralScriptWriter
+from app.agents.drama.drama_agent import DramaScriptWriter
+from app.agents.storyboard.storyboard_agent import StoryboardWriter
 from app.agents.handbook.handbook_agent import HandbookSectionAgent
-# 形式族 → Agent 类（debunk 改用 FormatAgent 以使用 task_prompts 详细提示词）
 FORMAT_AGENT_MAP = {
     "debunk": FormatAgent,
-    "oral_script": FormatAgent,
-    "drama_script": FormatAgent,  # 情景剧用 FormatAgent + drama_script prompts
+    "oral_script": OralScriptWriter,
+    "drama_script": DramaScriptWriter,
     "comic_strip": ComicPanelWriter,
+    "card_series": CardSeriesWriter,
+    "poster": PosterWriter,
+    "picture_book": PictureBookWriter,
+    "long_image": LongImageWriter,
+    "storyboard": StoryboardWriter,
     "patient_handbook": HandbookSectionAgent,
 }
 
 # 形式 → 是否跳过医学声明核实 / 阅读难度（v2.1：补全 long_image、h5_outline）
 # 竖版长图/H5大纲：文案极简+配图描述英文或配合交互，两种验证均不适用
-SKIP_VERIFY_FORMATS = {"comic_strip", "card_series", "poster", "picture_book", "storyboard", "long_image", "h5_outline"}
+SKIP_VERIFY_FORMATS = {"comic_strip", "card_series", "poster", "picture_book", "storyboard", "long_image", "h5_outline", "oral_script", "drama_script"}
 SKIP_LEVEL_FORMATS = {
     "oral_script", "drama_script", "storyboard", "audio_script",
     "comic_strip", "card_series", "poster", "h5_outline", "long_image",

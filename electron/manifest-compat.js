@@ -53,26 +53,16 @@ function parseUpdateResponse(data) {
     has_software_update: data.has_software_update ?? false,
     latest_version: data.latest_version || null,
     download_url: data.download_url || null,
+    update_download_url: data.update_download_url || null,
+    update_filename: data.update_filename || null,
+    update_size_bytes: data.update_size_bytes ?? 0,
+    update_sha256: data.update_sha256 || null,
+    release_notes: data.release_notes || null,
+    platform_status: data.platform_status || null,
     min_client_version: data.min_client_version || null,
     specialty_updates: Array.isArray(data.specialty_updates) ? data.specialty_updates : [],
     drawing_pack_updates: Array.isArray(data.drawing_pack_updates) ? data.drawing_pack_updates : [],
-    bundle_updates: Array.isArray(data.bundle_updates) ? data.bundle_updates : [],
     changelog: data.changelog || null,
-  }
-}
-
-/**
- * 安全解析 bundle 信息（从 API 响应中提取 ComfyUI bundle 元数据）。
- */
-function parseBundleInfo(data) {
-  if (!data || typeof data !== 'object') return null
-  return {
-    version: data.version || null,
-    platform: data.platform || null,
-    download_url: data.download_url || null,
-    size_bytes: data.size_bytes || 0,
-    sha256: data.sha256 || null,
-    min_client_version: data.min_client_version || null,
   }
 }
 
@@ -80,5 +70,4 @@ module.exports = {
   compareVersions,
   checkMinClientVersion,
   parseUpdateResponse,
-  parseBundleInfo,
 }

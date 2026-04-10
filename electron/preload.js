@@ -5,6 +5,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  arch: process.arch,
   isElectron: true,
   getLocalApiKey: () => ipcRenderer.invoke('get-local-api-key'),
   saveApiKey: (account, value) => ipcRenderer.invoke('save-api-key', account, value),
@@ -70,19 +71,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   importLocalPack: () => ipcRenderer.invoke('import-local-pack'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
-
-  // ComfyUI 管理
-  getComfyUIStatus: () => ipcRenderer.invoke('get-comfyui-status'),
-  getComfyUIUrl: () => ipcRenderer.invoke('get-comfyui-url'),
-  restartComfyUI: () => ipcRenderer.invoke('restart-comfyui'),
-
-  // ComfyUI Bundle 管理
-  getComfyUIBundleInfo: () => ipcRenderer.invoke('get-comfyui-bundle-info'),
-  installComfyUIBundle: (opts) => ipcRenderer.invoke('install-comfyui-bundle', opts),
-  uninstallComfyUIBundle: () => ipcRenderer.invoke('uninstall-comfyui-bundle'),
-  onComfyUIBundleProgress: (cb) => {
-    ipcRenderer.on('comfyui-bundle-progress', (_, payload) => cb && cb(payload))
-  },
 
   // 启动自检
   runStartupCheck: () => ipcRenderer.invoke('run-startup-check'),

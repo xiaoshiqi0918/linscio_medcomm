@@ -1,0 +1,152 @@
+# LinScio MedComm — macOS 客户端 CI 构建（ARM64 + x64）
+#
+# 产物命名：LinScio-MedComm-{ver}-mac-{arm64|x64}.{dmg,zip}
+#
+# 触发方式：手动 workflow_dispatch
+name: Build Mac Client
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: '目标架构'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - arm64
+          - x64
+          - both
+
+jobs:
+  build-mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+            py_url_suffix: aarch64-apple-darwin-install_only.tar.gz
+            wheels_platform: macosx_14_0_arm64
+            wheels_dir: darwin-arm64
+          - arch: x64
+            runner: macos-13
+            py_url_suffix: x86_64-apple-darwin-install_only.tar.gz
+            wheels_platform: macosx_12_0_x86_64
+            wheels_dir: darwin-x64
+
+    runs-on: ${{ matrix.runner }}
+    if: ${{ github.event.inputs.arch == 'both' || github.event.inputs.arch == matrix.arch }}
+
+    env:
+      PY_TAG: "20241205"
+      PY_VER: "3.11.11"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # ① Python wheels
+      - name: Download Python wheels (${{ matrix.arch }})
+        run: |
+          set -euo pipefail
+          WHEEL_DIR="build/wheels/${{ matrix.wheels_dir }}"
+          mkdir -p "$WHEEL_DIR"
+
+          TMP_REQ="build/.tmp-req.txt"
+          sed 's/uvicorn\[standard\]/uvicorn/g' backend/requirements.txt > "$TMP_REQ"
+
+          SDIST_RE='^\s*(jieba|bibtexparser)'
+          grep -vE "$SDIST_RE" "$TMP_REQ" > build/.tmp-req-binary.txt || true
+
+          echo "==> Phase 1: binary wheels"
+          python -m pip download -r build/.tmp-req-binary.txt \
+            --platform ${{ matrix.wheels_platform }} --python-version 3.11 \
+            --only-binary=:all: -d "$WHEEL_DIR/" || true
+
+          echo "==> Phase 2: sdist-only packages"
+          SDIST_PKGS=$(grep -E "$SDIST_RE" "$TMP_REQ" | tr '\n' ' ' || true)
+          if [ -n "$SDIST_PKGS" ]; then
+            python -m pip wheel $SDIST_PKGS -w "$WHEEL_DIR/"
+            rm -f "$WHEEL_DIR/"*.tar.gz "$WHEEL_DIR/"*.zip 2>/dev/null || true
+          fi
+
+          echo "==> Wheels count: $(ls "$WHEEL_DIR/"*.whl 2>/dev/null | wc -l)"
+          rm -f build/.tmp-req.txt build/.tmp-req-binary.txt
+
+      # ② Embedded Python
+      - name: Download Python standalone (${{ matrix.arch }})
+        run: |
+          PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PY_TAG}/cpython-${PY_VER}+${PY_TAG}-${{ matrix.py_url_suffix }}"
+          curl -sSL -o build/python-standalone.tar.gz "$PY_URL"
+          rm -rf build/python
+          tar -xzf build/python-standalone.tar.gz -C build
+          if [ ! -d build/python ]; then
+            mv build/cpython-${PY_VER}* build/python 2>/dev/null || mv build/cpython-3.11* build/python
+          fi
+          echo "Python: $(build/python/bin/python3 --version)"
+          echo "Arch: $(file -b build/python/bin/python3 | grep -o 'arm64\|x86_64')"
+
+      # ③ Install deps into embedded Python
+      - name: Install deps into embedded Python
+        run: |
+          TMP_REQ="build/.tmp-req.txt"
+          sed 's/uvicorn\[standard\]/uvicorn/g' backend/requirements.txt > "$TMP_REQ"
+
+          build/python/bin/python3 -m pip install \
+            --no-index --find-links="build/wheels/${{ matrix.wheels_dir }}/" \
+            --no-warn-script-location \
+            -r "$TMP_REQ" --quiet 2>&1 || \
+          build/python/bin/python3 -m pip install \
+            --find-links="build/wheels/${{ matrix.wheels_dir }}/" \
+            --no-warn-script-location \
+            -r "$TMP_REQ" --quiet
+
+          echo "Installed: $(build/python/bin/python3 -m pip list --format=columns 2>/dev/null | wc -l) packages"
+          rm -f "$TMP_REQ"
+
+      # ④ Alembic check
+      - name: Verify Alembic single head
+        run: |
+          python -m pip install --upgrade pip --no-warn-script-location
+          python -m pip install -r backend/requirements.txt --quiet --no-warn-script-location
+          bash scripts/ci-alembic-check.sh
+
+      # ⑤ Build frontend
+      - name: Build frontend
+        run: npm run build
+
+      # ⑥ Get version
+      - name: Get version
+        id: version
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          echo "ver=$VER" >> "$GITHUB_OUTPUT"
+
+      # ⑦ Electron packaging
+      - name: Build Electron (mac-${{ matrix.arch }})
+        run: npx electron-builder --mac --${{ matrix.arch }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ⑧ Upload artifacts
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinScio-MedComm-${{ steps.version.outputs.ver }}-mac-${{ matrix.arch }}
+          path: releases/v${{ steps.version.outputs.ver }}/*
+          if-no-files-found: error
+          retention-days: 14

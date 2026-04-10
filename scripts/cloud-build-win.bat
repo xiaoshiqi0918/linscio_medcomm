@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul 2>&1
 REM ================================================================
 REM  LinScio MedComm - Tencent Cloud Windows one-click build
 REM
@@ -10,22 +11,21 @@ REM    4. npm install with native module workaround
 REM    5. Full build
 REM
 REM  Usage:
-REM    cloud-build-win.bat              (full build with ComfyUI)
-REM    cloud-build-win.bat --no-comfyui (slim build, no ComfyUI)
-REM    cloud-build-win.bat --skip-setup (skip env setup, just build)
+REM    cloud-build-win.bat              (客户端打包，不含 ComfyUI)
+REM    cloud-build-win.bat --skip-setup (跳过环境配置，直接构建)
+REM
+REM  ComfyUI 组件包请使用 cloud-build-comfyui-win.bat 单独打包
 REM
 REM  Prereqs:
 REM    - Node.js 20 LTS: https://nodejs.org/dist/v20.18.1/node-v20.18.1-x64.msi
 REM    - Python 3.11:    https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe
 REM    - Git for Windows: https://git-scm.com/download/win
-REM    - 40 GB free disk (with ComfyUI) or 10 GB (without)
+REM    - 10 GB free disk
 REM ================================================================
 setlocal enabledelayedexpansion
 
-set "SKIP_COMFYUI=0"
 set "SKIP_SETUP=0"
 for %%a in (%*) do (
-    if "%%a"=="--no-comfyui" set "SKIP_COMFYUI=1"
     if "%%a"=="--skip-setup" set "SKIP_SETUP=1"
 )
 
@@ -85,8 +85,7 @@ if "!MISSING!"=="1" (
 REM -- Disk space check --
 set "BUILDDRIVE=%~d0"
 set "BUILDDRIVELETTER=%BUILDDRIVE:~0,1%"
-set "MINGB=40"
-if "%SKIP_COMFYUI%"=="1" set "MINGB=10"
+set "MINGB=10"
 powershell -NoProfile -Command "$d='%BUILDDRIVELETTER%'; $free=(Get-PSDrive $d).Free; $need=%MINGB%*1GB; if($free -lt $need){Write-Host('[ERROR] Drive '+$d+': has '+ [math]::Round($free/1GB,1) +' GB free, need '+%MINGB%+' GB'); exit 1}; Write-Host('[OK] Drive '+$d+': '+ [math]::Round($free/1GB,1) +' GB free'); exit 0"
 if errorlevel 1 (
     echo.
@@ -215,7 +214,7 @@ echo   Source ready at: !ROOT!
 REM -- Clean previous build artifacts --
 echo   Cleaning previous build artifacts...
 if exist "releases" rmdir /s /q "releases" 2>nul
-if exist "build\comfyui" rmdir /s /q "build\comfyui" 2>nul
+REM build\comfyui 不再由此脚本管理
 echo   Done.
 echo.
 
@@ -292,13 +291,8 @@ REM ================================================================
 echo --- Phase 4: Running build ---
 echo.
 
-if "%SKIP_COMFYUI%"=="1" (
-    echo   Mode: Slim build - no ComfyUI
-    call "%ROOT%\scripts\build-win.bat" --no-comfyui
-) else (
-    echo   Mode: Full build - with ComfyUI + SD1.5
-    call "%ROOT%\scripts\build-win.bat"
-)
+echo   Mode: 客户端打包（不含 ComfyUI）
+call "%ROOT%\scripts\build-win.bat"
 
 if errorlevel 1 (
     echo.

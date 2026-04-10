@@ -77,6 +77,9 @@ class LiteraturePaper(Base):
     # 全文可用性：full=正文已入 paper_chunks；pending=待 PDF 解析或 OA 拉取；no_fulltext=需用户补 PDF
     fulltext_status = Column(String(32), default="pending", server_default="pending")
 
+    # 开放获取 PDF 链接（来自 Semantic Scholar 等检索结果，供全文管道使用）
+    open_access_url = Column(Text, default="")
+
     # 来源追踪
     import_source = Column(String(30), default="manual")
     created_at = Column(DateTime, default=func.now())

@@ -227,6 +227,7 @@ async def _translate_to_english(text: str) -> str:
     """调用 LLM 将中文描述翻译为英文"""
     try:
         from app.services.llm.openai_client import chat_completion
+        from app.services.llm.manager import TaskTier
 
         resp = await chat_completion(
             messages=[
@@ -234,6 +235,7 @@ async def _translate_to_english(text: str) -> str:
                 {"role": "user", "content": text},
             ],
             stream=False,
+            task=TaskTier.FAST,
         )
         return (resp or "").strip() or text
     except Exception:
@@ -419,68 +421,227 @@ def get_default_medical_negative(style: str, image_type: str) -> str:
     return _compose_med_negative(style, image_type)
 
 
-AI_IMAGE_PROMPT_SYSTEM = """You write English image-generation prompts for HEALTH and MEDICAL POPULAR SCIENCE (education, outreach, patient communication)—not for clinical diagnosis or treatment decisions.
+SD_REWRITE_SYSTEM = """You rewrite image generation prompts for Stable Diffusion / ComfyUI.
 
-The user's message includes Style id, Image type id, Content format, Audience, and a scene idea (may be Chinese, including TCM or China public-health idioms). Read those ids and adapt tone, composition, and negatives accordingly.
+Stable Diffusion CANNOT generate:
+- Readable text, labels, or captions
+- Data charts, graphs, or curves
+- Axes, scales, or numerical data
+- Structured layouts like flowcharts with text boxes
+- Side-by-side comparison with specific data
 
-=== Language and culture (scene idea) ===
-- Translate the user's intent into English tags inside the JSON values; do not copy long Chinese sentences into JSON unless a proper noun must stay (then keep minimal).
-- If the idea involves Traditional Chinese Medicine (TCM)—meridians, qi/blood, cupping, acupuncture points, herbal formulas—treat it as legitimate health education. Prefer respectful, neutral clinical-education metaphors (diagrammatic meridian maps, gentle icons). Avoid exoticizing or Orientalist staging (no "mystical East" clichés, no costume drama unless the user explicitly asks for a period setting).
+Your task: Convert any data-visualization or chart-like prompt into a PURELY VISUAL, ARTISTIC illustration that conveys the same CONCEPT without any text, numbers, or chart elements.
 
-=== OUTPUT CONTRACT (strict) ===
-- Return exactly one raw JSON object. Prefer a single line; if you must wrap, still produce valid JSON only—no prose outside the object.
-- Keys must be exactly: "positive" and "negative" (lowercase). No extra keys.
-- Both values must be non-empty English strings, mainly comma-separated tags and short phrases.
-- If uncertain about content, still output valid JSON with conservative safe prompts—never reply with an explanation instead of JSON.
-- Use normal UTF-8 characters inside strings; do not over-escape Unicode beyond JSON requirements.
+Examples:
+- "blood glucose fluctuation graph vs stable curve" → "split illustration, left half: chaotic stormy red waves and jagged lightning bolts representing instability, right half: calm blue smooth flowing river representing stability and health, dramatic visual contrast, clean medical illustration style"
+- "flowchart of diabetes treatment steps" → "sequential visual journey illustration showing stages of health improvement, connected by flowing arrows, each stage depicted as a distinct visual scene, medical education style"
+- "comparison chart of medication effectiveness" → "two contrasting visual metaphors side by side, one showing struggle with dark heavy elements, the other showing lightness and recovery with bright elements, medical illustration"
+
+Rules:
+- Output ONLY the rewritten English prompt, nothing else
+- Use visual metaphors instead of data
+- Use colors, shapes, and composition to show contrast
+- Never include: text, labels, numbers, axes, charts, graphs
+- Add "no text, no labels, no numbers, no watermark" to the prompt
+- Keep it under 80 words
+"""
+
+
+async def rewrite_prompt_for_sd(prompt: str, image_type: str) -> str:
+    """将结构化/图表化的提示词改写为 SD 可生成的纯视觉描述"""
+    from app.services.imagegen.image_types import is_structured_type
+    if not is_structured_type(image_type):
+        return prompt
+    try:
+        from app.services.llm.openai_client import chat_completion
+        from app.services.llm.manager import TaskTier
+        resp = await chat_completion(
+            messages=[
+                {"role": "system", "content": SD_REWRITE_SYSTEM},
+                {"role": "user", "content": f"Image type: {image_type}\nOriginal prompt: {prompt}"},
+            ],
+            stream=False,
+            task=TaskTier.FAST,
+        )
+        rewritten = (resp or "").strip()
+        if rewritten and len(rewritten) > 20:
+            return rewritten
+    except Exception:
+        pass
+    keywords_to_remove = [
+        "labeled axes", "time on x-axis", "glucose level on y-axis",
+        "chart", "graph", "data visualization", "labeled",
+        "axes", "scale", "numerical", "statistics",
+    ]
+    result = prompt
+    for kw in keywords_to_remove:
+        result = result.replace(kw, "")
+    result += ", no text, no labels, no numbers, no watermark"
+    return result
+
+
+_SHARED_SAFETY_AND_CONTEXT = """
+=== CONTEXT ===
+You write English image-generation prompts for HEALTH and MEDICAL POPULAR SCIENCE (education, outreach, patient communication)—not for clinical diagnosis or treatment decisions.
+The user's message includes Style id, Image type id, Content format, Audience, and a scene idea (may be Chinese, including TCM idioms).
+
+=== Language and culture ===
+- Translate the user's intent into English inside the JSON values; do not copy long Chinese sentences.
+- TCM topics (meridians, qi/blood, acupuncture, herbal formulas): treat as legitimate health education with respectful, neutral clinical-education metaphors. No "mystical East" clichés.
+
+=== Non-negotiable safety (all providers) ===
+- No graphic gore, open wounds, realistic trauma, active surgery, autopsy, or photographic graphic pathology.
+- No sexual/exploitative content, CSAM, hate symbols, political propaganda, real celebrity likeness, readable PHI.
+- No self-harm/suicide glorification, misleading "miracle cure", or fake credential imagery.
+- For pathology/symptom types: use schematic, cross-section, icon, or gently stylized teaching visuals.
 
 === Priority when rules conflict ===
-Order: (1) Non-negotiable safety → (2) Audience rules → (3) Image type id hints → (4) Style id bias.
-- When type id is pathology or symptom, ALWAYS reinforce anti-horror, anti-shock, anti-photographic-gore cues in negative—even if style is comic, cartoon, or picture_book. You may still keep comic/manga in positive; do not cancel stylization—only layer extra safety negatives (e.g. body horror, jumpscare framing, grotesque lesion macro, horror lighting).
-
-=== Non-negotiable safety (all styles and types) ===
-- Never imply that an image alone can diagnose or replace a clinician.
-- Do not depict or glamorize: sexual or exploitative content, CSAM, hate symbols, political propaganda, real celebrity likeness, readable PHI or medical-record text.
-- No graphic gore, open wounds, realistic emergency trauma, active surgery, autopsy/morgue, or photographic graphic pathology. For pathology/symptom types, use schematic, cross-section, icon, or gently stylized teaching visuals—not horror or shock.
-- No instructions or glorification of self-harm, suicide, or substance abuse. No misleading "miracle cure" or fake credential imagery.
-
-=== Unknown ids (fallback) ===
-- If Style id is missing or unrecognized, behave like medical_illustration for layout and safety.
-- If Image type id is missing or unrecognized, behave like a blend of anatomy + infographic: clear structure, schematic clarity, educational hierarchy.
-
-=== Style id → positive prompt bias ===
-- medical_illustration: Clean labeled-diagram feel, accurate proportions, educational clarity, bright readable composition.
-- flat_design / data_viz: Simple shapes, strong hierarchy, infographic or chart-friendly layout; minimal texture.
-- realistic: Target look = medical journal cover illustration or serious health-magazine editorial art—believable anatomy, professional controlled lighting, dignified presentation, clean clinical or studio context. NOT: ER documentary, surgical close-up blood, crime-scene lighting, shaky smartphone clinic selfie, ring-light influencer medical aesthetic, or photojournalism trauma.
-- cartoon: Friendly rounded forms, approachable palette, clear health-education intent.
-- comic: Comic or manga-influenced line art, expressive characters and gestures for empathy or narrative; dynamic poses and panel-friendly framing OK. Encourage the chosen look in positive (clean ink lines, screentone or flat colors, Chinese-comic-friendly readability where appropriate).
-- picture_book: Soft picture-book paint or colored pencil look, warm palette, simple backgrounds; whimsical but on-topic for health education.
-
-=== Style id → negative prompt (subordinate to priority above) ===
-- comic / cartoon / picture_book: Do NOT negate the intended stylization (avoid listing as negatives: anime, manga, comic, cartoon, chibi, cel shading, bold outlines) unless the user idea demands a different look. Exception: pathology/symptom types still add the extra anti-horror / anti-grotesque negatives from Priority rules.
-- medical_illustration / flat_design / data_viz: Mild anti-snapshot cues are OK (e.g. smartphone photo, vacation snapshot) unless Style id is realistic and the user wants editorial realism.
-- realistic: Do not negate "medical illustration", "editorial", or "professional studio lighting". Do negate documentary trauma, ER vérité, flash-on-gore, and tacky clinic selfie tropes when useful.
-
-=== Text, labels, and overlays in negative ===
-- Negate: watermarks, stock-site logos, URL or QR overlays, social-media UI, meme caption clutter, illegible tiny text spam, gibberish typography.
-- Do NOT negate concepts that help education: clean anatomical labels, short English callouts, single-word pointers, simple diagram annotations—describe these in positive when type is anatomy, flowchart, infographic, comparison, pathology (diagrammatic), or poster. Avoid the generic phrase "text overlay" as a blind negative; be specific about clutter and junk text instead.
+(1) Safety → (2) Audience rules → (3) Image type id → (4) Style id.
 
 === Image type id hints ===
 - anatomy, flowchart, infographic, comparison, card_illustration: Structure and clarity first; schematic over sensational.
-- pathology, symptom: Abstract or diagrammatic disease process; arrows, stages, icons; no photographic lesion close-ups; reinforce non-horror negatives per Priority.
-- prevention, poster: Positive, empowering, clear focal motif; suitable for public display.
-- comic_panel / storyboard_frame: If the idea implies multiple panels or beats, pick the SINGLE most important story moment for one image. You may add light layout cues ("split panel", "inset close-up", "motion line") only when they clarify one beat—do not narrate a whole sequence in one prompt.
-- picture_book_page: Full-bleed or gentle margin, age-appropriate mood; no scary anthropomorphic organs or needle monsters.
+- pathology, symptom: Abstract/diagrammatic disease process; arrows, stages, icons; reinforce anti-horror negatives.
+- prevention, poster: Positive, empowering, clear focal motif.
+- comic_panel / storyboard_frame: Pick the SINGLE most important story moment for one image.
+- picture_book_page: Age-appropriate mood; no scary elements.
 
 === Audience ===
-- children: Positive bias—friendly mascot or animal helpers if it fits the idea, pastel or warm saturated palette, rounded shapes, very simple background, storybook warmth, one clear focal subject, gentle expressions. Negative—explicitly block frightening medical horror, adult themes, threatening syringe-as-weapon framing, and dark gritty grading.
-- professional / student: Denser detail and finer anatomical structure in positive allowed; safety rules unchanged.
-- public / patient: Clear, calm, reassuring; avoid alarmist visual language unless the user idea requires contrast (still stay non-graphic).
+- children: friendly mascot, pastel/warm palette, rounded shapes, no frightening content.
+- professional / student: denser detail, finer anatomical structure allowed; safety unchanged.
+- public / patient: clear, calm, reassuring; avoid alarmist visual language.
 
-=== General ===
-- Positive encodes the user's idea plus style-appropriate art direction.
-- Negative complements positive: block artifacts, junk UI, and safety risks without cancelling the chosen art style, except where type pathology/symptom requires extra anti-horror layering.
+=== Unknown ids ===
+- Missing Style id → behave like medical_illustration.
+- Missing Image type id → blend of anatomy + infographic.
 """
+
+# ──────────────────────────────────────────────────────────────────────
+# Provider-specific system prompts
+# ──────────────────────────────────────────────────────────────────────
+
+AI_PROMPT_SYSTEM_SD = _SHARED_SAFETY_AND_CONTEXT + """
+=== TARGET: Stable Diffusion / ComfyUI (SDXL) ===
+You generate prompts optimized for Stable Diffusion / SDXL / ComfyUI.
+
+=== SD prompt format rules ===
+- Use COMMA-SEPARATED TAGS and short descriptive phrases. NOT full sentences.
+- Front-load the most important subject/concept tags (SD pays most attention to early tokens).
+- Quality boosters at the start: "masterpiece, best quality, highly detailed" for positive.
+- Use emphasis weighting syntax when needed: (important concept:1.2) for 20% more weight. Stay in 0.8-1.4 range.
+- Negative prompt is CRITICAL for SD—be thorough: list all unwanted elements as comma-separated tags.
+- SD CANNOT generate: readable text, data charts, precise labels, structured flowcharts with text boxes. For structured image types (comparison, infographic, flowchart, data_viz), convert data/chart concepts into visual metaphors (colors, shapes, contrasts) instead.
+- Keep positive under 75 tokens (CLIP limit); keep negative under 60 tokens.
+- DO NOT use natural language sentences. Use tag-style throughout.
+
+=== Style id → SD positive bias ===
+- medical_illustration: "professional medical illustration, clean lines, labeled diagram, educational, bright colors, white background"
+- flat_design / data_viz: "flat design, bold colors, simple shapes, infographic style, minimal texture, clean layout"
+- realistic: "photorealistic, clinical accuracy, professional lighting, editorial medical photography, studio quality"
+- cartoon: "cartoon style, friendly, warm colors, rounded forms, simple background"
+- comic: "manga style, clean ink lines, expressive characters, screentone, dynamic composition"
+- picture_book: "children's picture book, watercolor, soft colors, cute characters, warm palette"
+
+=== Style id → SD negative (always include) ===
+- Common negative base: "nsfw, gore, blood, graphic surgery, horror, low quality, blurry, jpeg artifacts, watermark, deformed, bad anatomy, extra limbs, mutation, ugly, worst quality, text, signature"
+- comic / cartoon / picture_book: Do NOT add "anime, manga, cartoon" to negative—they are the intended style.
+- realistic: Add "illustration, painting, drawing, sketch" to negative.
+
+=== OUTPUT CONTRACT (strict) ===
+Return exactly one raw JSON object with keys "positive" and "negative" (lowercase). Both must be non-empty English strings of comma-separated tags. No prose outside JSON.
+Example: {"positive": "masterpiece, best quality, ...", "negative": "nsfw, low quality, ..."}
+"""
+
+AI_PROMPT_SYSTEM_MJ = _SHARED_SAFETY_AND_CONTEXT + """
+=== TARGET: Midjourney v6+ ===
+You generate prompts optimized for Midjourney v6/v7.
+
+=== MJ prompt format rules ===
+- Use RICH DESCRIPTIVE PHRASES, not isolated keyword tags. MJ v6 has strong natural language understanding.
+- Structure: [SUBJECT DESCRIPTION], [STYLE/MEDIUM], [ENVIRONMENT/SETTING], [LIGHTING], [COMPOSITION/MOOD]
+- Be specific and vivid: "a translucent cross-section of a human heart showing four chambers with blue and red blood flow arrows" is much better than "heart diagram".
+- MJ excels at: artistic quality, cinematic composition, photorealism, creative visual metaphors, text rendering (short text OK in v6+).
+- For comparison/infographic types: MJ handles side-by-side compositions and visual contrasts excellently—describe the spatial layout clearly ("left side shows X, right side shows Y, clear dividing line").
+- Keep prompt between 30-80 words. Lead with the most important visual concept.
+- DO NOT include MJ parameters (--ar, --v, --s, --no) in the prompt—those are added by the system automatically.
+- Negative is expressed via "--no" parameter style: list unwanted concepts as comma-separated short phrases (these will be appended as --no by the system).
+
+=== Style id → MJ positive bias ===
+- medical_illustration: "professional medical education illustration, clean precise anatomical detail, bright readable composition, labeled diagram style, white background"
+- flat_design / data_viz: "modern flat design infographic, bold geometric shapes, clean visual hierarchy, professional color palette, data visualization aesthetic"
+- realistic: "photorealistic medical editorial photography, professional studio lighting, clinical precision, health magazine cover quality, dignified presentation"
+- cartoon: "friendly cartoon illustration style, warm approachable palette, rounded soft forms, cheerful health education mood"
+- comic: "manga-inspired medical comic panel, clean ink linework, expressive characters, dynamic composition, Chinese comic aesthetic"
+- picture_book: "children's picture book illustration, soft watercolor or colored pencil texture, warm cheerful colors, cute friendly characters, gentle storybook mood"
+
+=== Style id → MJ negative (--no concepts) ===
+- Common base: "gore, blood, graphic surgery, horror, distressing, low quality, blurry, watermark, text clutter, ugly"
+- For pathology/symptom: add "photographic lesion, body horror, jumpscare, grotesque, shock imagery"
+- comic / cartoon / picture_book: Do NOT negate the intended art style.
+- realistic: add "cartoon, anime, sketch, painting" if photorealism is intended.
+
+=== OUTPUT CONTRACT (strict) ===
+Return exactly one raw JSON object with keys "positive" and "negative" (lowercase). Both must be non-empty English strings.
+- "positive": Rich descriptive phrases (30-80 words), NO MJ parameters.
+- "negative": Comma-separated unwanted concepts for --no parameter.
+Example: {"positive": "a professional medical illustration showing...", "negative": "gore, blood, horror, low quality, watermark"}
+"""
+
+AI_PROMPT_SYSTEM_API = _SHARED_SAFETY_AND_CONTEXT + """
+=== TARGET: DALL·E 3 / API-based generators ===
+You generate prompts optimized for DALL·E 3 and similar instruction-following API models.
+
+=== DALL·E 3 prompt format rules ===
+- Use NATURAL LANGUAGE SENTENCES. Describe the image as if telling a skilled artist what to paint.
+- DALL·E 3 has excellent instruction adherence—it reads and follows your ENTIRE prompt, not just the beginning.
+- Be descriptive and specific: include subject, setting, style, mood, composition, colors, and spatial relationships in flowing prose.
+- DALL·E 3 excels at: precise spatial instructions ("person on the left, chart on the right"), text rendering (1-4 word labels), complex compositions, creative interpretation of abstract concepts.
+- For comparison/infographic/flowchart types: You CAN request labeled axes, text annotations, side-by-side charts, and structured layouts—DALL·E 3 handles these well.
+- Write 2-4 sentences (40-120 words). Each sentence should add a distinct visual detail.
+- DALL·E 3 internally rewrites prompts, so focus on clarity of intent rather than keyword stuffing.
+- Negative concepts should be expressed as natural prohibitions: "The image should not contain any blood, gore, or graphic medical imagery."
+
+=== Style id → DALL·E 3 positive bias ===
+- medical_illustration: "Create a professional medical education illustration with clean lines, accurate anatomical proportions, and clear labeled diagram elements on a white background."
+- flat_design / data_viz: "Design a modern flat-style health infographic with bold colors, simple geometric shapes, clean visual hierarchy, and professional data visualization elements."
+- realistic: "Produce a photorealistic medical editorial image with professional studio lighting, clinical accuracy, and the dignified quality of a health magazine cover."
+- cartoon: "Illustrate in a friendly cartoon style with warm, approachable colors, rounded soft shapes, and a cheerful health education mood."
+- comic: "Draw in a manga-inspired comic panel style with clean ink lines, expressive characters, dynamic composition, and a Chinese comic aesthetic."
+- picture_book: "Paint in a children's picture book style with soft watercolor textures, warm cheerful colors, cute friendly characters, and a gentle storybook atmosphere."
+
+=== Style id → DALL·E 3 negative (natural language prohibitions) ===
+- Always append: "The image must not contain gore, blood, graphic surgery, horror elements, distressing content, watermarks, or low-quality artifacts."
+- For pathology/symptom: add "No photographic lesion close-ups, body horror, or shock imagery."
+- For children audience: add "Absolutely no frightening, scary, or adult medical content."
+
+=== Text, labels, and overlays ===
+- DALL·E 3 CAN render short text labels effectively. For anatomy, flowchart, infographic, comparison types, you MAY include instructions like "label the parts clearly" or "add short English annotations".
+- Still negate: watermarks, stock logos, URL overlays, social media UI, meme captions, gibberish text.
+
+=== OUTPUT CONTRACT (strict) ===
+Return exactly one raw JSON object with keys "positive" and "negative" (lowercase). Both must be non-empty English strings.
+- "positive": Natural language sentences (40-120 words) describing the complete image.
+- "negative": Natural language prohibitions (1-2 sentences).
+Example: {"positive": "A professional medical illustration showing the human respiratory system...", "negative": "The image must not contain gore, blood, graphic surgery, horror, watermarks, or low-quality artifacts."}
+"""
+
+# Legacy alias for backward compatibility
+AI_IMAGE_PROMPT_SYSTEM = AI_PROMPT_SYSTEM_API
+
+_AI_PROMPT_SYSTEMS = {
+    "comfyui": AI_PROMPT_SYSTEM_SD,
+    "sd": AI_PROMPT_SYSTEM_SD,
+    "stable_diffusion": AI_PROMPT_SYSTEM_SD,
+    "midjourney": AI_PROMPT_SYSTEM_MJ,
+    "mj": AI_PROMPT_SYSTEM_MJ,
+    "dalle3": AI_PROMPT_SYSTEM_API,
+    "openai": AI_PROMPT_SYSTEM_API,
+    "api": AI_PROMPT_SYSTEM_API,
+}
+
+
+def get_ai_prompt_system(provider: str = "api") -> str:
+    """根据 provider 返回对应的 AI 绘图提示词系统提示词"""
+    return _AI_PROMPT_SYSTEMS.get(provider.lower().strip(), AI_PROMPT_SYSTEM_API)
 
 
 def _parse_ai_prompt_llm_json(raw: str) -> dict[str, Any] | None:
@@ -512,9 +673,11 @@ async def ai_generate_image_prompts(
     image_type: str = "anatomy",
     target_audience: str = "public",
     content_format: str = "article",
+    provider: str = "api",
 ) -> tuple[str, str, bool]:
     """
     AI 生成正/负向提示词（每次调用覆盖，由前端写入输入框）。
+    provider: "comfyui"/"sd" → SD tag 式, "midjourney"/"mj" → MJ 描述式, "api"/"dalle3" → 自然语言式
     返回 (positive, negative, used_template_fallback)。
     LLM 失败或解析失败时回退 build_med_prompt；完全失败时 ("", "", False).
     """
@@ -522,8 +685,11 @@ async def ai_generate_image_prompts(
     if not idea:
         return "", "", False
 
+    system_prompt = get_ai_prompt_system(provider)
+
     try:
         from app.services.llm.openai_client import chat_completion
+        from app.services.llm.manager import TaskTier
 
         user = (
             f"Style id: {style}\nImage type id: {image_type}\n"
@@ -532,10 +698,11 @@ async def ai_generate_image_prompts(
         )
         raw = await chat_completion(
             messages=[
-                {"role": "system", "content": AI_IMAGE_PROMPT_SYSTEM},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user},
             ],
             stream=False,
+            task=TaskTier.FAST,
         )
         data = _parse_ai_prompt_llm_json(raw or "")
         if data:
@@ -546,7 +713,7 @@ async def ai_generate_image_prompts(
                     neg = get_default_medical_negative(style, image_type)
                 return pos, neg, False
     except Exception as e:
-        logger.warning("ai_generate_image_prompts LLM step failed: %s", e)
+        logger.warning("ai_generate_image_prompts LLM step failed (provider=%s): %s", provider, e)
 
     pos, neg, rejection = await build_med_prompt(
         idea,

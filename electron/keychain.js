@@ -8,6 +8,7 @@
  * "LinScio MedComm - Keys" / deepseek       → DeepSeek API Key
  * "LinScio MedComm - Keys" / zhipu          → 智谱 API Key
  * "LinScio MedComm - Keys" / moonshot       → 月之暗面 API Key
+ * "LinScio MedComm - Keys" / google_ai      → Google AI API Key
  * "LinScio MedComm - Keys" / baidu          → 文心图像 API Key
  * "LinScio MedComm - Keys" / baidu_secret   → 文心图像 Secret Key
  * "LinScio MedComm - Keys" / openrouter     → OpenRouter API Key
@@ -41,6 +42,7 @@ const ACCOUNT_TO_ENV = {
   deepseek: 'DEEPSEEK_API_KEY',
   zhipu: 'ZHIPU_API_KEY',
   moonshot: 'MOONSHOT_API_KEY',
+  google_ai: 'GOOGLE_API_KEY',
   baidu: 'BAIDU_API_KEY',
   baidu_secret: 'BAIDU_SECRET_KEY',
   openrouter: 'OPENROUTER_API_KEY',

@@ -51,6 +51,7 @@ declare global {
   interface Window {
     electronAPI?: {
       platform: string
+      arch: string
       isElectron: boolean
       getLocalApiKey?: () => Promise<string | undefined>
       saveApiKey?: (account: string, value: string) => Promise<{ ok: boolean; error?: string }>
@@ -115,29 +116,6 @@ declare global {
 
       // 应用版本
       getAppVersion?: () => Promise<string>
-
-      // ComfyUI 管理
-      getComfyUIStatus?: () => Promise<{
-        running: boolean; port: number; pid: number | null;
-        dir: string | null; available: boolean;
-        bundleInstalled: boolean; bundleVersion: string | null;
-      }>
-      getComfyUIUrl?: () => Promise<string>
-      restartComfyUI?: () => Promise<{ ok: boolean }>
-
-      // ComfyUI Bundle 管理
-      getComfyUIBundleInfo?: () => Promise<{
-        version: string; platform: string; installed_at: string; dir: string;
-      } | null>
-      installComfyUIBundle?: (opts: {
-        download_url: string; version: string; platform: string;
-        size_bytes?: number; sha256?: string;
-      }) => Promise<{ ok: boolean; error?: string; code?: string; version?: string }>
-      uninstallComfyUIBundle?: () => Promise<{ ok: boolean }>
-      onComfyUIBundleProgress?: (cb: (payload: {
-        status: 'downloading' | 'verifying' | 'extracting' | 'done' | 'error';
-        percent?: number; downloaded?: number; total?: number;
-      }) => void) => void
 
       // 启动自检
       runStartupCheck?: () => Promise<{

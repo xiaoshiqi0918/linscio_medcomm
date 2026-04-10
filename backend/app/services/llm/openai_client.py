@@ -2,12 +2,17 @@
 LLM 客户端 - OpenAI / Anthropic / 国内大模型，支持流式与非流式
 国内大模型（智谱、通义、Kimi、深度求索、硅基流动）均走 OpenAI 兼容接口
 """
+from __future__ import annotations
+
 import os
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator
 
 from openai import AsyncOpenAI
 
 from app.services.llm.manager import get_domestic_base_url
+
+if TYPE_CHECKING:
+    from app.services.llm.manager import TaskTier
 
 
 def _strip_provider_prefix(model: str) -> str:
@@ -51,13 +56,20 @@ async def chat_completion(
     messages: list[dict],
     model: str | None = None,
     stream: bool = False,
+    task: "TaskTier | None" = None,
 ) -> str | AsyncIterator[str]:
     """Chat 补全，自动路由：国内大模型(OpenAI 兼容) / Anthropic / OpenAI。
-    model 为 None 时自动调用 resolve_model() 获取用户配置的默认模型。
+
+    优先级：model 显式指定 > task 智能路由 > resolve_model() 通用解析。
+    task 为 TaskTier 枚举（从 app.services.llm.manager 导入）。
     """
     if model is None:
-        from app.services.llm.manager import resolve_model
-        model = await resolve_model()
+        if task is not None:
+            from app.services.llm.manager import resolve_model_for_task
+            model = await resolve_model_for_task(task=task)
+        else:
+            from app.services.llm.manager import resolve_model
+            model = await resolve_model()
     if _is_anthropic(model):
         if stream:
             return _anthropic_chat_stream(messages, model)

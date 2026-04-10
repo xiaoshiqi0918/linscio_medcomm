@@ -60,6 +60,11 @@ async def init_db():
         await conn.execute(text("PRAGMA foreign_keys=ON"))
         await conn.run_sync(Base.metadata.create_all)
 
+        # 增量迁移：article_sections 增加 image_suggestions 列
+        cols = (await conn.execute(text("PRAGMA table_info(article_sections)"))).fetchall()
+        if not any(c[1] == "image_suggestions" for c in cols):
+            await conn.execute(text("ALTER TABLE article_sections ADD COLUMN image_suggestions TEXT"))
+
     # 单用户：确保 user id=1 存在
     async with AsyncSessionLocal() as session:
         from sqlalchemy import select

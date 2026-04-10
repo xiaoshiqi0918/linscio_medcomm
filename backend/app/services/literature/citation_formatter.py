@@ -1,9 +1,17 @@
-"""引用格式导出：APA / BibTeX / NLM / GB/T 7714"""
+"""引用格式导出：APA / BibTeX / NLM / GB/T 7714 / 科普（popular）"""
 import json
 from typing import Any
 
 
 class CitationFormatter:
+    """文献引用格式化器，支持学术与科普两大类格式。
+
+    科普格式优先级（推荐）：
+      1. popular   — 类学术型，兼顾可读性与严谨性（默认科普格式）
+      2. numbered  — 编号制，等同 popular 但由调用方加 [n] 前缀
+      3. hyperlink — 超链接型，DOI/URL 可点击验证
+    """
+
     def __init__(self, paper: Any):
         self.p = paper
         raw = paper.authors if hasattr(paper, "authors") else "[]"
@@ -15,6 +23,138 @@ class CitationFormatter:
             return fn()
         return self._fmt_apa()
 
+    # ------------------------------------------------------------------
+    # 科普格式：类学术型（推荐主格式）
+    # 结构：作者. 标题. 期刊/出版社, 年份, 卷(期): 页码
+    # 元数据不完整时自动降级，始终保证可读
+    # ------------------------------------------------------------------
+    def _fmt_popular(self) -> str:
+        author_str = self._popular_authors()
+        title = (self.p.title or "").rstrip(".")
+        journal = self.p.journal or ""
+        year = str(self.p.year) if self.p.year else ""
+        vol_issue_pages = self._vol_issue_pages()
+        doi_url = self._doi_or_url()
+
+        if journal and vol_issue_pages:
+            source = f"{journal}, {year}, {vol_issue_pages}" if year else f"{journal}, {vol_issue_pages}"
+        elif journal and year:
+            source = f"{journal}, {year}"
+        elif journal:
+            source = journal
+        elif year:
+            source = year
+        else:
+            source = ""
+
+        segments = [s for s in [author_str, title, source] if s]
+        line = ". ".join(segments)
+        if doi_url:
+            line += f". {doi_url}"
+        if line and not line.endswith("."):
+            line += "."
+        return line
+
+    def _popular_authors(self) -> str:
+        if not self.authors:
+            return ""
+        names = [a.get("name", "") for a in self.authors[:3] if a.get("name")]
+        if not names:
+            return ""
+        result = ", ".join(names)
+        if len(self.authors) > 3:
+            result += " 等" if self._is_chinese_name(names[0]) else " et al."
+        return result
+
+    @staticmethod
+    def _is_chinese_name(name: str) -> bool:
+        return any("\u4e00" <= ch <= "\u9fff" for ch in name)
+
+    def _vol_issue_pages(self) -> str:
+        vol = getattr(self.p, "volume", "") or ""
+        issue = getattr(self.p, "issue", "") or ""
+        pages = getattr(self.p, "pages", "") or ""
+        if vol and issue and pages:
+            return f"{vol}({issue}): {pages}"
+        if vol and pages:
+            return f"{vol}: {pages}"
+        if vol and issue:
+            return f"{vol}({issue})"
+        if vol:
+            return vol
+        return ""
+
+    def _doi_or_url(self) -> str:
+        doi = getattr(self.p, "doi", "") or ""
+        url = getattr(self.p, "url", "") or ""
+        if doi:
+            return f"https://doi.org/{doi}"
+        if url:
+            return url
+        return ""
+
+    # ------------------------------------------------------------------
+    # 科普格式：超链接型（互联网科普/公众号）
+    # 只保留最核心信息 + 可验证链接
+    # ------------------------------------------------------------------
+    def _fmt_hyperlink(self) -> str:
+        title = (self.p.title or "").rstrip(".")
+        year = f"({self.p.year})" if self.p.year else ""
+        source = self.p.journal or ""
+        link = self._doi_or_url()
+
+        desc_parts = [s for s in [source, year] if s]
+        desc = " ".join(desc_parts)
+        if desc:
+            line = f"{title}. {desc}"
+        else:
+            line = title
+        if link:
+            line += f" {link}"
+        return line
+
+    # ------------------------------------------------------------------
+    # 外部引用格式化（无 volume/issue/pages，降级处理）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def format_external_ref(ref: Any) -> str:
+        """格式化 ArticleExternalReference，自动选择最佳呈现"""
+        authors = ""
+        try:
+            raw = ref.authors if isinstance(ref.authors, str) else "[]"
+            arr = json.loads(raw) if isinstance(raw, str) else (ref.authors or [])
+            names = [a.get("name", "") for a in (arr or []) if isinstance(a, dict) and a.get("name")]
+            if names:
+                authors = ", ".join(names[:3])
+                if len(names) > 3:
+                    is_cn = any("\u4e00" <= ch <= "\u9fff" for ch in names[0])
+                    authors += " 等" if is_cn else " et al."
+        except Exception:
+            pass
+
+        title = (getattr(ref, "title", "") or "").rstrip(".")
+        journal = getattr(ref, "journal", "") or ""
+        year = str(ref.year) if getattr(ref, "year", None) else ""
+        doi = (getattr(ref, "doi", "") or "").strip()
+        url = getattr(ref, "url", "") or ""
+
+        source_parts = [s for s in [journal, year] if s]
+        source = ", ".join(source_parts)
+
+        segments = [s for s in [authors, title, source] if s]
+        line = ". ".join(segments)
+
+        if doi:
+            line += f". https://doi.org/{doi}"
+        elif url:
+            line += f". {url}"
+        if line and not line.endswith("."):
+            line += "."
+        return line
+
+    # ------------------------------------------------------------------
+    # 学术格式（保留原有）
+    # ------------------------------------------------------------------
     def _fmt_apa(self) -> str:
         author_str = self._apa_authors()
         year = f"({self.p.year})" if self.p.year else "(n.d.)"

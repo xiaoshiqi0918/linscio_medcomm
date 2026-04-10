@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════
-#  LinScio MedComm — macOS 本地打包脚本（客户端 + ComfyUI 分开）
+#  LinScio MedComm — macOS 本地打包脚本
 #
 #  用法:
-#    bash scripts/build-mac.sh client          # 仅打包客户端（推荐）
-#    bash scripts/build-mac.sh comfyui-bundle  # 仅打包 ComfyUI 组件 zip
-#    bash scripts/build-mac.sh all             # 客户端 + ComfyUI
+#    bash scripts/build-mac.sh client          # 打包客户端
 #
-#  架构: 默认 arm64（Apple Silicon），可传第二参数 x64（需 FORCE_X64=1）
-#    bash scripts/build-mac.sh client arm64
+#  架构: 默认 arm64（Apple Silicon），可传第二参数 x64
+#    bash scripts/build-mac.sh client arm64    # Apple Silicon
+#    bash scripts/build-mac.sh client x64      # Intel Mac
 #
 #  环境变量:
-#    FORCE_X64=1              强制构建 Intel 版
 #    SKIP_ENV_CHECK=1         跳过环境检测
 #    MEDCOMM_PY_SKIP_MIRROR=1 跳过国内镜像
+#
+#  产物命名:
+#    客户端:  LinScio-MedComm-{ver}-mac-{arm64|x64}.{dmg,zip}
 # ═══════════════════════════════════════════════════════════
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -100,9 +101,6 @@ check_env() {
   # 磁盘空间
   local FREE_GB; FREE_GB="$(df -g "$ROOT" | awk 'NR==2{print $4}')"
   local NEED_GB=10
-  if [ "$TARGET" = "all" ] || [ "$TARGET" = "comfyui-bundle" ]; then
-    NEED_GB=25
-  fi
   if [ "$FREE_GB" -lt "$NEED_GB" ]; then
     error "磁盘空间不足: 可用 ${FREE_GB}GB，需要 ${NEED_GB}GB"
     FAIL=1
@@ -123,17 +121,19 @@ check_env() {
 }
 
 # ═══════════════════════════════════════════════════════════
-#  Intel Mac 拦截
+#  架构检测
 # ═══════════════════════════════════════════════════════════
 check_arch() {
   if [ "$ARCH" = "x64" ]; then
-    if [ "${FORCE_X64:-}" != "1" ]; then
-      warn "Mac Intel (x64) 构建已暂停。"
-      echo "  当前仅支持 Apple Silicon (arm64) 构建。"
-      echo "  如确需构建 x64，请设置: FORCE_X64=1 bash scripts/build-mac.sh $TARGET x64"
-      exit 0
+    info "构建目标: Mac Intel (x64)"
+    if [ "$(uname -m)" = "arm64" ]; then
+      warn "当前机器为 ARM64，将交叉编译 x64 版本"
     fi
-    warn "强制构建 Intel 版 (FORCE_X64=1)"
+  else
+    info "构建目标: Mac Apple Silicon (arm64)"
+    if [ "$(uname -m)" = "x86_64" ]; then
+      warn "当前机器为 Intel，将交叉编译 arm64 版本"
+    fi
   fi
 }
 
@@ -247,79 +247,11 @@ build_client() {
 
   # 5. Electron 打包
   info "[5/5] electron-builder --mac --${ARCH}..."
-  SKIP_COMFYUI_PACK=1 npx electron-builder --mac "--${ARCH}" 2>&1 | grep -E '(packaging|building|target|skipped|error|⨯)' || true
+  npx electron-builder --mac "--${ARCH}" 2>&1 | grep -E '(packaging|building|target|skipped|error|⨯)' || true
 
   echo ""
   info "客户端构建完成:"
   ls -lh "${OUT_DIR}/"*"${ARCH}"*.dmg 2>/dev/null || warn "(未生成 DMG)"
-  echo ""
-}
-
-# ═══════════════════════════════════════════════════════════
-#  构建 ComfyUI Bundle zip
-# ═══════════════════════════════════════════════════════════
-build_comfyui_bundle() {
-  echo ""
-  echo "══════════════════════════════════════════════"
-  echo "  构建 ComfyUI 组件包 mac-${ARCH}  v${VER}"
-  echo "══════════════════════════════════════════════"
-
-  local COMFY_VER
-  COMFY_VER="$(node -e "const fs=require('fs'); const m=fs.readFileSync('./scripts/download-comfyui.js','utf8').match(/COMFYUI_VERSION\s*=\s*['\"]([^'\"]+)['\"]/); process.stdout.write(m?m[1]:'0.3.10')" 2>/dev/null || echo '0.3.10')"
-  local BUNDLE_DIR="build/comfyui"
-  local BUNDLE_NAME="comfyui-bundle-${COMFY_VER}-mac-${ARCH}"
-  local BUNDLE_ZIP="${OUT_DIR}/${BUNDLE_NAME}.zip"
-
-  # 1. 下载 ComfyUI + 模型
-  info "[1/4] 下载 ComfyUI + SD1.5 模型..."
-  if [ -f "${BUNDLE_DIR}/main.py" ]; then
-    info "ComfyUI 已存在，跳过下载 (删除 build/comfyui 可强制重新下载)"
-  else
-    node scripts/download-comfyui.js
-  fi
-
-  if [ ! -f "${BUNDLE_DIR}/main.py" ]; then
-    error "ComfyUI 下载失败"
-    exit 1
-  fi
-
-  # 2. 安装 ComfyUI Python 依赖到 venv
-  info "[2/4] 为 ComfyUI 创建独立 venv..."
-  local VENV_DIR="${BUNDLE_DIR}/venv"
-  if [ ! -f "${VENV_DIR}/bin/python3" ]; then
-    python3 -m venv "$VENV_DIR"
-    "${VENV_DIR}/bin/pip" install -i "$PY_MIRROR" --upgrade pip --quiet
-
-    if [ -f "${BUNDLE_DIR}/requirements.txt" ]; then
-      info "从 requirements.txt 安装依赖..."
-      "${VENV_DIR}/bin/pip" install -i "$PY_MIRROR" \
-        -r "${BUNDLE_DIR}/requirements.txt" --quiet 2>&1 | tail -5
-    fi
-
-    info "安装 PyTorch (MPS)..."
-    "${VENV_DIR}/bin/pip" install -i "$PY_MIRROR" \
-      torch torchvision torchaudio --quiet 2>&1 | tail -3
-  else
-    info "venv 已存在，跳过"
-  fi
-
-  # 3. 打包 zip
-  info "[3/4] 打包 ComfyUI bundle..."
-  mkdir -p "$OUT_DIR"
-  if [ -f "$BUNDLE_ZIP" ]; then rm -f "$BUNDLE_ZIP"; fi
-  (cd build && zip -r -q "../${BUNDLE_ZIP}" comfyui -x "comfyui/__pycache__/*" "comfyui/.git/*")
-
-  # 4. 生成 SHA256
-  info "[4/4] 生成 SHA256..."
-  local SHA; SHA="$(shasum -a 256 "$BUNDLE_ZIP" | awk '{print $1}')"
-  local SIZE; SIZE="$(stat -f%z "$BUNDLE_ZIP" 2>/dev/null || stat -c%s "$BUNDLE_ZIP")"
-  echo "${SHA}  ${BUNDLE_NAME}.zip" > "${BUNDLE_ZIP}.sha256"
-
-  echo ""
-  info "ComfyUI bundle 构建完成:"
-  echo "  文件: ${BUNDLE_ZIP}"
-  echo "  大小: $(( SIZE / 1024 / 1024 )) MB"
-  echo "  SHA256: ${SHA}"
   echo ""
 }
 
@@ -336,23 +268,11 @@ check_env
 check_arch
 
 case "$TARGET" in
-  client)
+  client|all)
     build_client
-    ;;
-  comfyui-bundle|comfyui)
-    build_comfyui_bundle
-    ;;
-  all)
-    build_client
-    build_comfyui_bundle
-    echo ""
-    echo "══════════════════════════════════════════════"
-    echo "  全部构建完成 v${VER} (mac-${ARCH})"
-    ls -lh "${OUT_DIR}/"*.dmg "${OUT_DIR}/"*comfyui*.zip 2>/dev/null || true
-    echo "══════════════════════════════════════════════"
     ;;
   *)
-    echo "用法: $0 {client|comfyui-bundle|all} [arm64|x64]"
+    echo "用法: $0 {client|all} [arm64|x64]"
     exit 1
     ;;
 esac

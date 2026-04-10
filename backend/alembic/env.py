@@ -17,7 +17,6 @@ from app.models.knowledge import KnowledgeDoc, KnowledgeChunk
 from app.models.example import WritingExample
 from app.models.term import MedicalTerm
 from app.models.polish import PolishSession, PolishChange
-from app.models.publish import PublishRecord
 from app.models.paper import PaperChunk
 from app.models.literature import LiteraturePaper
 from app.models.specialty_package import SpecialtyPackage

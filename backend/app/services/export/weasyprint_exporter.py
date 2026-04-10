@@ -42,7 +42,6 @@ class WeasyPrintExporter(BaseExporter):
     """WeasyPrint PDF 导出"""
 
     async def _build_references(self) -> str:
-        import json as _json
         from app.models.article import ArticleLiteratureBinding, ArticleExternalReference
         from app.models.literature import LiteraturePaper
 
@@ -67,7 +66,7 @@ class WeasyPrintExporter(BaseExporter):
                 p = papers.get(pid)
                 if not p:
                     continue
-                lines.append(f"[{i}] {CitationFormatter(p).format('apa')}")
+                lines.append(f"[{i}] {CitationFormatter(p).format('popular')}")
 
         ext_result = await self._db.execute(
             select(ArticleExternalReference)
@@ -77,19 +76,7 @@ class WeasyPrintExporter(BaseExporter):
         ext_refs = ext_result.scalars().all()
         offset = len(lines)
         for j, r in enumerate(ext_refs, 1):
-            authors = ""
-            try:
-                arr = _json.loads(r.authors) if isinstance(r.authors, str) else (r.authors or [])
-                names = [a.get("name", "") for a in (arr or []) if isinstance(a, dict)]
-                authors = "; ".join([n for n in names if n]) if names else ""
-            except Exception:
-                authors = ""
-            year = r.year or ""
-            journal = r.journal or ""
-            doi = (r.doi or "").strip()
-            tail = f" DOI:{doi}" if doi else ""
-            base = " · ".join([x for x in [authors, journal, str(year) if year else ""] if x])
-            lines.append(f"[{offset + j}] {r.title}{(' — ' + base) if base else ''}{tail}")
+            lines.append(f"[{offset + j}] {CitationFormatter.format_external_ref(r)}")
 
         if not lines:
             return ""

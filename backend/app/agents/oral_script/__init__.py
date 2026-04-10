@@ -1,3 +1,3 @@
-from app.agents.oral_script.oral_agent import OralScriptAgent
+from app.agents.oral_script.oral_script_agent import OralScriptWriter
 
-__all__ = ["OralScriptAgent"]
+__all__ = ["OralScriptWriter"]

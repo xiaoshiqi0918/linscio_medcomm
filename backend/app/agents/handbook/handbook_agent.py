@@ -1,290 +1,431 @@
-"""患者手册 Agent - 形式族 D 互动类"""
+"""患者手册 Agent — 实用至上，语言直白，可操作可勾选"""
+import json as _json
 from app.agents.base import BaseAgent
-from app.agents.prompts.audiences import AUDIENCE_PROFILES
-from app.agents.prompts.loader import load_handbook
+
+
+def _get_handbook_plan_prompt(state: dict) -> str:
+    return f"""请为患者教育手册生成整体规划信息。
+
+【手册信息】
+疾病/主题：{state.get("topic", "")}
+专科：{state.get("specialty", "")}
+
+【输出格式（严格 JSON）】
+
+{{
+  "disease_name": "疾病/主题名称",
+  "target_audience": "适用人群（如：新确诊2型糖尿病患者及家属）",
+  "distribution_scene": "门诊诊后|住院期间|出院随访|线上下载",
+  "print_spec": "A5对折|A5骑马钉|A4单张|电子PDF",
+  "total_pages": "预估页数（8-16页）",
+  "layout_spec": {{
+    "body_font_size": "12pt（老年患者建议14pt）",
+    "title_font_size": "16-18pt",
+    "line_spacing": "1.5倍以上",
+    "primary_color": "主色调建议",
+    "symbols": ["⬜ 勾选框", "⚠ 警告", "💡 提示", "✗ 禁止"]
+  }},
+  "section_outline": [
+    {{"part": 1, "title": "认识疾病", "pages": "1-2页", "focus": "..."}},
+    {{"part": 2, "title": "治疗方案", "pages": "2-3页", "focus": "..."}},
+    {{"part": 3, "title": "日常管理", "pages": "2-3页", "focus": "..."}},
+    {{"part": 4, "title": "复诊与随访", "pages": "1页", "focus": "..."}},
+    {{"part": 5, "title": "紧急情况", "pages": "1页", "focus": "..."}},
+    {{"part": 6, "title": "常见问题", "pages": "1-2页", "focus": "..."}}
+  ]
+}}
+
+【规划原则】
+- 实用至上：患者拿到就能用
+- 语言直白：全程用"你"，不用"患者应当"
+- 留足填写空间：手册是被"用"的，不只是被"读"的
+- 紧急情况页建议印成红色或加色块高亮
+
+请直接输出 JSON。
+"""
 
 
 def _get_cover_prompt(state: dict) -> str:
-    tpl = load_handbook("cover")
-    if tpl:
-        return tpl.format(
-            topic=state.get("topic", ""),
-            specialty=state.get("specialty", ""),
-            target_audience=state.get("target_audience", "patient"),
-        )
-    return _default_cover(state)
+    meta = state.get("format_meta", {})
+    pj = meta.get("planner_json", {})
+    audience = pj.get("target_audience", "患者及家属")
 
+    planner_block = ""
+    if pj:
+        planner_block = f"\n【手册规划（必须遵循）】\n{_json.dumps(pj, ensure_ascii=False, indent=2)}\n"
 
-def _default_cover(state: dict) -> str:
-    return f"""请为患者教育手册生成封面文案。
+    return f"""请为患者教育手册生成封面内容。
 
 【手册信息】
-主题：{state.get('topic', '')}
-专科：{state.get('specialty', '')}
-适用人群：{state.get('target_audience', 'patient')}
+疾病/主题：{state.get("topic", "")}
+适用人群：{audience}
+{planner_block}
 
-【输出格式（JSON）】
+【输出格式（严格 JSON）】
 
 {{
-  "main_title": "手册主标题（≤15字，清晰说明手册内容）",
-  "sub_title": "副标题（≤25字，说明手册的价值/用途）",
-  "tagline": "一句话口号（≤20字，给患者信心和安全感）",
-  "cover_visual_desc": "封面主视觉（英文，30-40词，医疗专业感但温暖友好）",
+  "main_title": "手册标题（≤20字，如：糖尿病自我管理手册）",
+  "sub_title": "副标题/一句话定位（≤30字，如：您的控糖随身指南）",
+  "cover_visual_desc": "封面视觉描述（英文，30-50词）",
   "institution_placeholder": "[医院名称/科室名称]",
-  "edition_note": "版本说明（如：2026年版，仅供参考，请遵医嘱）"
+  "edition_note": "版本说明（如：2026年版）"
 }}
 
-封面基调：专业但温暖，给患者安全感，不引起恐惧。
+【封面基调】
+- 专业但温暖，给患者安全感
+- 标题清晰说明手册内容，不玩文字游戏
+- 不引起恐惧
 
-请直接输出 JSON，不要有其他文字。
+请直接输出 JSON。
 """
 
 
-def _get_disease_intro_prompt(state: dict) -> str:
-    audience = AUDIENCE_PROFILES.get("patient", AUDIENCE_PROFILES["public"])
-    tpl = load_handbook("disease_intro")
-    if tpl:
-        return tpl.format(
-            topic=state.get("topic", ""),
-            specialty=state.get("specialty", ""),
-            audience_vocabulary=audience["vocabulary"],
-            audience_tone=audience["tone"],
-            audience_sentence=audience["sentence"],
-        )
-    return _default_disease_intro(state, audience)
-
-
-def _default_disease_intro(state: dict, audience: dict) -> str:
-    return f"""请为患者教育手册撰写疾病介绍部分。
+def _get_disease_know_prompt(state: dict) -> str:
+    return f"""请为患者教育手册撰写"认识疾病"部分（第一部分，1-2页）。
 
 【手册信息】
-疾病/主题：{state.get('topic', '')}
-专科：{state.get('specialty', '')}
-读者：患者及家属
+疾病/主题：{state.get("topic", "")}
+专科：{state.get("specialty", "")}
 
-【内容要求】
+【输出格式（严格 JSON）】
 
-疾病介绍需要回答患者最想知道的三个问题：
+{{
+  "section_title": "了解你的身体正在发生什么",
+  "what_is_it": {{
+    "question": "我得了什么病？",
+    "answer": "用≤100字告诉患者这个病是怎么回事（通俗类比优先）"
+  }},
+  "why_me": {{
+    "question": "为什么是我？",
+    "intro": "常见病因（勾选框让患者对照自身情况）",
+    "checkboxes": [
+      "⬜ 病因1（如：家族中有人患此病）",
+      "⬜ 病因2",
+      "⬜ 病因3",
+      "⬜ 病因4"
+    ]
+  }},
+  "is_it_serious": {{
+    "question": "这个病严重吗？",
+    "answer": "诚实但不制造恐慌，重点放在'可控'上（≤100字）"
+  }},
+  "illustration_hint": "配图建议（简单示意图：病变部位/发病机制简图）"
+}}
 
-**Q1：这是什么病？（100-150字）**
-- 用最简单的语言解释疾病是什么
-- 类比优先：找一个日常生活中的事物类比
-- 不要用病理学定义开场
+【写作规范】
+- 全程用"你"称呼患者
+- 医学术语必须配通俗解释，或直接用大白话替代
+- "为什么是我"部分用勾选框，让患者自主对照
+- "严重吗"部分诚实但给信心：强调"通过规范管理可以…"
+- 不输出 [共识]、[推断]、[[待补充]] 等内部标注
 
-**Q2：为什么我会得这个病？（100-150字）**
-- 列出主要病因（不超过4个）
-- 区分"可以改变的因素"和"不可以改变的因素"
-- 语气：理解，不批判（即使是不良生活习惯）
-
-**Q3：这个病危险吗？（80-120字）**
-- 客观描述疾病的危害（不夸大，不轻描淡写）
-- 强调早发现早治疗的重要性
-- 结尾给予信心：通过规范管理可以…
-
-【语言规范】
-{audience['vocabulary']}
-{audience['tone']}
-句长：{audience['sentence']}
-
-【格式】
-使用小标题 + 段落格式
-可以用★或•列举要点
-"""
-
-
-def _get_symptoms_prompt(state: dict) -> str:
-    tpl = load_handbook("symptoms")
-    if tpl:
-        return tpl.format(topic=state.get("topic", ""))
-    return _default_symptoms(state)
-
-
-def _default_symptoms(state: dict) -> str:
-    return f"""请为患者教育手册撰写症状识别部分。
-
-【手册信息】
-疾病：{state.get('topic', '')}
-
-【内容结构】
-
-**常见症状**
-列出主要症状（4-6个），每条格式：
-[症状名称]：[通俗描述患者会有的感受]
-示例：
-多尿：感觉经常想去洗手间，有时夜里也要起来如厕
-
-**需要立即就医的信号（警示框）**
-⚠️ 【注意】如果出现以下情况，请立即就医或拨打急救：
-· [紧急症状1]
-· [紧急症状2]
-· [紧急症状3]
-
-**容易忽视的症状**
-[1-2个患者常忽视的早期症状，提醒重视]
-
-【特别要求】
-- 症状描述用患者的感受表达，而不是医学体征描述
-  ✅ "感觉眼睛看东西变模糊了，擦眼睛也没用"
-  ❌ "视力下降，视野模糊"
-- 最后必须附加：
-  "⚠️ 以上症状仅供参考，出现相关症状请及时就医，由医生进行专业诊断。"
+请直接输出 JSON。
 """
 
 
 def _get_treatment_prompt(state: dict) -> str:
-    tpl = load_handbook("treatment")
-    if tpl:
-        return tpl.format(topic=state.get("topic", ""), specialty=state.get("specialty", ""))
-    return _default_treatment(state)
-
-
-def _default_treatment(state: dict) -> str:
-    return f"""请为患者教育手册撰写治疗方案概述部分。
+    return f"""请为患者教育手册撰写"治疗方案"部分（第二部分，2-3页）。
 
 【手册信息】
-疾病：{state.get('topic', '')}
-专科：{state.get('specialty', '')}
+疾病/主题：{state.get("topic", "")}
+专科：{state.get("specialty", "")}
 
-【内容要求】
+【输出格式（严格 JSON）】
 
-治疗部分需要让患者理解"治疗大方向"，而不是给出具体方案。
+{{
+  "section_title": "医生为你制定的方案",
+  "treatment_plan_template": {{
+    "diagnosis_placeholder": "主要诊断：_______________",
+    "treatment_options": ["⬜ 药物治疗", "⬜ 手术", "⬜ 生活方式干预", "⬜ 联合治疗"],
+    "plan_note": "方案说明（由医生填写）：_______________"
+  }},
+  "medication_table": {{
+    "intro": "我的用药清单（请与医生一起填写）",
+    "columns": ["药名", "剂量", "服用时间", "注意事项", "我的记录"],
+    "rows": 3,
+    "note": "表格供患者/医生填写，每行末尾附 ⬜ 已服用 勾选框"
+  }},
+  "medication_faq": [
+    {{
+      "q": "忘记吃药怎么办？",
+      "a": "具体、安全的建议（≤60字）"
+    }},
+    {{
+      "q": "可以自己停药吗？",
+      "a": "强调不可自行停药的原因（≤60字）"
+    }},
+    {{
+      "q": "出现哪些副作用需要联系医生？",
+      "a": "列出3-4个常见需要注意的信号（≤80字）"
+    }}
+  ],
+  "medical_order": "【医嘱】治疗方案需要由您的主治医生根据您的具体情况制定，请务必遵医嘱，不要自行调整治疗。"
+}}
 
-**治疗目标**（50-80字）
-用患者能理解的语言说明治疗要达到什么效果
+【写作规范】
+- 不提及任何具体药物名称或剂量（用药清单由患者/医生填写）
+- 治疗方案解释用患者能理解的语言
+- 全程用"你"称呼
+- 结尾必须附医嘱声明
+- 不输出内部标注
 
-**主要治疗方式**（每种50-80字）
-列出主要的治疗方向（2-4种），格式：
-[治疗方式名称]
-适用情况：[简述]
-作用：[通俗解释这种治疗怎么帮助身体]
-注意：[最重要的一个注意事项]
-
-【严格禁止】
-❌ 不提及任何具体药物名称
-❌ 不给出任何剂量信息
-❌ 不建议患者自行选择治疗方式
-
-必须在结尾加：
-【医嘱】治疗方案需要由您的主治医生根据您的具体情况制定，请务必遵医嘱，不要自行调整治疗。
+请直接输出 JSON。
 """
 
 
 def _get_daily_care_prompt(state: dict) -> str:
-    tpl = load_handbook("daily_care")
-    if tpl:
-        return tpl.format(topic=state.get("topic", ""))
-    return _default_daily_care(state)
-
-
-def _default_daily_care(state: dict) -> str:
-    return f"""请为患者教育手册撰写日常注意事项部分。
+    return f"""请为患者教育手册撰写"日常管理"部分（第三部分，2-3页）。
 
 【手册信息】
-疾病：{state.get('topic', '')}
+疾病/主题：{state.get("topic", "")}
 
-【内容结构（患者最关心的日常管理）】
+【输出格式（严格 JSON）】
 
-**饮食管理**
-- 3-4条具体建议
-- 要具体可操作：❌"饮食清淡" ✅"烹饪时每道菜用盐不超过一个啤酒瓶盖的量"
-- 告诉患者"可以吃什么"，不只是"不能吃什么"
+{{
+  "section_title": "每天可以做的事",
+  "diet": {{
+    "title": "饮食指导",
+    "recommended": "推荐食物（具体、可操作）",
+    "limited": "限制食物",
+    "forbidden": "禁忌食物",
+    "sample_menu": {{
+      "breakfast": "早餐示例",
+      "lunch": "午餐示例",
+      "dinner": "晚餐示例",
+      "snack": "加餐示例"
+    }}
+  }},
+  "exercise": {{
+    "title": "运动指导",
+    "recommended_types": "推荐运动类型",
+    "frequency": "频率和时长（通俗描述）",
+    "cautions": "运动禁忌/注意（什么时候应该停下来）"
+  }},
+  "lifestyle_checklist": {{
+    "title": "生活习惯",
+    "items": [
+      "⬜ 习惯1（具体可执行）",
+      "⬜ 习惯2",
+      "⬜ 习惯3",
+      "⬜ 习惯4"
+    ]
+  }},
+  "self_monitoring": {{
+    "title": "自我监测",
+    "what_to_monitor": "需要监测的指标",
+    "how_to_record": "如何记录（建议使用记录本或APP）",
+    "table_columns": ["日期", "时间", "数值", "备注"],
+    "table_rows": 5,
+    "alert_values": "什么数值需要告知医生"
+  }}
+}}
 
-**运动建议**
-- 推荐的运动类型（温和的，大多数患者可以做的）
-- 运动强度和时间的通俗描述（❌"中等强度有氧运动" ✅"运动时能说话但不能唱歌，这个强度正好"）
-- 运动时需要注意的信号（什么时候应该停下来）
+【写作规范】
+- 具体可操作：❌"饮食清淡" ✅"烹饪时每道菜用盐不超过一个啤酒瓶盖的量"
+- 运动强度通俗描述：❌"中等强度有氧运动" ✅"运动时能说话但不能唱歌，这个强度正好"
+- 生活习惯用勾选框，让患者每天自查
+- 告诉患者"可以做什么"，不只是"不能做什么"
+- 不输出内部标注
 
-**日常监测**
-- 需要患者自我监测的指标
-- 如何记录（建议使用健康记录本或APP）
-- 什么数值需要告知医生
-
-**生活方式调整**
-- 睡眠/压力/烟酒等相关建议
-- 每条都要说明原因（"因为……所以……"）
-
-【语言要求】
-实用性 > 全面性。每条建议能立刻执行，不是空泛原则。
+请直接输出 JSON。
 """
 
 
-def _get_visit_tips_prompt(state: dict) -> str:
-    tpl = load_handbook("visit_tips")
-    if tpl:
-        return tpl.format(topic=state.get("topic", ""), specialty=state.get("specialty", ""))
-    return _default_visit_tips(state)
-
-
-def _default_visit_tips(state: dict) -> str:
-    return f"""请为患者教育手册撰写就诊提示部分。
+def _get_followup_prompt(state: dict) -> str:
+    return f"""请为患者教育手册撰写"复诊与随访"部分（第四部分，1页）。
 
 【手册信息】
-疾病：{state.get('topic', '')}
-专科：{state.get('specialty', '')}
+疾病/主题：{state.get("topic", "")}
+专科：{state.get("specialty", "")}
 
-【内容结构（帮助患者更有效地就诊）】
+【输出格式（严格 JSON）】
 
-**就诊前准备**
-- 需要携带的资料/检查报告
-- 需要提前记录的信息（症状日记）
-- 就诊前注意事项（如空腹要求等）
+{{
+  "section_title": "什么时候需要回来看医生",
+  "followup_plan": {{
+    "next_visit": "下次复诊时间：_______________（由医生填写）",
+    "required_tests": "复诊需要做的检查（列出常规检查项目）",
+    "preparation": "复诊前需要准备的（如：带上用药记录、监测记录等）"
+  }},
+  "regular_check_table": {{
+    "title": "定期检查清单",
+    "columns": ["检查项目", "建议频率", "上次日期", "下次日期"],
+    "items": [
+      {{
+        "test_name": "检查项目1",
+        "frequency": "建议频率（如：每3个月）",
+        "last_date": "_______________",
+        "next_date": "_______________"
+      }},
+      {{
+        "test_name": "检查项目2",
+        "frequency": "建议频率",
+        "last_date": "_______________",
+        "next_date": "_______________"
+      }},
+      {{
+        "test_name": "检查项目3",
+        "frequency": "建议频率",
+        "last_date": "_______________",
+        "next_date": "_______________"
+      }}
+    ]
+  }},
+  "doctor_questions": [
+    "最重要的问题（如：我的病情有变化吗？）",
+    "治疗相关（如：药物需要调整吗？）",
+    "日常管理相关",
+    "副作用/注意事项相关",
+    "下次复诊相关"
+  ]
+}}
 
-**和医生沟通的清单**
-列出患者应该主动问医生的5个问题：
-① [最重要的问题]
-② [治疗相关的问题]
-③ [日常管理相关的问题]
-④ [副作用/注意事项相关的问题]
-⑤ [复诊/随访相关的问题]
+【写作规范】
+- 表格留足填写空间（日期栏用下划线占位）
+- 复诊频率用"一般建议"等非绝对化表述
+- 具体检查计划由医生制定，手册仅提供常规参考
+- 不输出内部标注
 
-**复诊频率参考**
-说明一般建议的复诊周期（用"通常"/"一般"等非绝对化表述）
-强调：具体复诊计划由医生制定
-
-**紧急联系指引**
-列出需要立即寻求帮助的情况
-提示拨打120或前往急诊的时机
-
-【结尾】
-"您是自己健康的第一责任人。与您的医疗团队保持良好沟通，是管理好疾病的关键。"
+请直接输出 JSON。
 """
 
 
-def _get_fallback_prompt(state: dict, section_type: str) -> str:
-    tpl = load_handbook("fallback")
-    if tpl:
-        return tpl.format(
-            section_type=section_type,
-            topic=state.get("topic", ""),
-            specialty=state.get("specialty", ""),
-        )
-    return f"""请为患者教育手册撰写「{section_type}」部分。
+def _get_emergency_prompt(state: dict) -> str:
+    return f"""请为患者教育手册撰写"紧急情况"部分（第五部分，1页）。
 
-疾病/主题：{state.get('topic', '')}
-专科：{state.get('specialty', '')}
-目标读者：患者及家属
+【手册信息】
+疾病/主题：{state.get("topic", "")}
 
-格式要求：
-- 语言简洁，适合患者直接阅读
-- 重要提示用【注意】标注
-- 医嘱类内容用【医嘱】标注
-- 避免专业术语，必须使用时括号内附通俗解释
-- 不给出具体用药剂量
+【输出格式（严格 JSON）】
+
+{{
+  "section_title": "出现这些情况请立即就医",
+  "danger_signals": [
+    {{
+      "signal": "⚠ 危险信号1（大号加粗描述）",
+      "description": "简短说明什么情况下算这个信号（≤30字）"
+    }},
+    {{
+      "signal": "⚠ 危险信号2",
+      "description": "..."
+    }},
+    {{
+      "signal": "⚠ 危险信号3",
+      "description": "..."
+    }},
+    {{
+      "signal": "⚠ 危险信号4",
+      "description": "..."
+    }}
+  ],
+  "emergency_contacts": {{
+    "emergency_phone": "急诊电话：120",
+    "doctor_phone": "主治医生电话：_______________",
+    "nurse_station": "护士站电话：_______________",
+    "nearest_er": "就近急诊地址：_______________"
+  }},
+  "design_note": "本页建议印成红色或加色块高亮，让人一翻就找到"
+}}
+
+【写作规范】
+- 危险信号用患者能感知的症状描述，不用医学术语
+- 信号描述简短有力，紧急感强
+- 联系方式留填写空间（患者或医生填入具体电话）
+- 不输出内部标注
+
+请直接输出 JSON。
+"""
+
+
+def _get_faq_prompt(state: dict) -> str:
+    return f"""请为患者教育手册撰写"常见问题"部分（第六部分，1-2页）。
+
+【手册信息】
+疾病/主题：{state.get("topic", "")}
+专科：{state.get("specialty", "")}
+
+【输出格式（严格 JSON）】
+
+{{
+  "section_title": "您可能还想知道",
+  "questions": [
+    {{
+      "q": "患者最常问的问题1",
+      "a": "直白、实用的回答（≤80字）"
+    }},
+    {{
+      "q": "问题2",
+      "a": "回答（≤80字）"
+    }},
+    {{
+      "q": "问题3",
+      "a": "回答（≤80字）"
+    }},
+    {{
+      "q": "问题4",
+      "a": "回答（≤80字）"
+    }},
+    {{
+      "q": "问题5",
+      "a": "回答（≤80字）"
+    }}
+  ],
+  "caregiver_note": {{
+    "title": "给家属的话",
+    "content": "针对照护者的实用建议（≤100字），照护者也是重要读者"
+  }}
+}}
+
+【写作规范】
+- 问题选择患者和家属真正关心的（饮食、运动、工作、生活质量等）
+- 回答直白实用，不回避问题
+- 不涉及具体药物名称或剂量
+- 加入"给家属的话"，照护者也是重要读者
+- 不输出内部标注
+
+请直接输出 JSON。
+"""
+
+
+def _get_back_cover_prompt(state: dict) -> str:
+    return f"""请为患者教育手册生成封底内容。
+
+【手册信息】
+疾病/主题：{state.get("topic", "")}
+
+【输出格式（严格 JSON）】
+
+{{
+  "encouragement": "一句鼓励的话（≤30字，给患者信心和温暖）",
+  "institution_info": "[医院名称/科室名称]",
+  "qr_code_placeholder": "二维码/线上资源链接：_______________",
+  "disclaimer": "本手册仅供健康教育参考，不替代医生诊疗意见。如有疑问，请咨询您的主治医生。",
+  "version": "版本号：V1.0 / 更新日期：_______________"
+}}
+
+【封底基调】
+- 温暖鼓励，给患者信心
+- 免责声明必须包含
+
+请直接输出 JSON。
 """
 
 
 _PROMPT_FUNCS = {
-    "cover_copy": _get_cover_prompt,
-    "disease_intro": _get_disease_intro_prompt,
-    "symptoms": _get_symptoms_prompt,
+    "handbook_plan": _get_handbook_plan_prompt,
+    "cover": _get_cover_prompt,
+    "disease_know": _get_disease_know_prompt,
     "treatment": _get_treatment_prompt,
     "daily_care": _get_daily_care_prompt,
-    "visit_tips": _get_visit_tips_prompt,
+    "followup": _get_followup_prompt,
+    "emergency": _get_emergency_prompt,
+    "faq": _get_faq_prompt,
+    "back_cover": _get_back_cover_prompt,
 }
 
 
 class HandbookSectionAgent(BaseAgent):
-    """患者教育手册 Agent，各节使用规范级 prompt"""
+    """患者教育手册 Agent：handbook_plan 规划 → 封面 → 6大部分 → 封底"""
 
     module = "patient_handbook"
 
@@ -295,4 +436,7 @@ class HandbookSectionAgent(BaseAgent):
         func = _PROMPT_FUNCS.get(self.section_type)
         if func:
             return func(state)
-        return _get_fallback_prompt(state, self.section_type)
+        return f"""请为患者教育手册撰写「{self.section_type}」部分。
+疾病/主题：{state.get('topic', '')}
+全程用"你"称呼患者，语言直白，输出 JSON 格式。
+"""

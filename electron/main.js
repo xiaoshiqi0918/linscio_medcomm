@@ -36,8 +36,6 @@ if (isDev) {
 }
 
 const backend = require('./backend')
-const comfyui = require('./comfyui-manager')
-const comfyBundle = require('./comfyui-bundle')
 const appUpdater = require('./app-updater')
 const startupCheck = require('./startup-check')
 const imageProtocol = require('./image-protocol')
@@ -524,50 +522,6 @@ ipcMain.handle('get-update-status', () => {
   return appUpdater.getStatus()
 })
 
-// ComfyUI IPC
-ipcMain.handle('get-comfyui-status', () => comfyui.getStatus())
-ipcMain.handle('get-comfyui-url', () => comfyui.getBaseUrl())
-ipcMain.handle('restart-comfyui', async () => {
-  comfyui.stop()
-  await new Promise((r) => setTimeout(r, 1000))
-  comfyui.start()
-  return { ok: true }
-})
-
-// ComfyUI Bundle 管理 IPC
-ipcMain.handle('get-comfyui-bundle-info', () => {
-  return comfyBundle.readBundleJson()
-})
-
-ipcMain.handle('install-comfyui-bundle', async (_, opts) => {
-  try {
-    const result = await comfyBundle.installBundle({
-      downloadUrl: opts.download_url,
-      version: opts.version,
-      platform: opts.platform,
-      sizeBytes: opts.size_bytes || 0,
-      sha256: opts.sha256,
-      onProgress: (progress) => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('comfyui-bundle-progress', progress)
-        }
-      },
-    })
-    if (result.ok && !comfyui.getStatus().running) {
-      comfyui.start()
-    }
-    return result
-  } catch (e) {
-    return { ok: false, error: e.message, code: 'DOWNLOAD_FAILED' }
-  }
-})
-
-ipcMain.handle('uninstall-comfyui-bundle', () => {
-  comfyui.stop()
-  comfyBundle.uninstallBundle()
-  return { ok: true }
-})
-
 // 启动自检 IPC
 ipcMain.handle('run-startup-check', () => {
   return startupCheck.runAllChecks()
@@ -678,7 +632,12 @@ app.whenReady().then(async () => {
     const errMsg = errorCodes.formatError(frResult.code || 'PYTHON_DEPS_MISSING', frResult.error)
     console.error('[MedComm] Dependency check failed:', frResult.error)
     closeSplash()
-    dialog.showErrorBox('启动失败 - 依赖缺失', `${errMsg}\n\n请重新安装应用。`)
+    const code = frResult.code || 'PYTHON_DEPS_MISSING'
+    const title = code === 'VCREDIST_MISSING' ? '启动失败 - 运行库' : '启动失败 - 依赖检查'
+    const footer = (code === 'PYTHON_SPAWN_TIMEOUT' || code === 'VCREDIST_MISSING')
+      ? ''
+      : '\n\n若问题持续，请重新安装应用或联系支持。'
+    dialog.showErrorBox(title, `${errMsg}${footer}`)
     app.quit()
     return
   }
@@ -709,14 +668,6 @@ app.whenReady().then(async () => {
   updateSplashStatus('启动服务...')
   await startBackend()
 
-  // ⑧b spawn ComfyUI（不阻塞主流程，后台启动）
-  updateSplashStatus('启动绘图引擎...')
-  if (comfyui.getComfyUIDir()) {
-    comfyui.start()
-  } else {
-    console.log('[MedComm] ComfyUI not found, skipping')
-  }
-
   // ⑨ 轮询 /health（超时 60 秒）
   updateSplashStatus('等待服务就绪...')
   const t9 = Date.now()
@@ -727,7 +678,10 @@ app.whenReady().then(async () => {
     const errorCodes = require('./error-codes')
     closeSplash()
     dialog.showErrorBox('启动失败 - 服务超时',
-      errorCodes.formatError('BACKEND_TIMEOUT', '后端服务在 120 秒内未就绪。\n请检查日志或重新启动应用。'))
+      errorCodes.formatError('BACKEND_TIMEOUT',
+        '后端服务在 120 秒内未就绪（与是否安装 VC++ 无必然关系）。\n'
+        + '常见原因：本机 8765 端口被占用、安全软件拦截 Python、或磁盘过慢。\n'
+        + '请查看控制台/日志中的 Python 报错；将安装目录加入杀毒排除后重试；或重启电脑后再开应用。'))
     backend.stop()
     app.quit()
     return
@@ -776,7 +730,6 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => {
-  comfyui.stop()
   backend.stop()
 })
 

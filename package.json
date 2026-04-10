@@ -1,6 +1,6 @@
 {
   "name": "linscio-medcomm",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "LinScio MedComm - 医学科普写作智能体桌面客户端",
   "main": "electron/main.js",
   "scripts": {
@@ -15,8 +15,7 @@
     "electron:dev:dist:bypass": "npm run build && MEDCOMM_RENDERER=dist MEDCOMM_DEV_BYPASS_AUTH=1 NODE_ENV=development env -u ELECTRON_RUN_AS_NODE electron .",
     "prebuild:python": "node scripts/download-python-standalone.js",
     "prebuild:wheels": "node scripts/build-wheels.js",
-    "prebuild:comfyui": "node scripts/download-comfyui.js",
-    "electron:build": "npm run prebuild:python && npm run prebuild:comfyui && bash scripts/preelectron-build.sh && vite build && electron-builder",
+    "electron:build": "npm run prebuild:python && bash scripts/preelectron-build.sh && vite build && electron-builder",
     "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
@@ -102,7 +101,8 @@
         "dmg",
         "zip"
       ],
-      "category": "public.app-category.medical"
+      "category": "public.app-category.medical",
+      "artifactName": "LinScio-MedComm-${version}-mac-${arch}.${ext}"
     },
     "dmg": {
       "artifactName": "LinScio-MedComm-${version}-mac-${arch}.dmg"

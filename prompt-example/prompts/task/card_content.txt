@@ -14,7 +14,7 @@
   "key_takeaway": "划重点（≤20字，读者最应该记住的一句话）",
   "illustration_desc": "配图描述（英文，20-40词，描述卡片主视觉图，DALL·E 使用）",
   "icon_suggestions": ["图标1建议", "图标2建议"],
-  "data_placeholder": "[DATA:] 或空字符串（如本卡需要数据支撑但无来源）"
+  "data_placeholder": "[[待补充：所需数据]] 或空字符串（如本卡需要数据支撑但无来源）"
 }}
 
 【内容规范】

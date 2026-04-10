@@ -1,8 +1,5 @@
 # LinScio MedComm — Windows x64 客户端 CI 构建
 #
-# 分包模式（v0.2+）：CI 仅构建瘦客户端（不含 ComfyUI），
-# ComfyUI 组件包在 Windows 云服务器上用 cloud-build-comfyui-win.bat 单独打包。
-#
 # 触发方式：手动 workflow_dispatch
 name: Build Windows Client
 
@@ -93,6 +90,27 @@ jobs:
           echo "Installed packages: $(build/python/python.exe -m pip list --format=columns 2>/dev/null | wc -l)"
           rm -f "$TMP_REQ"
 
+      # ③b Bundle VC++ runtime DLLs into embedded Python
+      - name: Bundle VC++ DLLs into embedded Python
+        shell: bash
+        run: |
+          PYDEST="build/python"
+          SYSDIR="${SYSTEMROOT:-C:\\Windows}/System32"
+          for dll in vcruntime140.dll vcruntime140_1.dll msvcp140.dll; do
+            if [ ! -f "$PYDEST/$dll" ]; then
+              src="$SYSDIR/$dll"
+              if [ -f "$src" ]; then
+                cp "$src" "$PYDEST/$dll"
+                echo "Copied $dll"
+              else
+                echo "::warning::$dll not found in System32"
+              fi
+            else
+              echo "$dll already present"
+            fi
+          done
+          ls -la "$PYDEST"/*.dll 2>/dev/null || true
+
       # ④ Alembic 迁移检查
       - name: Verify Alembic single head
         shell: bash
@@ -121,12 +139,11 @@ jobs:
           VER=$(node -p "require('./package.json').version")
           echo "ver=$VER" >> "$GITHUB_OUTPUT"
 
-      # ⑦ Electron 打包（瘦客户端，无 ComfyUI）
-      - name: Build Electron (win-x64, no ComfyUI)
+      # ⑦ Electron 打包（瘦客户端）
+      - name: Build Electron (win-x64)
         run: npx electron-builder --win --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SKIP_COMFYUI_PACK: "1"
 
       # ⑧ 上传构建产物（.exe + electron-updater 元数据 latest.yml、.blockmap 等）
       - name: Upload artifacts
@@ -136,14 +153,3 @@ jobs:
           path: releases/v${{ steps.version.outputs.ver }}/*
           if-no-files-found: error
           retention-days: 14
-
-      # ⑨ 上传到 COS（可选，需配置 secrets）
-      - name: Upload to Tencent COS
-        if: ${{ vars.ENABLE_COS_UPLOAD == 'true' }}
-        shell: bash
-        env:
-          COS_SECRET_ID: ${{ secrets.TENCENT_COS_SECRET_ID }}
-          COS_SECRET_KEY: ${{ secrets.TENCENT_COS_SECRET_KEY }}
-          COS_BUCKET: ${{ secrets.TENCENT_COS_BUCKET }}
-          COS_REGION: ${{ secrets.TENCENT_COS_REGION }}
-        run: bash scripts/ci-cos-upload.sh

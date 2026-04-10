@@ -12,7 +12,6 @@ from app.models.knowledge import KnowledgeDoc, KnowledgeChunk
 from app.models.example import WritingExample
 from app.models.term import MedicalTerm
 from app.models.polish import PolishSession, PolishChange
-from app.models.publish import PublishRecord
 from app.models.paper import PaperChunk
 from app.models.literature import (
     LiteraturePaper, LiteratureTag, LiteratureCollection,
@@ -26,7 +25,7 @@ from app.models.medpic_generation import MedPicGeneration
 __all__ = [
     "Base", "User", "UserSetting", "Article", "ArticleSection", "ArticleContent", "ArticleLiteratureBinding", "ArticleExternalReference",
     "GeneratedImage", "ImagePromptTemplate", "ContentTemplate", "KnowledgeDoc", "KnowledgeChunk",
-    "WritingExample", "MedicalTerm", "PolishSession", "PolishChange", "PublishRecord",
+    "WritingExample", "MedicalTerm", "PolishSession", "PolishChange",
     "PaperChunk", "LiteraturePaper", "LiteratureTag", "LiteratureCollection",
     "LiteraturePaperTag", "LiteratureAttachment", "LiteratureAnnotation",
     "SpecialtyPackage",

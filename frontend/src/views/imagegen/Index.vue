@@ -135,9 +135,12 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api'
 import { useImageGenerate, type ImageGenParams } from '@/composables/useImageGenerate'
+
+const route = useRoute()
 
 const sceneIdea = ref('')
 const positivePrompt = ref('')
@@ -182,6 +185,19 @@ onMounted(async () => {
   } catch {
     /* 使用默认 anatomy */
   }
+
+  const qPrompt = String(route.query.prompt || '').trim()
+  const qStyle = String(route.query.style || '').trim()
+  const qType = String(route.query.image_type || '').trim()
+  if (qPrompt) {
+    sceneIdea.value = qPrompt
+  }
+  if (qStyle && ['medical_illustration', 'flat_design', 'realistic', 'cartoon', 'data_viz', 'comic', 'picture_book'].includes(qStyle)) {
+    style.value = qStyle
+  }
+  if (qType) {
+    imageType.value = qType
+  }
 })
 
 async function handleAiPrompts() {
@@ -195,6 +211,7 @@ async function handleAiPrompts() {
       image_type: imageType.value,
       target_audience: 'public',
       content_format: 'article',
+      provider: 'api',
     })
     const pos = res.data?.positive?.trim()
     const neg = res.data?.negative?.trim()

@@ -1,5 +1,6 @@
 """导出工具函数"""
 import json
+import re
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +29,32 @@ def prepend_export_title_markdown(article: Any, body: str) -> str:
 
 def prepend_export_title_plain(article: Any, body: str) -> str:
     td = article_export_title_display(article)
-    return f"{td}\n\n{export_meta_separator_block(article)}" + body
+    meta = export_meta_separator_block(article)
+    meta = strip_markdown(meta)
+    return f"{td}\n\n{meta}" + body
+
+
+def strip_markdown(text: str) -> str:
+    """去除 Markdown 格式符号，返回干净的纯文本。"""
+    # ATX 标题: ## Title → Title
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # 粗体: **text** → text
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    # 斜体: *text* → text (单星号，排除列表项)
+    text = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"\1", text)
+    # 列表项前的 * 号转为 • （保留缩进）
+    text = re.sub(r"^(\s*)\*\s+", r"\1• ", text, flags=re.MULTILINE)
+    # 水平线 --- → 空行
+    text = re.sub(r"^-{3,}\s*$", "", text, flags=re.MULTILINE)
+    # 图片 ![alt](url) → [图片: alt]
+    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"[图片: \1]", text)
+    # 链接 [text](url) → text
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # 行内代码 `code` → code
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # 清理连续空行（3+ → 2）
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def _collect_citation_refs(node: dict, out: list[dict]) -> None:

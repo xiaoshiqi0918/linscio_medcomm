@@ -20,12 +20,14 @@ async def generate_section_stream(
     article_default_model: str | None = None,
     format_meta: dict | None = None,
     scene_setup_context: str | None = None,
+    target_word_count: int | None = None,
+    skip_sections: list[str] | None = None,
 ) -> AsyncIterator[dict]:
     """
     流式生成章节内容，yield SSE 事件
     """
     from app.services.llm.openai_client import chat_completion
-    from app.services.llm.manager import resolve_model
+    from app.services.llm.manager import resolve_model_for_task, TaskTier
     from app.agents.base import _build_system_prompt
     from app.services.enhancement.prompt_builder import build_enhanced_prompt
     from app.services.enhancement.rag_retriever import RAGRetriever
@@ -49,6 +51,8 @@ async def generate_section_stream(
         "model_hint": model_hint,
         "article_default_model": article_default_model,
         "format_meta": format_meta or {},
+        "target_word_count": target_word_count,
+        "skip_sections": skip_sections or [],
     }
 
     async def _resolve_prior_section_text(target_section_type: str) -> str:
@@ -162,14 +166,27 @@ async def generate_section_stream(
     except Exception:
         prior_sections_context = ""
 
-    # 显式检索 RAG：同一份上下文同时用于写作注入与后续事实核验
+    # 文献通道检索（用于写作注入与后续事实核验）
     rag_retriever = RAGRetriever()
-    rag_context, ollama_unavailable = await rag_retriever.retrieve(
+    rag_context, ollama_unavailable = await rag_retriever.retrieve_literature(
         query=f"{topic} {section_type}",
         article_id=article_id,
         section_type=section_type,
         top_k=5 if content_format not in ("oral_script", "drama_script", "storyboard", "comic_strip", "card_series", "poster") else 3,
     )
+
+    # ── 文献充分性预检 ──
+    bound_paper_count = 0
+    try:
+        async with AsyncSessionLocal() as _db:
+            from app.models.article import ArticleLiteratureBinding
+            cnt_result = await _db.execute(
+                select(ArticleLiteratureBinding.id)
+                .where(ArticleLiteratureBinding.article_id == article_id)
+            )
+            bound_paper_count = len(cnt_result.fetchall())
+    except Exception:
+        pass
 
     user_id_for_corpus = 1
     try:
@@ -178,6 +195,17 @@ async def generate_section_stream(
             urow = ur.first()
             if urow and urow[0]:
                 user_id_for_corpus = int(urow[0])
+    except Exception:
+        pass
+
+    # 读取文献分析报告（若存在）
+    analysis_report = None
+    try:
+        async with AsyncSessionLocal() as _db:
+            ar = await _db.execute(select(Article.analysis_report).where(Article.id == article_id))
+            arow = ar.first()
+            if arow and arow[0]:
+                analysis_report = arow[0]
     except Exception:
         pass
 
@@ -194,13 +222,20 @@ async def generate_section_stream(
         rag_context=rag_context,
         prior_sections_context=prior_sections_context,
         user_id=user_id_for_corpus,
+        analysis_report=analysis_report,
+        target_word_count=target_word_count,
     )
 
-    model = await resolve_model(
-        article_id=article_id,
-        article_default_model=article_default_model,
-        model_hint=model_hint,
-    )
+    try:
+        model = await resolve_model_for_task(
+            task=TaskTier.QUALITY,
+            article_id=article_id,
+            article_default_model=article_default_model,
+        )
+    except Exception as e:
+        yield {"type": "error", "message": f"模型初始化失败：{e}"}
+        return
+
     system_prompt = _build_system_prompt(content_format)
     messages = [
         {"role": "system", "content": system_prompt},
@@ -208,6 +243,22 @@ async def generate_section_stream(
     ]
 
     yield {"type": "start", "task_id": "", "content_format": content_format}
+
+    if bound_paper_count < 3:
+        if bound_paper_count == 0:
+            yield {
+                "type": "literature_warning",
+                "level": "critical",
+                "bound_count": bound_paper_count,
+                "message": "未绑定任何参考文献，生成内容将全部标注为[共识]或[[待补充]]，建议返回配置页添加文献后再生成。",
+            }
+        else:
+            yield {
+                "type": "literature_warning",
+                "level": "warning",
+                "bound_count": bound_paper_count,
+                "message": f"当前仅绑定 {bound_paper_count} 篇文献（建议 ≥ 3 篇），生成内容的事实覆盖度可能不足。",
+            }
 
     if rag_meta.get("ollama_unavailable") or ollama_unavailable:
         yield {"type": "ollama_warning", "message": "Ollama 不可用，已降级为 FTS5 全文检索"}
@@ -233,6 +284,16 @@ async def generate_section_stream(
                 skip_level=skip_level,
             )
             full_content = content
+
+            from app.services.verification.pipeline import (
+                detect_ai_patterns,
+                extract_provenance_summary,
+                detect_uncited_medical_facts,
+            )
+            report["ai_patterns"] = detect_ai_patterns(full_content)
+            report["provenance"] = extract_provenance_summary(full_content)
+            report["uncited_facts"] = detect_uncited_medical_facts(full_content)
+
             yield {"type": "verify_report", "report": report}
 
         # 配图建议：仅 article 形式，条漫/分镜/卡片每格已有画面描述则跳过
