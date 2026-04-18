@@ -1,5 +1,6 @@
 """MedComm 科普写作 API"""
 import json
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,260 @@ from app.models.article import Article, ArticleSection, ArticleContent
 from app.services.medcomm.generator import generate_section_stream
 
 router = APIRouter()
+
+
+def _skip_article_legacy_intro(content_format: str | None, section_type: str | None) -> bool:
+    """图文 article 已不再使用独立「引言」章节（正文首段承担引入）。旧库中可能仍有 intro 行，应跳过生成与全文合并。"""
+    return (content_format or "article") == "article" and (section_type or "") == "intro"
+
+
+def _strip_reference_nodes(nodes: list[dict]) -> list[dict]:
+    """Remove LLM-generated '参考文献' heading and everything after it from TipTap nodes."""
+    import re
+    cut_idx = None
+    for i, node in enumerate(nodes):
+        if node.get("type") == "heading":
+            text = "".join(
+                c.get("text", "") for c in node.get("content", []) if isinstance(c, dict)
+            )
+            if re.search(r"参考文献|references", text, re.IGNORECASE):
+                cut_idx = i
+                break
+        if node.get("type") == "paragraph":
+            text = "".join(
+                c.get("text", "") for c in node.get("content", []) if isinstance(c, dict)
+            )
+            if re.match(r"^\s*参考文献\s*$", text):
+                cut_idx = i
+                break
+    if cut_idx is not None:
+        nodes = nodes[:cut_idx]
+        while nodes and nodes[-1].get("type") == "paragraph" and not nodes[-1].get("content"):
+            nodes.pop()
+    return nodes
+
+
+VISUAL_JSON_EXPORT_VERSION = "1.0"
+
+# content_format → 绘图软件 type 字段
+_FORMAT_TO_DRAWING_TYPE: dict[str, str] = {
+    "comic_strip": "comic",
+    "storyboard": "comic",
+    "card_series": "comic",
+    "poster": "comic",
+    "picture_book": "comic",
+    "long_image": "comic",
+}
+
+# 各格式中属于"面板/画面"的 section_type 前缀或集合
+_PANEL_SECTION_PREFIXES: dict[str, list[str]] = {
+    "comic_strip": ["panel_"],
+    "storyboard": ["reel_"],
+    "card_series": ["card_", "cover_card", "ending_card"],
+    "poster": ["headline", "body_visual", "cta_footer"],
+    "picture_book": ["spread_", "cover", "back_cover"],
+    "long_image": ["title_block", "intro_block", "core_", "tips_block", "warning_block", "summary_cta", "footer_info"],
+}
+
+# 各格式中属于"规划"的 section_type（包含全局信息：characters / style / 色调等）
+_PLANNER_SECTION_TYPES: dict[str, str] = {
+    "comic_strip": "planner",
+    "storyboard": "anim_plan",
+    "card_series": "series_plan",
+    "poster": "poster_brief",
+    "picture_book": "book_plan",
+    "long_image": "image_plan",
+}
+
+# 从 ProseMirror doc 中提取纯文本并尝试解析 JSON
+def _extract_section_text(content_json_obj: dict | None) -> str:
+    """从 ProseMirror doc 提取拼接的纯文本"""
+    if not content_json_obj:
+        return ""
+    from app.services.export.utils import _extract_text
+    return _extract_text(content_json_obj).strip()
+
+
+def _try_parse_section_json(text: str) -> dict | None:
+    """尝试将章节文本解析为 JSON 对象；失败返回 None"""
+    if not text:
+        return None
+    # 有时 LLM 输出包裹在 ```json ... ``` 中
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        cleaned = "\n".join(lines).strip()
+    try:
+        obj = json.loads(cleaned)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def _is_panel_section(section_type: str, content_format: str) -> bool:
+    prefixes = _PANEL_SECTION_PREFIXES.get(content_format, [])
+    return any(section_type == p or section_type.startswith(p) for p in prefixes)
+
+
+def _build_drawing_export(article, sections_with_content: list[tuple]) -> dict:
+    """
+    构建符合外部绘图软件规范的 JSON。
+    sections_with_content: [(ArticleSection, content_json_obj), ...]
+    """
+    cf = article.content_format or "comic_strip"
+    planner_st = _PLANNER_SECTION_TYPES.get(cf)
+    planner_data: dict | None = None
+    panels: list[dict] = []
+    panel_idx_counter = 0
+
+    for sec, content_obj in sections_with_content:
+        text = _extract_section_text(content_obj)
+        parsed = _try_parse_section_json(text)
+
+        if sec.section_type == planner_st:
+            planner_data = parsed
+            continue
+
+        if not _is_panel_section(sec.section_type, cf):
+            continue
+
+        panel_idx_counter += 1
+        panel: dict = {
+            "panel_index": panel_idx_counter,
+            "scene_desc": "",
+            "dialogue": "",
+            "narration": "",
+            "emotion": "",
+            "caption": "",
+            "visual_notes": "",
+            "act": "",
+            "characters_in_panel": [],
+            "suggested_ckpt": None,
+            "locked_seed": None,
+        }
+
+        if parsed:
+            panel["panel_index"] = parsed.get("panel_index", panel_idx_counter)
+            # 画面描述：兼容多格式不同字段名
+            panel["scene_desc"] = (
+                parsed.get("scene_desc")
+                or parsed.get("scene_description")
+                or parsed.get("key_visual")
+                or parsed.get("visual_desc")
+                or parsed.get("illustration_desc")
+                or parsed.get("image_prompt")
+                or parsed.get("main_visual_desc")
+                or ""
+            )
+            # 对白
+            panel["dialogue"] = parsed.get("dialogue") or parsed.get("dialog") or ""
+            # 旁白
+            panel["narration"] = (
+                parsed.get("narration")
+                or parsed.get("voiceover")
+                or parsed.get("page_text")
+                or parsed.get("body_text")
+                or ""
+            )
+            panel["emotion"] = parsed.get("emotion") or ""
+            panel["caption"] = (
+                parsed.get("caption")
+                or parsed.get("subtitle_highlight")
+                or parsed.get("headline")
+                or ""
+            )
+            panel["visual_notes"] = (
+                parsed.get("visual_notes")
+                or parsed.get("layout_note")
+                or parsed.get("design_element")
+                or parsed.get("effects_transition")
+                or ""
+            )
+            panel["act"] = parsed.get("act") or parsed.get("panel_theme") or ""
+            panel["characters_in_panel"] = parsed.get("characters_in_panel") or []
+
+            # picture_book 双页结构：合并左右页描述
+            if cf == "picture_book":
+                lp = parsed.get("left_page") or {}
+                rp = parsed.get("right_page") or {}
+                descs = [d for d in [
+                    lp.get("illustration_desc"), rp.get("illustration_desc")
+                ] if d]
+                if descs and not panel["scene_desc"]:
+                    panel["scene_desc"] = " | ".join(descs)
+                notes = [n for n in [
+                    lp.get("layout_note"), rp.get("layout_note")
+                ] if n]
+                if notes and not panel["visual_notes"]:
+                    panel["visual_notes"] = " | ".join(notes)
+        elif text:
+            panel["scene_desc"] = text[:200]
+
+        panels.append(panel)
+
+    # 从 planner 提取全局信息
+    global_style_parts: list[str] = []
+    characters: list[dict] = []
+    if planner_data:
+        if planner_data.get("art_style"):
+            global_style_parts.append(planner_data["art_style"])
+        if planner_data.get("color_theme"):
+            global_style_parts.append(planner_data["color_theme"])
+        if planner_data.get("animation_style"):
+            global_style_parts.append(planner_data["animation_style"])
+        if planner_data.get("visual_style"):
+            global_style_parts.append(planner_data["visual_style"])
+
+        raw_chars = planner_data.get("characters") or []
+        if isinstance(raw_chars, list):
+            for i, ch in enumerate(raw_chars):
+                if not isinstance(ch, dict):
+                    continue
+                characters.append({
+                    "id": ch.get("id") or f"char_{i+1}",
+                    "name": ch.get("name") or f"角色{i+1}",
+                    "description": ch.get("visual_desc") or ch.get("description") or "",
+                    "trigger_words": ch.get("trigger_words") or "",
+                    "reference_images": ch.get("reference_images") or [],
+                })
+
+        # 用 planner panels 数据补充缺失的 emotion / act
+        planner_panels = (
+            planner_data.get("panels")
+            or planner_data.get("pages")
+            or planner_data.get("cards")
+            or planner_data.get("sections")
+            or []
+        )
+        planner_by_idx = {}
+        for pp in planner_panels:
+            if isinstance(pp, dict) and pp.get("panel_index"):
+                planner_by_idx[pp["panel_index"]] = pp
+        for panel in panels:
+            pp = planner_by_idx.get(panel["panel_index"])
+            if pp:
+                if not panel["emotion"]:
+                    panel["emotion"] = pp.get("emotion") or ""
+                if not panel["act"]:
+                    panel["act"] = pp.get("act") or pp.get("panel_theme") or ""
+
+    return {
+        "version": VISUAL_JSON_EXPORT_VERSION,
+        "type": _FORMAT_TO_DRAWING_TYPE.get(cf, "comic"),
+        "title": article.title or article.topic or "",
+        "meta": {
+            "global_style": ", ".join(global_style_parts) if global_style_parts else "",
+            "global_negative": "",
+            "default_aspect_ratio": "3:4",
+            "source_format": cf,
+            "platform": article.platform or "",
+            "specialty": article.specialty or "",
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "panels": panels,
+        "characters": characters,
+    }
 
 
 async def get_db():
@@ -114,10 +369,25 @@ async def create_article(
         db.add(article)
         await db.flush()
 
-        # 创建默认章节（按形式由 format_router 定义，此处简化为首章）
         from app.services.format_router import get_format_sections
 
-        sections = get_format_sections(req.content_format) or ["intro"]
+        sections = None
+        if req.template_id:
+            from app.models.template import ContentTemplate as CT
+            tmpl_result = await db.execute(
+                select(CT).where(CT.id == req.template_id, CT.is_active == True)
+            )
+            template = tmpl_result.scalar_one_or_none()
+            if template:
+                if isinstance(template.structure, list) and template.structure:
+                    sections = template.structure
+                if template.target_word_count and not req.target_word_count:
+                    article.target_word_count = template.target_word_count
+                if template.skip_sections and not req.skip_sections:
+                    article.skip_sections = template.skip_sections
+
+        if not sections:
+            sections = get_format_sections(req.content_format) or ["body"]
         for i, st in enumerate(sections):
             if isinstance(st, dict):
                 section_type = st.get("section_type", st.get("id", f"section_{i+1}"))
@@ -180,11 +450,11 @@ async def export_check_route(
 @router.get("/articles/{article_id}/export")
 async def export_article_route(
     article_id: int,
-    fmt: str = Query("html", alias="format", description="html / docx / md / pdf / txt"),
+    fmt: str = Query("html", alias="format", description="html / docx / md / pdf / txt / json"),
     platform: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """导出文章：html/docx/md/txt 走稳定合并导出；pdf 走 WeasyPrint 等形式路由。"""
+    """导出文章：json 导出原始结构化数据；html/docx/md/txt 走稳定合并导出；pdf 走 WeasyPrint 等形式路由。"""
     from app.services.export.router import export_article as do_export
     from app.services.export.utils import (
         load_article_sections,
@@ -239,7 +509,18 @@ async def export_article_route(
     def _merged_export(article, parts, export_fmt: str, refs_text: str = "") -> tuple[bytes, str, str]:
         """各章节合并后的通用导出"""
         base_name = (article.topic or "article").replace("/", "-")
-        md_body = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in parts) + (refs_text or "")
+        cf = getattr(article, "content_format", None) or "article"
+        hide_headings = cf == "article"
+
+        filtered = [
+            (t, b, st) for t, b, st in parts
+            if not _skip_article_legacy_intro(cf, st) and b.strip()
+        ]
+
+        if hide_headings:
+            md_body = "\n\n".join(b for _, b, _ in filtered) + (refs_text or "")
+        else:
+            md_body = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in filtered) + (refs_text or "")
 
         if export_fmt == "md":
             asset_block = (
@@ -249,7 +530,10 @@ async def export_article_route(
             full_md = prepend_export_title_markdown(article, md_body) + asset_block
             return full_md.encode("utf-8"), "text/markdown; charset=utf-8", f"{base_name}.md"
 
-        plain_body = "\n\n".join(f"{t}\n\n{strip_markdown(b)}" for t, b, _ in parts)
+        if hide_headings:
+            plain_body = "\n\n".join(strip_markdown(b) for _, b, _ in filtered)
+        else:
+            plain_body = "\n\n".join(f"{t}\n\n{strip_markdown(b)}" for t, b, _ in filtered)
         if refs_text:
             plain_body += "\n\n" + strip_markdown(refs_text)
 
@@ -258,7 +542,10 @@ async def export_article_route(
             return html.encode("utf-8"), "text/html; charset=utf-8", f"{base_name}.html"
         if export_fmt == "docx":
             try:
-                docx_parts = [(p[0], strip_markdown(p[1])) for p in parts]
+                if hide_headings:
+                    docx_parts = [("", strip_markdown(b)) for _, b, _ in filtered]
+                else:
+                    docx_parts = [(t, strip_markdown(b)) for t, b, _ in filtered]
                 if refs_text:
                     docx_parts.append(("参考文献", strip_markdown(refs_text)))
                 buf, fn = html_docx.to_docx(article, docx_parts)
@@ -270,8 +557,51 @@ async def export_article_route(
         return txt.encode("utf-8"), "text/plain; charset=utf-8", f"{base_name}.txt"
 
     normalized = (fmt or "html").strip().lower()
-    if normalized not in ("html", "docx", "md", "pdf", "txt"):
+    if normalized not in ("html", "docx", "md", "pdf", "txt", "json"):
         normalized = "txt"
+
+    # JSON 导出：转换为外部绘图软件兼容的标准格式（comic_v1 适配器）
+    if normalized == "json":
+        try:
+            result = await db.execute(select(Article).where(Article.id == article_id, Article.deleted_at.is_(None)))
+            article = result.scalar_one_or_none()
+            if not article:
+                raise HTTPException(status_code=404, detail="Article not found")
+            sec_result = await db.execute(
+                select(ArticleSection).where(ArticleSection.article_id == article_id).order_by(ArticleSection.order_num)
+            )
+            sections = sec_result.scalars().all()
+            platform = article.platform or "wechat"
+            sections_with_content: list[tuple] = []
+            for sec in sections:
+                cont_result = await db.execute(
+                    select(ArticleContent).where(
+                        ArticleContent.section_id == sec.id,
+                        ArticleContent.is_current == True,
+                    )
+                )
+                candidates = cont_result.scalars().all()
+                c = next((x for x in candidates if x.platform == platform), None) or next(
+                    (x for x in candidates if x.platform is None), candidates[0] if candidates else None
+                )
+                content_obj = None
+                if c and c.content_json:
+                    try:
+                        content_obj = json.loads(c.content_json)
+                    except Exception:
+                        pass
+                sections_with_content.append((sec, content_obj))
+
+            export_obj = _build_drawing_export(article, sections_with_content)
+            base_name = (article.topic or "article").replace("/", "-")
+            payload = json.dumps(export_obj, ensure_ascii=False, indent=2).encode("utf-8")
+            return Response(content=payload, media_type="application/json; charset=utf-8", headers={
+                "Content-Disposition": attachment_content_disposition(f"{base_name}.json"),
+            })
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     # docx/html/md/txt：不经过 export.router 的形式分发，避免个别导出器异常导致 404/500
     if normalized != "pdf":
@@ -353,7 +683,77 @@ async def get_article(
     d["content_json"] = content_json or {"type": "doc", "content": []}
     d["verify_report"] = section_verify_report
     d["current_section_id"] = target_section.id if target_section else None
-    d["sections"] = [{"id": s.id, "section_type": s.section_type, "title": s.title, "order_num": s.order_num, "status": s.status or "pending"} for s in sections]
+
+    platform = article.platform or "wechat"
+    section_has_content: dict[int, bool] = {}
+    full_doc_nodes: list[dict] = []
+
+    if sections:
+        all_section_ids = [s.id for s in sections]
+        all_cont_result = await db.execute(
+            select(ArticleContent)
+            .where(
+                ArticleContent.section_id.in_(all_section_ids),
+                ArticleContent.is_current == True,
+            )
+        )
+        all_contents = all_cont_result.scalars().all()
+        content_by_section: dict[int, list] = {}
+        for c in all_contents:
+            content_by_section.setdefault(c.section_id, []).append(c)
+
+        from app.services.format_router import SECTION_TITLES
+        titles_map = SECTION_TITLES.get(article.content_format or "article", {})
+        cf = article.content_format or "article"
+        hide_section_headings = cf == "article"
+
+        for sec in sections:
+            if _skip_article_legacy_intro(article.content_format, sec.section_type):
+                continue
+            candidates = content_by_section.get(sec.id, [])
+            has = bool(candidates)
+            section_has_content[sec.id] = has
+
+            c = next((x for x in candidates if x.platform == platform), None) or \
+                next((x for x in candidates if x.platform is None), candidates[0] if candidates else None)
+            if not c or not c.content_json:
+                continue
+            try:
+                doc = json.loads(c.content_json)
+            except Exception:
+                continue
+            nodes = doc.get("content", []) if isinstance(doc, dict) else []
+            if not nodes:
+                continue
+
+            nodes = _strip_reference_nodes(nodes)
+            if not nodes:
+                continue
+
+            if not hide_section_headings:
+                sec_title = sec.title or titles_map.get(sec.section_type, sec.section_type)
+                full_doc_nodes.append({
+                    "type": "heading", "attrs": {"level": 2},
+                    "content": [{"type": "text", "text": sec_title}]
+                })
+            if full_doc_nodes:
+                full_doc_nodes.append({"type": "paragraph"})
+            full_doc_nodes.extend(nodes)
+
+    d["full_content_json"] = {"type": "doc", "content": full_doc_nodes} if full_doc_nodes else {"type": "doc", "content": []}
+
+    d["sections"] = [
+        {
+            "id": s.id,
+            "section_type": s.section_type,
+            "title": s.title,
+            "order_num": s.order_num,
+            "status": s.status or "pending",
+            "has_content": section_has_content.get(s.id, False),
+        }
+        for s in sections
+        if not _skip_article_legacy_intro(article.content_format, s.section_type)
+    ]
     return d
 
 
@@ -575,6 +975,73 @@ async def update_article_image_stage(
         raise HTTPException(status_code=404, detail="Article not found")
     article.image_stage = req.image_stage
     await db.commit()
+    return {"ok": True}
+
+
+@router.put("/articles/{article_id}/save-full-content")
+async def save_full_content(
+    article_id: int,
+    req: UpdateArticleContentRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """保存合并视图的全文内容到 body 章节，并取消其他章节的 is_current 标记以避免重复"""
+    from app.services.content_version import save_node
+
+    lock = get_domain_lock("articles")
+    async with lock:
+        result = await db.execute(
+            select(Article).where(Article.id == article_id, Article.deleted_at.is_(None))
+        )
+        article = result.scalar_one_or_none()
+        if not article:
+            raise HTTPException(status_code=404, detail="Article not found")
+
+        platform = article.platform or "wechat"
+        cf = article.content_format or "article"
+
+        sec_result = await db.execute(
+            select(ArticleSection)
+            .where(ArticleSection.article_id == article_id)
+            .order_by(ArticleSection.order_num)
+        )
+        sections = sec_result.scalars().all()
+        if not sections:
+            raise HTTPException(status_code=404, detail="No sections found")
+
+        body_section = next(
+            (s for s in sections if s.section_type == "body"),
+            sections[0],
+        )
+
+        await save_node(
+            db,
+            article_id=article_id,
+            section_id=body_section.id,
+            content_json=req.content_json,
+            version_type="user_edited",
+            platform=platform,
+        )
+
+        other_section_ids = [
+            s.id for s in sections
+            if s.id != body_section.id
+        ]
+        if other_section_ids:
+            from sqlalchemy import or_
+            stale = await db.execute(
+                select(ArticleContent).where(
+                    ArticleContent.section_id.in_(other_section_ids),
+                    or_(
+                        ArticleContent.platform == platform,
+                        (ArticleContent.platform.is_(None)) & (platform == "wechat"),
+                    ),
+                    ArticleContent.is_current == True,
+                )
+            )
+            for c in stale.scalars().all():
+                c.is_current = False
+
+        await db.commit()
     return {"ok": True}
 
 
@@ -998,6 +1465,12 @@ async def generate_section(
     st = section.section_type or "intro"
     pf = article.platform or "wechat"
 
+    if _skip_article_legacy_intro(cf, st):
+        raise HTTPException(
+            status_code=400,
+            detail="图文文章已不再使用独立「引言」章节，正文承担开篇引入。请使用一键生成全文或单独生成「正文」等章节。",
+        )
+
     format_meta = _build_format_meta(section, article)
     scene_setup_context = ""
     if cf == "drama_script" and st not in ("drama_plan", "cast_table"):
@@ -1042,11 +1515,11 @@ async def generate_section(
             if evt.get("type") == "done" and evt.get("content"):
                 from app.services.content_version import save_node
                 from app.services.med_claim_marks import apply_med_claim_marks_to_doc
+                from app.services.markdown_to_tiptap import markdown_to_tiptap
                 lock = get_domain_lock("articles")
                 async with lock:
                     async with AsyncSessionLocal() as sess:
-                        para = {"type": "paragraph", "content": [{"type": "text", "text": evt["content"]}]}
-                        doc = {"type": "doc", "content": [para]}
+                        doc = markdown_to_tiptap(evt["content"])
                         doc = apply_med_claim_marks_to_doc(doc, last_verify_report)
                         await save_node(
                             sess,
@@ -1075,6 +1548,162 @@ async def generate_section(
                 except Exception as te:
                     import logging
                     logging.getLogger(__name__).warning("auto title generation failed: %s", te)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/articles/{article_id}/generate-all")
+async def generate_all_sections(
+    article_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """SSE 流式按顺序生成全文所有章节，每一章节完成后保存，
+    下一章节自动注入前序内容，保证章节间的逻辑衔接。"""
+    import logging
+    _log = logging.getLogger(__name__)
+
+    art_result = await db.execute(select(Article).where(Article.id == article_id))
+    article = art_result.scalar_one_or_none()
+    if not article or article.deleted_at:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    cf = article.content_format or "article"
+    pf = article.platform or "wechat"
+    skip_list = set(getattr(article, "skip_sections", None) or [])
+    art_topic = article.topic or ""
+    art_audience = article.target_audience or "public"
+    art_specialty = article.specialty or ""
+    art_default_model = article.default_model
+    art_word_count = getattr(article, "target_word_count", None)
+    art_skip_sections = getattr(article, "skip_sections", None)
+
+    sec_result = await db.execute(
+        select(ArticleSection)
+        .where(ArticleSection.article_id == article_id)
+        .order_by(ArticleSection.order_num)
+    )
+    all_sections = sec_result.scalars().all()
+    section_infos = [
+        {"id": s.id, "section_type": s.section_type or "", "order_num": s.order_num,
+         "format_meta": dict((s.format_meta or {}) if hasattr(s, "format_meta") else {})}
+        for s in all_sections
+    ]
+
+    async def event_stream():
+        from app.services.content_version import save_node
+        from app.services.markdown_to_tiptap import markdown_to_tiptap
+        from app.services.med_claim_marks import apply_med_claim_marks_to_doc
+
+        total = len([
+            si for si in section_infos
+            if si["section_type"] not in skip_list and not _skip_article_legacy_intro(cf, si["section_type"])
+        ])
+        completed = 0
+
+        yield f"data: {json.dumps({'type': 'batch_start', 'total_sections': total}, ensure_ascii=False)}\n\n"
+
+        for si in section_infos:
+            st = si["section_type"]
+            sec_id = si["id"]
+            if st in skip_list or _skip_article_legacy_intro(cf, st):
+                continue
+
+            _log.info("[generate-all] starting section %s (id=%d)", st, sec_id)
+            yield f"data: {json.dumps({'type': 'section_start', 'section_id': sec_id, 'section_type': st, 'index': completed + 1, 'total': total}, ensure_ascii=False)}\n\n"
+
+            format_meta = dict(si.get("format_meta") or {})
+            scene_setup_context = ""
+            async with AsyncSessionLocal() as _db:
+                if cf == "drama_script" and st not in ("drama_plan", "cast_table"):
+                    scene_setup_context = await _get_scene_setup_context(_db, article_id, pf)
+                elif cf == "storyboard" and st not in ("anim_plan", "char_design"):
+                    scene_setup_context = await _get_section_text(_db, article_id, "char_design", pf)
+
+                planner_st = _PLANNER_SECTION_TYPE.get(cf, "planner")
+                if cf in _PLANNER_FORMATS and st != planner_st:
+                    planner_data = await _get_planner_context(_db, article_id, pf, planner_st)
+                    if planner_data:
+                        format_meta.setdefault("planner_json", planner_data)
+                        for key in ("story_arc", "story_type", "total_panels", "total_pages",
+                                    "total_sections", "main_character", "core_message",
+                                    "story_title", "color_theme", "layout_style", "story_line",
+                                    "series_theme", "visual_style", "total_cards"):
+                            if key in planner_data and key not in format_meta:
+                                format_meta[key] = planner_data[key]
+                        panels_or_pages = (planner_data.get("panels") or planner_data.get("pages")
+                                           or planner_data.get("sections") or planner_data.get("cards") or [])
+                        format_meta.setdefault("planner_items", panels_or_pages)
+
+            last_verify_report = None
+            section_content = ""
+            image_suggestions = None
+
+            async for evt in generate_section_stream(
+                article_id=article_id,
+                section_id=sec_id,
+                topic=art_topic,
+                content_format=cf,
+                section_type=st,
+                target_audience=art_audience,
+                platform=pf,
+                specialty=art_specialty,
+                article_default_model=art_default_model,
+                format_meta=format_meta,
+                scene_setup_context=scene_setup_context,
+                target_word_count=art_word_count,
+                skip_sections=art_skip_sections,
+            ):
+                if evt.get("type") == "verify_report" and evt.get("report") is not None:
+                    last_verify_report = evt["report"]
+                if evt.get("type") == "delta":
+                    yield f"data: {json.dumps({'type': 'delta', 'text': evt.get('text', ''), 'section_id': sec_id}, ensure_ascii=False)}\n\n"
+                if evt.get("type") == "rewriting":
+                    yield f"data: {json.dumps({'type': 'rewriting', 'message': evt.get('message', ''), 'section_id': sec_id}, ensure_ascii=False)}\n\n"
+                if evt.get("type") == "rewritten_content" and evt.get("content"):
+                    yield f"data: {json.dumps({'type': 'rewritten_content', 'content': evt['content'], 'section_id': sec_id}, ensure_ascii=False)}\n\n"
+                if evt.get("type") == "done" and evt.get("content"):
+                    section_content = evt["content"]
+                    image_suggestions = evt.get("image_suggestions")
+
+            if section_content:
+                lock = get_domain_lock("articles")
+                async with lock:
+                    async with AsyncSessionLocal() as sess:
+                        doc = markdown_to_tiptap(section_content)
+                        doc = apply_med_claim_marks_to_doc(doc, last_verify_report)
+                        await save_node(
+                            sess,
+                            article_id=article_id,
+                            section_id=sec_id,
+                            content_json=doc,
+                            version_type="ai_generated",
+                            platform=pf,
+                            verify_report=last_verify_report,
+                        )
+                        if image_suggestions:
+                            await sess.execute(
+                                update(ArticleSection)
+                                .where(ArticleSection.id == sec_id)
+                                .values(image_suggestions=image_suggestions)
+                            )
+                        await sess.commit()
+                _log.info("[generate-all] ✅ section %s saved", st)
+
+            completed += 1
+            yield f"data: {json.dumps({'type': 'section_done', 'section_id': sec_id, 'section_type': st, 'index': completed, 'total': total}, ensure_ascii=False)}\n\n"
+
+        try:
+            title_evt = await _auto_generate_title_if_complete(article_id)
+            if title_evt:
+                yield f"data: {json.dumps(title_evt, ensure_ascii=False)}\n\n"
+        except Exception as te:
+            _log.warning("auto title generation failed: %s", te)
+
+        yield f"data: {json.dumps({'type': 'batch_done', 'completed': completed}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -1146,8 +1775,13 @@ async def recheck_section(
     provenance = extract_provenance_summary(plain_text)
     uncited_facts = detect_uncited_medical_facts(plain_text)
 
+    from app.services.verification.pipeline import detect_ai_patterns_by_paragraph
+    paragraph_analysis = detect_ai_patterns_by_paragraph(plain_text)
+    high_risk_paras = sum(1 for p in paragraph_analysis if p["risk_level"] == "high")
+
     report = content_row.verify_report or {}
     report["ai_patterns"] = ai_patterns
+    report["ai_patterns"]["high_risk_paragraphs"] = high_risk_paras
     report["provenance"] = provenance
     report["uncited_facts"] = uncited_facts
 
@@ -1159,6 +1793,226 @@ async def recheck_section(
         await db.commit()
 
     return {"ok": True, "verify_report": report}
+
+
+@router.get("/sections/{section_id}/aigc-check")
+async def aigc_check_section(
+    section_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """段落级AIGC特征检测：返回每个段落的AI风险等级、具体问题和改写建议"""
+    from app.services.verification.pipeline import (
+        detect_ai_patterns,
+        detect_ai_patterns_by_paragraph,
+    )
+
+    sec_result = await db.execute(
+        select(ArticleSection, Article)
+        .join(Article, ArticleSection.article_id == Article.id)
+        .where(ArticleSection.id == section_id)
+    )
+    row = sec_result.one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Section not found")
+    section, article = row
+
+    platform = article.platform or "wechat"
+    cont_result = await db.execute(
+        select(ArticleContent).where(
+            ArticleContent.section_id == section_id,
+            ArticleContent.is_current == True,
+        )
+    )
+    candidates = cont_result.scalars().all()
+    content_row = (
+        next((c for c in candidates if c.platform == platform), None)
+        or next((c for c in candidates if c.platform is None), candidates[0] if candidates else None)
+    )
+    if not content_row or not content_row.content_json:
+        raise HTTPException(status_code=404, detail="No content to check")
+
+    doc = json.loads(content_row.content_json)
+
+    _BLOCK_TYPES = {"paragraph", "heading", "blockquote", "listItem", "codeBlock"}
+
+    def _extract_text(node):
+        if isinstance(node, str):
+            return node
+        if isinstance(node, list):
+            return "".join(_extract_text(x) for x in node)
+        if isinstance(node, dict):
+            if node.get("type") == "text":
+                return node.get("text", "")
+            parts = "".join(_extract_text(x) for x in node.get("content", []))
+            if node.get("type") in _BLOCK_TYPES:
+                return parts + "\n\n"
+            return parts
+        return ""
+
+    plain_text = _extract_text(doc).strip()
+    if not plain_text:
+        raise HTTPException(status_code=404, detail="Content is empty")
+
+    overall = detect_ai_patterns(plain_text)
+    paragraphs = detect_ai_patterns_by_paragraph(plain_text)
+
+    high_risk = [p for p in paragraphs if p["risk_level"] == "high"]
+    medium_risk = [p for p in paragraphs if p["risk_level"] == "medium"]
+
+    pattern_score = overall.get("score", 100)
+    para_penalty = len(high_risk) * 8 + len(medium_risk) * 4
+    adjusted_score = max(0, min(pattern_score, pattern_score - para_penalty))
+
+    summary = {
+        "overall_score": adjusted_score,
+        "pattern_score": pattern_score,
+        "paragraph_penalty": para_penalty,
+        "needs_polish": adjusted_score < 60 or overall.get("needs_polish", False),
+        "total_paragraphs": len(paragraphs),
+        "high_risk_count": len(high_risk),
+        "medium_risk_count": len(medium_risk),
+        "low_risk_count": len(paragraphs) - len(high_risk) - len(medium_risk),
+    }
+
+    return {
+        "ok": True,
+        "summary": summary,
+        "overall": overall,
+        "paragraphs": [
+            {
+                "index": p["index"],
+                "text": p["text"],
+                "full_text": p.get("full_text", p["text"]),
+                "risk_level": p["risk_level"],
+                "issues": p["issues"],
+                "suggestions": p["suggestions"],
+                "sentence_stats": p["sentence_stats"],
+            }
+            for p in paragraphs
+        ],
+    }
+
+
+@router.post("/articles/{article_id}/aigc-check")
+async def aigc_check_article(
+    article_id: int,
+    body: dict | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """全文级 AIGC 段落检测：优先使用前端传入的 content_json，否则从 DB 合并"""
+    from app.services.verification.pipeline import (
+        detect_ai_patterns,
+        detect_ai_patterns_by_paragraph,
+    )
+
+    _BLOCK_TYPES = {"paragraph", "heading", "blockquote", "listItem", "codeBlock"}
+
+    def _extract_text(node):
+        if isinstance(node, str):
+            return node
+        if isinstance(node, list):
+            return "".join(_extract_text(x) for x in node)
+        if isinstance(node, dict):
+            if node.get("type") == "text":
+                return node.get("text", "")
+            parts = "".join(_extract_text(x) for x in node.get("content", []))
+            if node.get("type") in _BLOCK_TYPES:
+                return parts + "\n\n"
+            return parts
+        return ""
+
+    content_json = (body or {}).get("content_json")
+    if content_json and isinstance(content_json, dict):
+        plain_text = _extract_text(content_json).strip()
+    else:
+        result = await db.execute(
+            select(Article).where(Article.id == article_id, Article.deleted_at.is_(None))
+        )
+        article = result.scalar_one_or_none()
+        if not article:
+            raise HTTPException(status_code=404, detail="Article not found")
+
+        platform = article.platform or "wechat"
+        cf = article.content_format or "article"
+
+        sec_result = await db.execute(
+            select(ArticleSection)
+            .where(ArticleSection.article_id == article_id)
+            .order_by(ArticleSection.order_num)
+        )
+        sections = sec_result.scalars().all()
+
+        cont_result = await db.execute(
+            select(ArticleContent).where(
+                ArticleContent.section_id.in_([s.id for s in sections]),
+                ArticleContent.is_current == True,
+            )
+        )
+        all_contents = cont_result.scalars().all()
+        content_by_section: dict[int, list] = {}
+        for c in all_contents:
+            content_by_section.setdefault(c.section_id, []).append(c)
+
+        all_text_parts: list[str] = []
+        for sec in sections:
+            if _skip_article_legacy_intro(cf, sec.section_type):
+                continue
+            candidates = content_by_section.get(sec.id, [])
+            c = next((x for x in candidates if x.platform == platform), None) or \
+                next((x for x in candidates if x.platform is None), candidates[0] if candidates else None)
+            if not c or not c.content_json:
+                continue
+            try:
+                doc = json.loads(c.content_json)
+            except Exception:
+                continue
+            part = _extract_text(doc).strip()
+            if part:
+                all_text_parts.append(part)
+
+        plain_text = "\n\n".join(all_text_parts).strip()
+
+    if not plain_text:
+        raise HTTPException(status_code=404, detail="No content to check")
+
+    overall = detect_ai_patterns(plain_text)
+    paragraphs = detect_ai_patterns_by_paragraph(plain_text)
+
+    high_risk = [p for p in paragraphs if p["risk_level"] == "high"]
+    medium_risk = [p for p in paragraphs if p["risk_level"] == "medium"]
+
+    pattern_score = overall.get("score", 100)
+    para_penalty = len(high_risk) * 8 + len(medium_risk) * 4
+    adjusted_score = max(0, min(pattern_score, pattern_score - para_penalty))
+
+    summary = {
+        "overall_score": adjusted_score,
+        "pattern_score": pattern_score,
+        "paragraph_penalty": para_penalty,
+        "needs_polish": adjusted_score < 60 or overall.get("needs_polish", False),
+        "total_paragraphs": len(paragraphs),
+        "high_risk_count": len(high_risk),
+        "medium_risk_count": len(medium_risk),
+        "low_risk_count": len(paragraphs) - len(high_risk) - len(medium_risk),
+    }
+
+    return {
+        "ok": True,
+        "summary": summary,
+        "overall": overall,
+        "paragraphs": [
+            {
+                "index": p["index"],
+                "text": p["text"],
+                "full_text": p.get("full_text", p["text"]),
+                "risk_level": p["risk_level"],
+                "issues": p["issues"],
+                "suggestions": p["suggestions"],
+                "sentence_stats": p["sentence_stats"],
+            }
+            for p in paragraphs
+        ],
+    }
 
 
 @router.post("/articles/batch-delete")

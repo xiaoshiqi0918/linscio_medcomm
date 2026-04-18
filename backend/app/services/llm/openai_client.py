@@ -57,11 +57,13 @@ async def chat_completion(
     model: str | None = None,
     stream: bool = False,
     task: "TaskTier | None" = None,
+    temperature: float | None = None,
 ) -> str | AsyncIterator[str]:
     """Chat 补全，自动路由：国内大模型(OpenAI 兼容) / Anthropic / OpenAI。
 
     优先级：model 显式指定 > task 智能路由 > resolve_model() 通用解析。
     task 为 TaskTier 枚举（从 app.services.llm.manager 导入）。
+    temperature: 采样温度，None 时使用 API 默认值。
     """
     if model is None:
         if task is not None:
@@ -72,30 +74,38 @@ async def chat_completion(
             model = await resolve_model()
     if _is_anthropic(model):
         if stream:
-            return _anthropic_chat_stream(messages, model)
-        return await _anthropic_chat_once(messages, model)
+            return _anthropic_chat_stream(messages, model, temperature=temperature)
+        return await _anthropic_chat_once(messages, model, temperature=temperature)
     if stream:
-        return _openai_chat_stream(messages, model)
-    return await _openai_chat_once(messages, model)
+        return _openai_chat_stream(messages, model, temperature=temperature)
+    return await _openai_chat_once(messages, model, temperature=temperature)
 
 
 async def _openai_chat_once(
     messages: list[dict],
     model: str,
-    ) -> str:
+    temperature: float | None = None,
+) -> str:
     client = get_client(model)
     api_model = _strip_provider_prefix(model)
-    resp = await client.chat.completions.create(model=api_model, messages=messages)
+    kwargs: dict = {"model": api_model, "messages": messages}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    resp = await client.chat.completions.create(**kwargs)
     return resp.choices[0].message.content or ""
 
 
 async def _openai_chat_stream(
     messages: list[dict],
     model: str,
+    temperature: float | None = None,
 ) -> AsyncIterator[str]:
     client = get_client(model)
     api_model = _strip_provider_prefix(model)
-    stream_obj = await client.chat.completions.create(model=api_model, messages=messages, stream=True)
+    kwargs: dict = {"model": api_model, "messages": messages, "stream": True}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    stream_obj = await client.chat.completions.create(**kwargs)
     async for chunk in stream_obj:
         if chunk.choices and chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
@@ -104,7 +114,8 @@ async def _openai_chat_stream(
 async def _anthropic_chat_once(
     messages: list[dict],
     model: str,
-    ) -> str:
+    temperature: float | None = None,
+) -> str:
     try:
         import anthropic
     except ImportError:
@@ -120,18 +131,22 @@ async def _anthropic_chat_once(
             sys = m.get("content", "")
         else:
             msgs.append({"role": m["role"], "content": m.get("content", "")})
-    r = await client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=sys or None,
-        messages=msgs,
-    )
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": 4096,
+        "system": sys or None,
+        "messages": msgs,
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    r = await client.messages.create(**kwargs)
     return (r.content[0].text if r.content else "") or ""
 
 
 async def _anthropic_chat_stream(
     messages: list[dict],
     model: str,
+    temperature: float | None = None,
 ) -> AsyncIterator[str]:
     try:
         import anthropic
@@ -148,11 +163,14 @@ async def _anthropic_chat_stream(
             sys = m.get("content", "")
         else:
             msgs.append({"role": m["role"], "content": m.get("content", "")})
-    async with client.messages.stream(
-        model=model,
-        max_tokens=4096,
-        system=sys or None,
-        messages=msgs,
-    ) as stream_obj:
+    kwargs: dict = {
+        "model": model,
+        "max_tokens": 4096,
+        "system": sys or None,
+        "messages": msgs,
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    async with client.messages.stream(**kwargs) as stream_obj:
         async for t in stream_obj.text_stream:
             yield t

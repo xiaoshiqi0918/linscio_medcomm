@@ -363,6 +363,41 @@ function insertAtCursor(text: string) {
   return true
 }
 
+function applyAigcWarnings(paragraphs: Array<{ full_text?: string; text: string; risk_level: string; suggestions: string[] }>) {
+  const inst = editor.value
+  if (!inst) return 0
+  const markType = inst.state.schema.marks.aigcWarning
+  if (!markType) return 0
+
+  const tr = inst.state.tr
+  tr.removeMark(0, inst.state.doc.content.size, markType)
+
+  let applied = 0
+  for (const p of paragraphs) {
+    if (p.risk_level === 'low') continue
+    const searchText = (p.full_text || p.text || '').replace(/\.\.\.$/g, '').trim()
+    if (!searchText || searchText.length < 10) continue
+    const range = findTextRangeInDoc(inst.state.doc, searchText)
+    if (!range) continue
+    const tooltip = p.suggestions.slice(0, 2).join('；') || (p.risk_level === 'high' ? 'AIGC高风险' : 'AIGC中风险')
+    tr.addMark(range.from, range.to, markType.create({ level: p.risk_level, tooltip }))
+    applied++
+  }
+
+  if (applied > 0) inst.view.dispatch(tr)
+  return applied
+}
+
+function clearAigcWarnings() {
+  const inst = editor.value
+  if (!inst) return
+  const markType = inst.state.schema.marks.aigcWarning
+  if (!markType) return
+  const tr = inst.state.tr
+  tr.removeMark(0, inst.state.doc.content.size, markType)
+  inst.view.dispatch(tr)
+}
+
 defineExpose({
   insertCitationRef,
   normalizeCitationRefs,
@@ -370,6 +405,8 @@ defineExpose({
   updateComicPanelImage,
   replaceRange,
   insertAtCursor,
+  applyAigcWarnings,
+  clearAigcWarnings,
 })
 
 onBeforeUnmount(() => {
@@ -393,18 +430,36 @@ function findTextRangeInDoc(doc: PMNode, keyword: string): { from: number; to: n
       spans.push({ absStart, absEnd: full.length, pmFrom })
     }
   })
-  const i = full.indexOf(k)
-  if (i < 0) return null
-  const j = i + k.length
-  const last = j - 1
+
+  let matchStart = full.indexOf(k)
+  let matchLast = matchStart >= 0 ? matchStart + k.length - 1 : -1
+
+  if (matchStart < 0) {
+    const _strip = /[「」""''《》【】\s]/g
+    const normK = k.replace(_strip, '')
+    if (!normK.length) return null
+    const origIdx: number[] = []
+    let normFull = ''
+    for (let ci = 0; ci < full.length; ci++) {
+      if (!/[「」""''《》【】\s]/.test(full[ci])) {
+        origIdx.push(ci)
+        normFull += full[ci]
+      }
+    }
+    const ni = normFull.indexOf(normK)
+    if (ni < 0) return null
+    matchStart = origIdx[ni]
+    matchLast = origIdx[ni + normK.length - 1]
+  }
+
   let from = -1
   let to = -1
   for (const s of spans) {
-    if (from < 0 && i >= s.absStart && i < s.absEnd) {
-      from = s.pmFrom + (i - s.absStart)
+    if (from < 0 && matchStart >= s.absStart && matchStart < s.absEnd) {
+      from = s.pmFrom + (matchStart - s.absStart)
     }
-    if (last >= s.absStart && last < s.absEnd) {
-      to = s.pmFrom + (last - s.absStart) + 1
+    if (matchLast >= s.absStart && matchLast < s.absEnd) {
+      to = s.pmFrom + (matchLast - s.absStart) + 1
       break
     }
   }
@@ -567,6 +622,18 @@ watch(
   background: rgba(239, 68, 68, 0.18);
   box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.35);
   border-radius: 2px;
+}
+
+.prose :deep(.aigc-warning-high) {
+  background: rgba(239, 68, 68, 0.15);
+  border-bottom: 2px wavy rgba(239, 68, 68, 0.6);
+  cursor: help;
+}
+
+.prose :deep(.aigc-warning-medium) {
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom: 2px wavy rgba(245, 158, 11, 0.5);
+  cursor: help;
 }
 
 .prose :deep(.citation-ref) {

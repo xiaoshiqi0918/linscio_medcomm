@@ -89,9 +89,11 @@ async def _azure_translate(text: str, target_lang: str, source_lang: str) -> str
 
 _LANG_NAMES = {"zh": "中文", "en": "English", "ja": "日本語", "de": "Deutsch", "fr": "Français"}
 
-async def _llm_translate(text: str, target_lang: str, source_lang: str) -> str:
+async def _llm_translate(text: str, target_lang: str, source_lang: str) -> tuple[str, str]:
     from app.services.llm.openai_client import chat_completion
-    from app.services.llm.manager import TaskTier
+    from app.services.llm.manager import (
+        TaskTier, _pick_model_from_available_providers, _find_any_available_model,
+    )
 
     target_name = _LANG_NAMES.get(target_lang, target_lang)
     messages = [
@@ -109,11 +111,21 @@ async def _llm_translate(text: str, target_lang: str, source_lang: str) -> str:
         },
         {"role": "user", "content": text},
     ]
+    model = (
+        _pick_model_from_available_providers(TaskTier.FAST)
+        or _find_any_available_model()
+    )
+    if not model:
+        raise RuntimeError(
+            "未找到任何已配置 API Key 的 LLM 模型。"
+            "请在设置中配置至少一个 LLM Key，或配置翻译专用 Key（推荐 DeepL）。"
+        )
     try:
-        return await chat_completion(messages, task=TaskTier.FAST)
+        result = await chat_completion(messages, model=model)
+        return result, model
     except Exception as e:
         raise RuntimeError(
-            f"LLM 翻译失败: {e}。"
+            f"LLM 翻译失败 ({model}): {e}。"
             f"请确认该模型的 API Key 已配置，或在设置中配置翻译专用 Key（推荐 DeepL）。"
         ) from e
 
@@ -142,14 +154,14 @@ async def translate(
         elif provider == "azure":
             result = await _azure_translate(text, target_lang, source_lang)
         else:
-            provider = "llm"
-            result = await _llm_translate(text, target_lang, source_lang)
+            result, llm_model = await _llm_translate(text, target_lang, source_lang)
+            return {"text": result, "provider": f"llm:{llm_model}"}
         return {"text": result, "provider": provider or "llm"}
     except Exception as e:
         if provider and provider != "llm":
             try:
-                result = await _llm_translate(text, target_lang, source_lang)
-                return {"text": result, "provider": "llm", "fallback_reason": str(e)}
+                result, llm_model = await _llm_translate(text, target_lang, source_lang)
+                return {"text": result, "provider": f"llm:{llm_model}", "fallback_reason": str(e)}
             except Exception as e2:
                 raise RuntimeError(f"Translation failed: {provider} → {e}; LLM → {e2}")
         raise

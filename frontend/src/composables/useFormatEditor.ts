@@ -20,10 +20,12 @@ import { ImageCaption } from '@/components/editor/extensions/ImageCaption'
 import { ReadingLevel } from '@/components/editor/extensions/ReadingLevel'
 import { LocateHit } from '@/components/editor/extensions/LocateHit'
 import { CitationRef } from '@/components/editor/extensions/CitationRef'
+import { AigcWarning } from '@/components/editor/extensions/AigcWarning'
 
 const narrativeExt = [
   StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
   Placeholder.configure({ placeholder: '开始撰写医学科普内容...' }),
+  AigcWarning,
   MedClaim,
   PendingClaim,
   FactWarning,

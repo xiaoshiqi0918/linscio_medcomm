@@ -2,7 +2,7 @@
   <div class="page">
     <div class="card">
       <h1>MedComm 账号</h1>
-      <p class="hint">医学科普写作软件（LinScio MedComm）门户登录，与 LinScio AI 主账号独立。</p>
+      <p class="hint">科普内容创作助手（LinScio MedComm）门户登录，与 LinScio AI 主账号独立。</p>
 
       <div class="tabs">
         <button :class="{ active: tab === 'login' }" @click="switchTab('login')">登录</button>

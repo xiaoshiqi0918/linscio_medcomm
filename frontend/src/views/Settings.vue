@@ -147,22 +147,6 @@
       </div>
     </el-card>
 
-    <!-- MedPic 绘图设置 -->
-    <el-card v-if="isElectronEnv" class="settings-card">
-      <template #header>MedPic 绘图设置</template>
-      <div class="content-config">
-        <div class="config-row">
-          <span class="config-label">硬件档位</span>
-          <el-select v-model="medpicTier" style="width: 220px;" @change="saveMedpicTier">
-            <el-option label="普通办公电脑 / 轻薄本" value="low" />
-            <el-option label="游戏本 / 主流台式机" value="standard" />
-            <el-option label="专业工作站 / 高性能主机" value="high" />
-          </el-select>
-          <span v-if="medpicTier" style="color: #6b7280; font-size: 0.8rem; margin-left: 0.5rem;">{{ medpicTierDesc }}</span>
-        </div>
-      </div>
-    </el-card>
-
     <!-- 学科包管理 -->
     <el-card v-if="isElectronEnv" class="settings-card">
       <template #header>
@@ -185,52 +169,6 @@
         </div>
         <div v-if="pack.status === 'installed'" class="pack-stats">
           知识文档 {{ pack.knowledge_docs }} 篇 · 术语 {{ pack.terms }} 条 · 范例 {{ pack.examples }} 个
-        </div>
-        <div v-if="downloadingPack?.specialty_id === pack.specialty_id" class="pack-progress">
-          <el-progress
-            :percentage="downloadingPack.percent"
-            :status="downloadingPack.status === 'done' ? 'success' : downloadingPack.status === 'error' ? 'exception' : undefined"
-            :stroke-width="6"
-          />
-          <span class="pack-progress-detail">{{ downloadingPack.detail }}</span>
-        </div>
-        <div class="pack-actions">
-          <el-button
-            v-if="pack.status === 'not_installed' || pack.status === 'update_available'"
-            type="primary" size="small"
-            :loading="downloadingPack?.specialty_id === pack.specialty_id && !['done','error'].includes(downloadingPack?.status || '')"
-            @click="installPack(pack)"
-          >
-            {{ pack.status === 'update_available' ? '更新' : '安装' }}
-          </el-button>
-        </div>
-      </div>
-    </el-card>
-
-    <!-- 绘图扩展包管理 -->
-    <el-card v-if="isElectronEnv" class="settings-card">
-      <template #header>
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <span>绘图扩展包（MedPic）</span>
-          <div style="display:flex;gap:8px;">
-            <el-button size="small" text type="primary" @click="importLocalPack">从本地导入</el-button>
-            <el-button size="small" text type="primary" @click="goPortalSpecialties">前往门户选购</el-button>
-          </div>
-        </div>
-      </template>
-      <div v-if="!drawingPackList.length && !packLoading" class="pack-empty">
-        <p style="color:#9ca3af;">暂无绘图扩展包。基础绘图功能已内置，进阶模型与工作流可在门户选购或从本地导入。</p>
-      </div>
-      <div v-for="pack in drawingPackList" :key="pack.specialty_id" class="pack-item">
-        <div class="pack-header">
-          <span class="pack-name">{{ pack.name || pack.specialty_id }}</span>
-          <el-tag v-if="pack.status === 'installed'" type="success" size="small">已安装 v{{ pack.local_version }}</el-tag>
-          <el-tag v-else-if="pack.status === 'downloading'" type="warning" size="small">安装中</el-tag>
-          <el-tag v-else-if="pack.status === 'update_available'" type="" size="small">有更新 v{{ pack.remote_version }}</el-tag>
-          <el-tag v-else type="info" size="small">未安装</el-tag>
-        </div>
-        <div v-if="pack.description" class="pack-stats" style="color:#6b7280;">
-          {{ pack.description }}
         </div>
         <div v-if="downloadingPack?.specialty_id === pack.specialty_id" class="pack-progress">
           <el-progress
@@ -293,31 +231,10 @@
           <el-input v-model="googleAiKey" type="password" placeholder="AIza..." show-password />
           <a class="apply-link" href="https://aistudio.google.com/apikey" target="_blank">申请 ↗</a>
         </el-form-item>
-
-        <div class="api-group-title">生图生成</div>
-        <el-form-item label="通义万相 API Key">
-          <el-input v-model="dashscopeKey" type="password" placeholder="DashScope / 通义万相 Key" show-password />
+        <el-form-item label="通义千问 API Key">
+          <el-input v-model="dashscopeKey" type="password" placeholder="DashScope Key（同时用于通义万相生图）" show-password />
           <a class="apply-link" href="https://bailian.console.aliyun.com/?apiKey=1" target="_blank">申请 ↗</a>
         </el-form-item>
-        <el-form-item label="文心图像 API Key">
-          <el-input v-model="baiduKey" type="password" placeholder="baidu key" show-password />
-          <a class="apply-link" href="https://console.bce.baidu.com/iam/#/iam/apikey/list" target="_blank">申请 ↗</a>
-        </el-form-item>
-        <el-form-item label="文心图像 Secret Key">
-          <el-input v-model="baiduSecretKey" type="password" placeholder="baidu secret" show-password />
-        </el-form-item>
-        <el-form-item label="Pollinations API Key">
-          <el-input v-model="pollinationsKey" type="password" placeholder="sk_xxx（enter.pollinations.ai 申请）" show-password />
-          <a class="apply-link" href="https://enter.pollinations.ai/" target="_blank">申请 ↗</a>
-        </el-form-item>
-        <el-form-item label="Comfy Cloud API Key">
-          <el-input v-model="comfyCloudKey" type="password" placeholder="platform.comfy.org 生成的 Key" show-password />
-          <a class="apply-link" href="https://platform.comfy.org" target="_blank">注册 / 申请 ↗</a>
-        </el-form-item>
-
-        <div class="api-group-note">
-          注：OpenAI / 硅基流动 API Key 已在“文本生成”分组中配置，同样会用于生图。Pollinations 为免费兜底，需配置 Key 方可使用。
-        </div>
 
         <div class="api-group-title">文献翻译（可选）</div>
         <el-form-item label="DeepL API Key">
@@ -381,58 +298,6 @@
             </span>
           </span>
         </el-form-item>
-        <el-form-item label="生图提供商优先">
-          <div class="image-provider-field">
-            <el-select
-              v-model="selectedImageProvider"
-              placeholder="自动选择"
-              style="width: min(100%, 380px)"
-              :fit-input-width="false"
-              popper-class="medcomm-image-provider-dropdown"
-            >
-              <el-option-group label="常用 API 生图">
-                <el-option label="自动选择（推荐）" value="auto" />
-                <el-option label="OpenAI DALL·E 3" value="openai" />
-                <el-option label="硅基流动" value="siliconflow" />
-                <el-option label="通义万相" value="wanx" />
-                <el-option label="文心一格" value="wenxin" />
-                <el-option label="Pollinations（免费兜底）" value="pollinations" />
-              </el-option-group>
-              <el-option-group label="ComfyUI（工作流见下方）">
-                <el-option label="自动：有 Comfy Cloud Key 走云端，否则本地 8188" value="comfyui" />
-                <el-option label="仅本地 HTTP（127.0.0.1:8188）" value="comfyui_local" />
-                <el-option label="仅 Comfy Cloud（X-API-Key）" value="comfyui_cloud" />
-              </el-option-group>
-            </el-select>
-            <p class="image-provider-hint">
-              ComfyUI 三项在分组「ComfyUI（工作流见下方）」内；选项较多时请在展开的下拉面板内向下滚动查看。<code>npm run electron:dev</code> 会同时启动 Vite 热更新；若需验证打包效果可 <code>npm run build</code> 后使用 <code>npm run electron:dev:dist</code>。
-            </p>
-          </div>
-        </el-form-item>
-        <el-form-item label="硅基流动生图模型">
-          <el-input v-model="siliconflowImageModel" placeholder="如：Kwai-Kolors/Kolors" style="width: 320px" />
-          <span class="model-hint">仅在选择硅基流动或自动降级到硅基流动时生效。</span>
-        </el-form-item>
-        <el-form-item label="ComfyUI 工作流 JSON">
-          <el-input v-model="comfyWorkflowPath" placeholder="本机 API 格式工作流文件绝对路径" style="width: 420px" />
-          <span class="model-hint">在 ComfyUI 中 Save (API Format)；正提示词节点默认写入节点 ID 下的 text/string。</span>
-        </el-form-item>
-        <el-form-item label="ComfyUI 服务地址">
-          <el-input v-model="comfyBaseUrl" placeholder="留空：本地 http://127.0.0.1:8188，云端 https://cloud.comfy.org" style="width: 420px" />
-        </el-form-item>
-        <el-form-item label="正提示词节点 ID">
-          <el-input v-model="comfyPromptNodeId" placeholder="如 6" style="width: 120px" />
-          <span class="model-hint" style="margin-left: 0.5rem;">输入键名</span>
-          <el-input v-model="comfyPromptInputKey" placeholder="text" style="width: 100px; margin-left: 0.5rem;" />
-        </el-form-item>
-        <el-form-item label="负提示词节点 ID">
-          <el-input v-model="comfyNegativeNodeId" placeholder="可选，如 7" style="width: 120px" />
-          <span class="model-hint" style="margin-left: 0.5rem;">输入键名</span>
-          <el-input v-model="comfyNegativeInputKey" placeholder="text" style="width: 100px; margin-left: 0.5rem;" />
-        </el-form-item>
-        <el-form-item label="KSampler 节点 ID">
-          <el-input v-model="comfyKsamplerNodeId" placeholder="可选，用于覆盖 seed / steps / cfg / sampler" style="width: 320px" />
-        </el-form-item>
       </el-form>
     </el-card>
     <el-card class="settings-card">
@@ -483,34 +348,6 @@ import { useMedcommLicenseStore } from '@/stores/medcommLicense'
 
 const router = useRouter()
 const settingsStore = useSettingsStore()
-const comfyWorkflowPath = computed({
-  get: () => settingsStore.comfyWorkflowPath,
-  set: (v: string) => settingsStore.setComfyWorkflowPath(v),
-})
-const comfyBaseUrl = computed({
-  get: () => settingsStore.comfyBaseUrl,
-  set: (v: string) => settingsStore.setComfyBaseUrl(v),
-})
-const comfyPromptNodeId = computed({
-  get: () => settingsStore.comfyPromptNodeId,
-  set: (v: string) => settingsStore.setComfyPromptNodeId(v),
-})
-const comfyPromptInputKey = computed({
-  get: () => settingsStore.comfyPromptInputKey,
-  set: (v: string) => settingsStore.setComfyPromptInputKey(v),
-})
-const comfyNegativeNodeId = computed({
-  get: () => settingsStore.comfyNegativeNodeId,
-  set: (v: string) => settingsStore.setComfyNegativeNodeId(v),
-})
-const comfyNegativeInputKey = computed({
-  get: () => settingsStore.comfyNegativeInputKey,
-  set: (v: string) => settingsStore.setComfyNegativeInputKey(v),
-})
-const comfyKsamplerNodeId = computed({
-  get: () => settingsStore.comfyKsamplerNodeId,
-  set: (v: string) => settingsStore.setComfyKsamplerNodeId(v),
-})
 const contentStats = ref({ terms: 0, examples: 0, docs: 0 })
 const authStore = useAuthStore()
 const licenseStore = useMedcommLicenseStore()
@@ -526,26 +363,6 @@ if (isElectronEnv && window.electronAPI?.getAppVersion) {
   window.electronAPI.getAppVersion().then((v: string) => { appVersion.value = v }).catch(() => {})
 }
 
-// MedPic 硬件档位
-const TIER_STORAGE_KEY = 'medpic_hardware_tier'
-const medpicTier = ref<string | null>(null)
-const tierDescMap: Record<string, string> = {
-  low: 'SD 1.5 · 基础画质',
-  standard: 'SDXL · 良好画质',
-  high: 'SDXL / Flux · 优秀画质',
-}
-const medpicTierDesc = computed(() => tierDescMap[medpicTier.value || ''] || '')
-
-try {
-  const saved = localStorage.getItem(TIER_STORAGE_KEY)
-  if (saved) medpicTier.value = saved
-} catch { /* noop */ }
-
-function saveMedpicTier(v: string) {
-  medpicTier.value = v
-  try { localStorage.setItem(TIER_STORAGE_KEY, v) } catch { /* noop */ }
-}
-
 // 学科包
 interface PackItem {
   specialty_id: string; name: string; local_version?: string | null;
@@ -556,12 +373,7 @@ interface DownloadProgress {
   specialty_id: string; name?: string; percent: number;
   status: string; detail?: string;
 }
-interface DrawingPackItem extends PackItem {
-  description?: string
-  category?: string
-}
 const packList = ref<PackItem[]>([])
-const drawingPackList = ref<DrawingPackItem[]>([])
 const packLoading = ref(false)
 const downloadingPack = ref<DownloadProgress | null>(null)
 
@@ -678,6 +490,7 @@ async function portalLogin() {
     if (res.ok) {
       portalEmail.value = res.email || email
       portalPasswordInput.value = ''
+      portalEmailInput.value = ''
       ElMessage.success(`已绑定门户账号：${portalEmail.value}`)
     } else {
       portalLoginError.value = res.error || '登录失败'
@@ -731,27 +544,12 @@ async function loadPackStatus() {
   packLoading.value = true
   try {
     const list: any[] = (await eApi.getPackStatus()) || []
-
-    const specialtyItems: PackItem[] = []
-    const drawingItems: DrawingPackItem[] = []
-
-    for (const item of list) {
-      const isDrawing = item.category === 'drawing' || (item.specialty_id || '').startsWith('medpic-')
-      if (isDrawing) {
-        drawingItems.push(item)
-      } else {
-        specialtyItems.push(item)
-      }
-    }
-
-    packList.value = specialtyItems
-    drawingPackList.value = drawingItems
+    packList.value = list.filter(item => item.category !== 'drawing' && !(item.specialty_id || '').startsWith('medpic-'))
 
     for (const sp of licenseStore.specialties) {
-      const isDrawing = sp.id.startsWith('medpic-')
-      const targetList = isDrawing ? drawingPackList.value : packList.value
-      if (!targetList.find(p => p.specialty_id === sp.id)) {
-        targetList.push({
+      if (sp.id.startsWith('medpic-')) continue
+      if (!packList.value.find(p => p.specialty_id === sp.id)) {
+        packList.value.push({
           specialty_id: sp.id,
           name: sp.name,
           local_version: sp.local_version,
@@ -760,7 +558,7 @@ async function loadPackStatus() {
           knowledge_docs: 0, terms: 0, examples: 0,
         })
       } else {
-        const existing = targetList.find(p => p.specialty_id === sp.id)!
+        const existing = packList.value.find(p => p.specialty_id === sp.id)!
         if (sp.remote_version && existing.local_version && sp.remote_version !== existing.local_version) {
           existing.status = 'update_available'
           existing.remote_version = sp.remote_version
@@ -804,25 +602,6 @@ function goPortalSpecialties() {
   window.electronAPI?.openExternal?.('https://portal.linscio.com.cn/medcomm/specialties')
 }
 
-async function importLocalPack() {
-  const eApi = window.electronAPI
-  if (!eApi?.importLocalPack) {
-    ElMessage.info('当前环境不支持本地导入')
-    return
-  }
-  try {
-    const res = await eApi.importLocalPack()
-    if (res?.ok) {
-      ElMessage.success('扩展包导入成功')
-      await loadPackStatus()
-    } else if (res?.error !== 'cancelled') {
-      ElMessage.error(res?.error || '导入失败')
-    }
-  } catch (e: any) {
-    ElMessage.error(e?.message || '导入失败')
-  }
-}
-
 const openaiKey = ref('')
 const dashscopeKey = ref('')
 const siliconflowKey = ref('')
@@ -830,13 +609,9 @@ const deepseekKey = ref('')
 const zhipuKey = ref('')
 const moonshotKey = ref('')
 const googleAiKey = ref('')
-const baiduKey = ref('')
-const baiduSecretKey = ref('')
 const openrouterKey = ref('')
 const qiniuMaasKey = ref('')
 const anthropicKey = ref('')
-const pollinationsKey = ref('')
-const comfyCloudKey = ref('')
 const deeplKey = ref('')
 const googleTranslateKey = ref('')
 const azureTranslateKey = ref('')
@@ -845,28 +620,22 @@ interface LlmModel { id: string; name: string; provider: string; max_tokens?: nu
 const llmModels = ref<LlmModel[]>([])
 const selectedDefaultModel = ref(settingsStore.defaultModel)
 const selectedLlmProvider = ref('openai')
-const selectedImageProvider = ref(settingsStore.preferredImageProvider)
-const siliconflowImageModel = ref(settingsStore.siliconflowImageModel)
 const MODEL_TOKENS: Record<string, number> = {
   'gpt-4o-mini': 128000, 'gpt-4o': 128000, 'gpt-4.1-mini': 1047576, 'gpt-4.1': 1047576,
-  'claude-3-5-sonnet-20241022': 200000, 'claude-3-5-haiku-20241022': 200000,
-  'gemini-2.5-flash': 1048576, 'gemini-2.5-pro': 1048576, 'gemini-2.0-flash': 1048576,
+  'claude-sonnet-4-6': 1000000, 'claude-opus-4-6': 1000000, 'claude-haiku-4-5': 200000,
+  'gemini-2.5-flash': 1048576, 'gemini-2.5-pro': 1048576,
   'deepseek-chat': 64000, 'deepseek-coder': 16000, 'deepseek-reasoner': 64000,
-  'kimi-latest': 131072, 'moonshot-v1-8k': 8192, 'moonshot-v1-32k': 32768, 'moonshot-v1-128k': 131072,
+  'kimi-k2.5': 262144, 'kimi-k2-0905-preview': 262144, 'kimi-k2-turbo-preview': 262144, 'kimi-k2-thinking': 131072, 'kimi-k2-thinking-turbo': 262144, 'kimi-k2-0711-preview': 131072,
   'qwen3-235b-a22b': 131072, 'qwen-turbo': 131072, 'qwen-turbo-latest': 1000000,
   'qwen-plus': 131072, 'qwen-plus-latest': 131072, 'qwen-max': 32768, 'qwen-max-latest': 32768, 'qwen-long': 10000000,
-  'glm-4': 128000, 'glm-4-flash': 128000, 'glm-4-plus': 128000, 'glm-4-air': 128000, 'glm-3-turbo': 128000,
-  'Qwen/Qwen2.5-7B-Instruct': 32768, 'Qwen/Qwen2.5-32B-Instruct': 32768, 'Qwen/Qwen2.5-72B-Instruct': 32768,
-  'deepseek-ai/DeepSeek-V2.5': 32768, 'deepseek-ai/DeepSeek-V3': 64000, 'deepseek-ai/DeepSeek-R1': 64000,
-  'THUDM/glm-4-9b-chat': 128000, 'THUDM/glm-4-plus': 128000,
+  'glm-4.7': 205000, 'glm-4.7-flash': 205000, 'glm-4-flash': 128000, 'glm-4-plus': 128000,
+  'Qwen/Qwen3-32B': 131072, 'Qwen/Qwen2.5-7B-Instruct': 32768,
+  'deepseek-ai/DeepSeek-V3': 164000, 'deepseek-ai/DeepSeek-R1': 164000,
   'meta-llama/Llama-4-Scout-17B-16E-Instruct': 131072,
   'openrouter/openai/gpt-4o-mini': 128000, 'openrouter/openai/gpt-4o': 128000,
-  'openrouter/anthropic/claude-3.5-sonnet': 200000, 'openrouter/anthropic/claude-3.7-sonnet': 200000,
-  'openrouter/anthropic/claude-3.7-sonnet:thinking': 200000, 'openrouter/anthropic/claude-3.5-haiku': 200000,
-  'openrouter/google/gemini-2.0-flash-001': 1048576, 'openrouter/google/gemini-2.5-flash': 1048576,
-  'openrouter/google/gemini-2.5-pro': 1048576, 'openrouter/google/gemini-1.5-pro': 2097152,
-  'openrouter/google/gemini-1.5-flash': 1048576,
-  'openrouter/meta-llama/llama-3.1-70b-instruct': 131072, 'openrouter/meta-llama/llama-3.1-405b-instruct': 131072,
+  'openrouter/anthropic/claude-sonnet-4.6': 1000000, 'openrouter/anthropic/claude-opus-4.6': 1000000,
+  'openrouter/anthropic/claude-haiku-4.5': 200000,
+  'openrouter/google/gemini-2.5-flash': 1048576, 'openrouter/google/gemini-2.5-pro': 1048576,
   'openrouter/deepseek/deepseek-r1': 64000, 'openrouter/deepseek/deepseek-v3': 64000,
   'openrouter/meta-llama/llama-4-scout': 131072,
   'qiniu/deepseek-v3': 64000, 'qiniu/deepseek-r1': 64000,
@@ -920,25 +689,20 @@ function buildLocalModels(): LlmModel[] {
   }
   if (anthropicKey.value) {
     local.push(
-      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', provider: 'anthropic' },
-      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', provider: 'anthropic' }
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic' },
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'anthropic' },
+      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', provider: 'anthropic' }
     )
   }
   if (openrouterKey.value) {
     local.push(
       { id: 'openrouter/openai/gpt-4o-mini', name: 'openai/gpt-4o-mini', provider: 'openrouter' },
       { id: 'openrouter/openai/gpt-4o', name: 'openai/gpt-4o', provider: 'openrouter' },
-      { id: 'openrouter/anthropic/claude-3.5-sonnet', name: 'anthropic/claude-3.5-sonnet', provider: 'openrouter' },
-      { id: 'openrouter/anthropic/claude-3.7-sonnet', name: 'anthropic/claude-3.7-sonnet', provider: 'openrouter' },
-      { id: 'openrouter/anthropic/claude-3.7-sonnet:thinking', name: 'anthropic/claude-3.7-sonnet:thinking', provider: 'openrouter' },
-      { id: 'openrouter/anthropic/claude-3.5-haiku', name: 'anthropic/claude-3.5-haiku', provider: 'openrouter' },
-      { id: 'openrouter/google/gemini-2.0-flash-001', name: 'google/gemini-2.0-flash-001', provider: 'openrouter' },
+      { id: 'openrouter/anthropic/claude-sonnet-4.6', name: 'anthropic/claude-sonnet-4.6', provider: 'openrouter' },
+      { id: 'openrouter/anthropic/claude-opus-4.6', name: 'anthropic/claude-opus-4.6', provider: 'openrouter' },
+      { id: 'openrouter/anthropic/claude-haiku-4.5', name: 'anthropic/claude-haiku-4.5', provider: 'openrouter' },
       { id: 'openrouter/google/gemini-2.5-flash', name: 'google/gemini-2.5-flash', provider: 'openrouter' },
       { id: 'openrouter/google/gemini-2.5-pro', name: 'google/gemini-2.5-pro', provider: 'openrouter' },
-      { id: 'openrouter/google/gemini-1.5-pro', name: 'google/gemini-1.5-pro', provider: 'openrouter' },
-      { id: 'openrouter/google/gemini-1.5-flash', name: 'google/gemini-1.5-flash', provider: 'openrouter' },
-      { id: 'openrouter/meta-llama/llama-3.1-70b-instruct', name: 'meta-llama/llama-3.1-70b-instruct', provider: 'openrouter' },
-      { id: 'openrouter/meta-llama/llama-3.1-405b-instruct', name: 'meta-llama/llama-3.1-405b-instruct', provider: 'openrouter' },
       { id: 'openrouter/deepseek/deepseek-r1', name: 'deepseek/deepseek-r1', provider: 'openrouter' },
       { id: 'openrouter/deepseek/deepseek-v3', name: 'deepseek/deepseek-v3', provider: 'openrouter' },
       { id: 'openrouter/meta-llama/llama-4-scout', name: 'meta-llama/llama-4-scout', provider: 'openrouter' }
@@ -947,20 +711,15 @@ function buildLocalModels(): LlmModel[] {
   if (googleAiKey.value) {
     local.push(
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google_ai' },
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'google_ai' },
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'google_ai' }
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'google_ai' }
     )
   }
   if (siliconflowKey.value) {
     local.push(
+      { id: 'Qwen/Qwen3-32B', name: 'Qwen3-32B', provider: 'siliconflow' },
       { id: 'Qwen/Qwen2.5-7B-Instruct', name: 'Qwen2.5-7B-Instruct', provider: 'siliconflow' },
-      { id: 'Qwen/Qwen2.5-32B-Instruct', name: 'Qwen2.5-32B-Instruct', provider: 'siliconflow' },
-      { id: 'Qwen/Qwen2.5-72B-Instruct', name: 'Qwen2.5-72B-Instruct', provider: 'siliconflow' },
-      { id: 'deepseek-ai/DeepSeek-V2.5', name: 'DeepSeek-V2.5', provider: 'siliconflow' },
       { id: 'deepseek-ai/DeepSeek-V3', name: 'DeepSeek-V3', provider: 'siliconflow' },
       { id: 'deepseek-ai/DeepSeek-R1', name: 'DeepSeek-R1', provider: 'siliconflow' },
-      { id: 'THUDM/glm-4-9b-chat', name: 'GLM-4-9B-Chat', provider: 'siliconflow' },
-      { id: 'THUDM/glm-4-plus', name: 'GLM-4-Plus', provider: 'siliconflow' },
       { id: 'meta-llama/Llama-4-Scout-17B-16E-Instruct', name: 'Llama 4 Scout', provider: 'siliconflow' }
     )
   }
@@ -972,19 +731,20 @@ function buildLocalModels(): LlmModel[] {
   }
   if (zhipuKey.value) {
     local.push(
-      { id: 'glm-4', name: 'GLM-4', provider: 'zhipu' },
-      { id: 'glm-4-flash', name: 'GLM-4-Flash', provider: 'zhipu' },
-      { id: 'glm-4-plus', name: 'GLM-4-Plus', provider: 'zhipu' },
-      { id: 'glm-4-air', name: 'GLM-4-Air', provider: 'zhipu' },
-      { id: 'glm-3-turbo', name: 'GLM-3-Turbo', provider: 'zhipu' }
+      { id: 'glm-4.7', name: 'GLM-4.7', provider: 'zhipu' },
+      { id: 'glm-4.7-flash', name: 'GLM-4.7 Flash', provider: 'zhipu' },
+      { id: 'glm-4-flash', name: 'GLM-4 Flash', provider: 'zhipu' },
+      { id: 'glm-4-plus', name: 'GLM-4 Plus', provider: 'zhipu' }
     )
   }
   if (moonshotKey.value) {
     local.push(
-      { id: 'kimi-latest', name: 'Kimi K2', provider: 'moonshot' },
-      { id: 'moonshot-v1-128k', name: 'Moonshot v1 128k', provider: 'moonshot' },
-      { id: 'moonshot-v1-32k', name: 'Moonshot v1 32k', provider: 'moonshot' },
-      { id: 'moonshot-v1-8k', name: 'Moonshot v1 8k', provider: 'moonshot' }
+      { id: 'kimi-k2.5', name: 'Kimi K2.5', provider: 'moonshot' },
+      { id: 'kimi-k2-turbo-preview', name: 'Kimi K2 Turbo', provider: 'moonshot' },
+      { id: 'kimi-k2-thinking', name: 'Kimi K2 Thinking', provider: 'moonshot' },
+      { id: 'kimi-k2-thinking-turbo', name: 'Kimi K2 Thinking Turbo', provider: 'moonshot' },
+      { id: 'kimi-k2-0905-preview', name: 'Kimi K2 0905', provider: 'moonshot' },
+      { id: 'kimi-k2-0711-preview', name: 'Kimi K2 0711', provider: 'moonshot' }
     )
   }
   if (dashscopeKey.value) {
@@ -1015,6 +775,15 @@ onMounted(async () => {
   await authStore.refreshMe()
   await settingsStore.loadDefaultModelFromServer()
   selectedDefaultModel.value = settingsStore.defaultModel
+
+  // 从 Keychain 加载门户邮箱（ActivationGuide 登录时已保存）
+  if (hasElectronKeychain) {
+    try {
+      const cached = await (window as any).electronAPI.getLicenseCache?.()
+      if (cached?.portalEmail) portalEmail.value = cached.portalEmail
+    } catch { /* ignore */ }
+  }
+
   // 学科包状态 + 进度监听
   loadPackStatus()
   window.electronAPI?.onSpecialtyDownloadProgress?.((p) => {
@@ -1070,7 +839,7 @@ onMounted(async () => {
   }
   if (hasElectronKeychain) {
     const api = (window as any).electronAPI
-    const [openai, dashscope, siliconflow, deepseek, zhipu, moonshot, googleAi, baidu, baiduSecret, openrouter, qiniuMaas, anthropic, pollinations, comfyCloud, deepl, googleTrans, azureTrans, azureTransRegion] = await Promise.all([
+    const [openai, dashscope, siliconflow, deepseek, zhipu, moonshot, googleAi, openrouter, qiniuMaas, anthropic, deepl, googleTrans, azureTrans, azureTransRegion] = await Promise.all([
       api.getApiKey('openai'),
       api.getApiKey('dashscope'),
       api.getApiKey('siliconflow'),
@@ -1078,13 +847,9 @@ onMounted(async () => {
       api.getApiKey('zhipu'),
       api.getApiKey('moonshot'),
       api.getApiKey('google_ai'),
-      api.getApiKey('baidu'),
-      api.getApiKey('baidu_secret'),
       api.getApiKey('openrouter'),
       api.getApiKey('qiniu_maas'),
       api.getApiKey('anthropic'),
-      api.getApiKey('pollinations'),
-      api.getApiKey('comfy_cloud'),
       api.getApiKey('deepl'),
       api.getApiKey('google_translate'),
       api.getApiKey('azure_translate'),
@@ -1097,13 +862,9 @@ onMounted(async () => {
     if (zhipu) zhipuKey.value = zhipu
     if (moonshot) moonshotKey.value = moonshot
     if (googleAi) googleAiKey.value = googleAi
-    if (baidu) baiduKey.value = baidu
-    if (baiduSecret) baiduSecretKey.value = baiduSecret
     if (openrouter) openrouterKey.value = openrouter
     if (qiniuMaas) qiniuMaasKey.value = qiniuMaas
     if (anthropic) anthropicKey.value = anthropic
-    if (pollinations) pollinationsKey.value = pollinations
-    if (comfyCloud) comfyCloudKey.value = comfyCloud
     if (deepl) deeplKey.value = deepl
     if (googleTrans) googleTranslateKey.value = googleTrans
     if (azureTrans) azureTranslateKey.value = azureTrans
@@ -1120,8 +881,8 @@ onMounted(async () => {
   }
   // 智能选择最佳默认模型（偏好大上下文、主流模型）
   const PREFERRED_DEFAULTS = [
-    'deepseek-chat', 'gemini-2.5-flash', 'kimi-latest',
-    'glm-4-flash', 'qwen-turbo', 'moonshot-v1-8k',
+    'deepseek-chat', 'gemini-2.5-flash', 'kimi-k2.5',
+    'glm-4-flash', 'qwen-turbo', 'kimi-k2-turbo-preview',
     'gpt-4o-mini',
   ]
   function pickBestModel(): LlmModel | undefined {
@@ -1215,12 +976,6 @@ watch(selectedLlmProvider, (provider) => {
     selectedDefaultModel.value = filteredModelsByProvider.value[0]?.id || selectedDefaultModel.value
   }
 })
-watch(selectedImageProvider, (v) => {
-  settingsStore.setPreferredImageProvider(v)
-})
-watch(siliconflowImageModel, (v) => {
-  settingsStore.setSiliconflowImageModel(v)
-})
 watch(captureHistoryEnabled, (enabled) => {
   try {
     localStorage.setItem(CAPTURE_HISTORY_ENABLED_KEY, enabled ? '1' : '0')
@@ -1281,19 +1036,15 @@ async function saveApiKeys() {
     const api = (window as any).electronAPI
     const keyItems: Array<{ account: string; label: string; value: string }> = [
       { account: 'openai', label: 'OpenAI API Key', value: openaiKey.value.trim() },
-      { account: 'dashscope', label: '通义万相 API Key', value: dashscopeKey.value.trim() },
+      { account: 'dashscope', label: '通义千问 API Key', value: dashscopeKey.value.trim() },
       { account: 'siliconflow', label: '硅基流动 API Key', value: siliconflowKey.value.trim() },
       { account: 'deepseek', label: 'DeepSeek API Key', value: deepseekKey.value.trim() },
       { account: 'zhipu', label: '智谱 API Key', value: zhipuKey.value.trim() },
       { account: 'moonshot', label: 'Moonshot API Key', value: moonshotKey.value.trim() },
       { account: 'google_ai', label: 'Google AI API Key', value: googleAiKey.value.trim() },
-      { account: 'baidu', label: '文心图像 API Key', value: baiduKey.value.trim() },
-      { account: 'baidu_secret', label: '文心图像 Secret Key', value: baiduSecretKey.value.trim() },
       { account: 'openrouter', label: 'OpenRouter API Key', value: openrouterKey.value.trim() },
       { account: 'qiniu_maas', label: '七牛 MaaS API Key', value: qiniuMaasKey.value.trim() },
       { account: 'anthropic', label: 'Anthropic API Key', value: anthropicKey.value.trim() },
-      { account: 'pollinations', label: 'Pollinations API Key', value: pollinationsKey.value.trim() },
-      { account: 'comfy_cloud', label: 'Comfy Cloud API Key', value: comfyCloudKey.value.trim() },
       { account: 'deepl', label: 'DeepL API Key', value: deeplKey.value.trim() },
       { account: 'google_translate', label: 'Google 翻译 API Key', value: googleTranslateKey.value.trim() },
       { account: 'azure_translate', label: 'Azure 翻译 Key', value: azureTranslateKey.value.trim() },
@@ -1446,20 +1197,6 @@ h2 { margin-bottom: 1rem; }
 .pack-progress { margin: 0.5rem 0; }
 .pack-progress-detail { color: #6b7280; font-size: 0.8rem; margin-top: 0.2rem; display: block; }
 .pack-actions { margin-top: 0.35rem; }
-.image-provider-field { max-width: 100%; }
-.image-provider-hint {
-  margin: 0.35rem 0 0;
-  max-width: 520px;
-  font-size: 0.8rem;
-  color: #6b7280;
-  line-height: 1.45;
-}
-.image-provider-hint code {
-  font-size: 0.78rem;
-  padding: 0.1em 0.35em;
-  background: #f3f4f6;
-  border-radius: 4px;
-}
 .self-check-pre {
   margin: 0.5rem 0 0;
   padding: 0.65rem 0.75rem;
@@ -1481,19 +1218,5 @@ h2 { margin-bottom: 1rem; }
 }
 .medcomm-model-dropdown .el-select-dropdown__item {
   padding-right: 16px;
-}
-.medcomm-image-provider-dropdown {
-  min-width: 400px !important;
-  max-width: min(96vw, 560px);
-  max-height: min(70vh, 520px) !important;
-}
-.medcomm-image-provider-dropdown .el-select-dropdown__item {
-  white-space: normal;
-  line-height: 1.35;
-  min-height: 36px;
-  height: auto;
-  padding-top: 8px;
-  padding-bottom: 8px;
-  align-items: flex-start;
 }
 </style>

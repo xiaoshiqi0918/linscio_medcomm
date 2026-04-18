@@ -3,34 +3,59 @@ from app.services.export.base import BaseExporter
 from app.services.export import html_docx, script
 from app.services.export.utils import (
     load_article_sections,
+    load_article_sections_json,
+    load_bound_references,
     prepend_export_title_markdown,
     prepend_export_title_plain,
 )
+
+
+def _skip_intro(content_format: str | None, section_type: str | None) -> bool:
+    return (content_format or "article") == "article" and (section_type or "") == "intro"
 
 
 class HtmlDocxExporter(BaseExporter):
     """叙事类：HTML（微信）/ DOCX（期刊）/ Markdown（通用）"""
 
     async def export(self, fmt: str = "html") -> tuple[bytes, str, str]:
-        article, parts = await load_article_sections(self.article_id, self._db)
-        base_name = (article.topic or "article").replace("/", "-")
-        body = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in parts)
+        if fmt == "docx":
+            return await self._export_docx()
 
         if fmt == "html":
-            html = html_docx.to_html(article, body)
-            return html.encode("utf-8"), "text/html; charset=utf-8", f"{base_name}.html"
-        if fmt == "docx":
-            try:
-                buf, fn = html_docx.to_docx(article, [(p[0], p[1]) for p in parts])
-                return buf, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fn
-            except ImportError:
-                txt = prepend_export_title_plain(article, body)
-                return txt.encode("utf-8"), "text/plain; charset=utf-8", f"{base_name}.txt"
+            article, json_parts = await load_article_sections_json(self.article_id, self._db)
+            base_name = (article.topic or "article").replace("/", "-")
+            refs = await load_bound_references(self.article_id, self._db)
+            html_out = html_docx.to_html_from_json(article, json_parts, references=refs or None)
+            return html_out.encode("utf-8"), "text/html; charset=utf-8", f"{base_name}.html"
+
+        article, parts = await load_article_sections(self.article_id, self._db)
+        base_name = (article.topic or "article").replace("/", "-")
+        cf = getattr(article, "content_format", None)
+        hide_headings = (cf or "article") == "article"
+        filtered = [(t, b, st) for t, b, st in parts if not _skip_intro(cf, st) and b.strip()]
+        if hide_headings:
+            body = "\n\n".join(b for _, b, _ in filtered)
+        else:
+            body = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in filtered)
         if fmt == "md":
             md = prepend_export_title_markdown(article, body)
             return md.encode("utf-8"), "text/markdown; charset=utf-8", f"{base_name}.md"
         txt = prepend_export_title_plain(article, body)
         return txt.encode("utf-8"), "text/plain; charset=utf-8", f"{base_name}.txt"
+
+    async def _export_docx(self) -> tuple[bytes, str, str]:
+        """DOCX 导出：保留 TipTap JSON 中的段落、标题、加粗等格式"""
+        try:
+            article, json_parts = await load_article_sections_json(self.article_id, self._db)
+            refs = await load_bound_references(self.article_id, self._db)
+            buf, fn = html_docx.to_docx_from_json(article, json_parts, references=refs)
+            return buf, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fn
+        except ImportError:
+            article, parts = await load_article_sections(self.article_id, self._db)
+            base_name = (article.topic or "article").replace("/", "-")
+            body = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in parts)
+            txt = prepend_export_title_plain(article, body)
+            return txt.encode("utf-8"), "text/plain; charset=utf-8", f"{base_name}.txt"
 
 
 class ScriptExporter(BaseExporter):

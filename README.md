@@ -1,6 +1,6 @@
 # LinScio MedComm
 
-医学科普写作智能体桌面客户端 · Electron + Vue 3 + FastAPI + SQLite + LangGraph
+科普内容创作助手桌面客户端 · Electron + Vue 3 + FastAPI + SQLite + LangGraph
 
 ## 版权与使用范围
 

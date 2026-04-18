@@ -39,9 +39,13 @@
             <el-dropdown-item command="docx">DOCX</el-dropdown-item>
             <el-dropdown-item command="pdf">PDF</el-dropdown-item>
             <el-dropdown-item command="txt">TXT</el-dropdown-item>
+            <el-dropdown-item v-if="isVisualExportFormat" command="json" divided>JSON（结构化数据）</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
+      <el-button size="small" :loading="saving" @click="handleManualSave" :disabled="!contentDirty">
+        {{ saving ? '保存中...' : contentDirty ? '保存' : '已保存' }}
+      </el-button>
       <el-button size="small" :loading="copyTxtLoading" @click="copyPlainTextExport">复制纯文本</el-button>
       <el-button size="small" :loading="copyMdLoading" @click="copyMarkdownExport">复制 Markdown</el-button>
       <el-dropdown trigger="click">
@@ -60,45 +64,12 @@
       <el-button
         type="primary"
         size="small"
-        :loading="generating"
-        :disabled="!currentSectionId || isCurrentSectionSkipped"
-        @click="handleGenerate"
+        :loading="fullDocGenerating"
+        :disabled="!article?.sections?.length || generating || fullDocGenerating"
+        @click="handleGenerateAll"
       >
-        {{ isCurrentSectionSkipped ? '已跳过' : 'AI 生成' }}
+        {{ fullDocGenerating ? `生成中 ${fullDocDoneCount}/${fullDocTotalCount}` : '一键生成全文' }}
       </el-button>
-    </div>
-    <div v-if="article?.sections?.length" class="section-tabs">
-      <el-radio-group v-model="currentSectionId" size="small" @change="onSectionChange">
-        <el-radio-button
-          v-for="s in article.sections"
-          :key="s.id"
-          :value="s.id"
-          :class="{ 'section-skipped': s.status === 'skipped' }"
-          @contextmenu.prevent="onSectionContextMenu($event, s)"
-        >
-          <span :class="{ 'skipped-label': s.status === 'skipped' }">
-            {{ s.title || s.section_type }}
-          </span>
-          <el-tag v-if="s.status === 'skipped'" size="small" type="info" style="margin-left: 4px; vertical-align: middle;">已跳过</el-tag>
-        </el-radio-button>
-      </el-radio-group>
-      <div
-        v-if="sectionContextMenu.visible"
-        class="section-context-menu"
-        :style="{ left: sectionContextMenu.x + 'px', top: sectionContextMenu.y + 'px' }"
-      >
-        <div
-          v-if="sectionContextMenu.section?.status === 'skipped'"
-          class="ctx-item"
-          @click="handleUnskipSection(sectionContextMenu.section)"
-        >恢复此章节</div>
-        <div
-          v-else-if="canSkipSection(sectionContextMenu.section)"
-          class="ctx-item ctx-item-danger"
-          @click="handleSkipSection(sectionContextMenu.section)"
-        >跳过此章节</div>
-        <div v-else class="ctx-item ctx-item-disabled">必选章节，不可跳过</div>
-      </div>
     </div>
     <el-collapse v-model="activeCollapseItems" class="bindings-panel">
       <el-collapse-item name="refs">
@@ -403,9 +374,6 @@
         <el-button type="warning" :disabled="!selectedRollbackId" @click="confirmRollbackBySelection">回滚</el-button>
       </template>
     </el-dialog>
-    <div v-if="streamedText" class="stream-preview">
-      {{ streamedText }}
-    </div>
     <el-collapse v-if="showSeriesVisualPanel" class="series-visual-collapse">
       <el-collapse-item title="图示连贯性（条漫 / 分镜 / 卡片系列）" name="series-visual">
         <p class="series-visual-hint">
@@ -456,38 +424,35 @@
         </div>
       </el-collapse-item>
     </el-collapse>
-    <div class="editor-area">
-      <MedCommEditor
-        v-if="article"
-        ref="editorRef"
-        :key="`${articleId}-${currentSectionId}`"
-        :model-value="contentJson"
-        :locate-request="locateRequest"
-        :article-id="articleId"
-        @update:model-value="onContentUpdate"
-        @locate-result="onEditorLocateResult"
-        @citation-click="onCitationClick"
-        @claim-click="onMedClaimClick"
-        :content-format="article.content_format"
-      />
-      <div v-if="indexedBindings.length" class="auto-references">
-        <div class="auto-references-header">
-          <span class="auto-references-title">参考文献</span>
-          <el-tag size="small" type="info">{{ indexedBindings.length }} 篇</el-tag>
-        </div>
-        <ol class="auto-references-list">
-          <li v-for="b in indexedBindings" :key="b.binding_id" class="auto-ref-item">
-            <span class="auto-ref-text">{{ formatRefCitation(b) }}</span>
-            <a
-              v-if="getRefLink(b)"
-              :href="getRefLink(b)"
-              target="_blank"
-              class="auto-ref-link"
-              title="查看原文"
-            >↗</a>
-          </li>
-        </ol>
+    <div v-if="streamedText || streamPhase === 'rewriting'" class="stream-preview">
+      <div class="stream-preview-header">
+        <span class="stream-preview-icon">{{ streamPhase === 'rewriting' ? '🔄' : '✍️' }}</span>
+        <span>{{ streamPhase === 'rewriting' ? '去AI化改写中…' : 'AI 写作中…' }}</span>
       </div>
+      <div v-if="streamedText" class="stream-preview-body">{{ streamedText }}</div>
+    </div>
+    <div
+      class="editor-area"
+      :class="{
+        'editor-area--empty': isEditorEmpty,
+      }"
+    >
+      <div class="editor-area__main">
+        <MedCommEditor
+          v-if="article"
+          ref="editorRef"
+          :key="`${articleId}-${editorRevision}`"
+          :model-value="contentJson"
+          :locate-request="locateRequest"
+          :article-id="articleId"
+          @update:model-value="onContentUpdate"
+          @locate-result="onEditorLocateResult"
+          @citation-click="onCitationClick"
+          @claim-click="onMedClaimClick"
+          :content-format="article.content_format"
+        />
+      </div>
+      <!-- 参考文献列表已移除，导出时由系统从绑定栏自动填入 -->
     </div>
 
     <el-dialog
@@ -613,6 +578,23 @@ const claimEvidencePayload = ref<{
   text: string
 } | null>(null)
 const contentJson = ref<any>(null)
+const editorRevision = ref(0)
+const saving = ref(false)
+const contentDirty = ref(false)
+const isEditorEmpty = computed(() => {
+  const cj = contentJson.value
+  if (!cj) return true
+  const content = cj.content
+  if (!Array.isArray(content) || content.length === 0) return true
+  if (content.length === 1) {
+    const first = content[0]
+    const inner = first?.content
+    if (!inner || !Array.isArray(inner) || inner.length === 0) return true
+    const text = inner.map((n: any) => n.text || '').join('')
+    if (!text.trim()) return true
+  }
+  return false
+})
 const visualContinuityDraft = ref('')
 const imageSeriesSeedBaseDraft = ref<number | null>(null)
 const savingVisualContinuity = ref(false)
@@ -622,18 +604,25 @@ const showSeriesVisualPanel = computed(() => {
   return cf === 'comic_strip' || cf === 'storyboard' || cf === 'card_series'
 })
 
+const VISUAL_EXPORT_FORMATS = ['comic_strip', 'card_series', 'poster', 'picture_book', 'long_image', 'storyboard']
+const isVisualExportFormat = computed(() => VISUAL_EXPORT_FORMATS.includes(article.value?.content_format))
+
 const batchGenerating = ref(false)
 const batchTotalCount = ref(0)
 const batchDoneCount = ref(0)
 const batchFailCount = ref(0)
 const batchResults = ref<Array<{ panelIndex: number; taskId: string; status: string; error?: string }>>([])
 
+const fullDocGenerating = ref(false)
+const fullDocTotalCount = ref(0)
+const fullDocDoneCount = ref(0)
+
 
 const currentSectionId = ref<number | null>(null)
-const { generating, streamedText, generateSection } = useStreamGenerate()
+const { generating, streamedText, streamPhase, generateSection } = useStreamGenerate()
 
 const MANDATORY_SECTIONS_MAP: Record<string, Set<string>> = {
-  article: new Set(['intro', 'body', 'summary']),
+  article: new Set(['body', 'summary']),
   story: new Set(['hook', 'development', 'turning_point', 'science_core', 'resolution']),
   debunk: new Set(['rumor_present', 'verdict', 'debunk_1', 'debunk_2', 'correct_practice', 'anti_fraud']),
   qa_article: new Set(['qa_intro', 'qa_1', 'qa_2', 'qa_3', 'qa_summary']),
@@ -900,7 +889,19 @@ async function loadArticle(sectionId?: number) {
     } else if (res.data?.sections?.[0] && !currentSectionId.value) {
       currentSectionId.value = res.data.sections[0].id
     }
-    contentJson.value = res.data?.content_json || { type: 'doc', content: [] }
+    const fullDoc = res.data?.full_content_json
+    if (fullDoc && Array.isArray(fullDoc.content) && fullDoc.content.length > 0) {
+      contentJson.value = fullDoc
+    } else {
+      contentJson.value = res.data?.content_json || { type: 'doc', content: [] }
+    }
+    articleStore.setContentJson(contentJson.value)
+    contentDirty.value = false
+    _skipNextAutoSave = true
+    await nextTick()
+    editorRevision.value++
+    await nextTick()
+    _skipNextAutoSave = false
     visualContinuityDraft.value = res.data?.visual_continuity_prompt || ''
     imageSeriesSeedBaseDraft.value =
       res.data?.image_series_seed_base != null ? Number(res.data.image_series_seed_base) : null
@@ -1064,7 +1065,7 @@ async function pollTaskAndWriteBack(taskId: string, panelIndex: number) {
 }
 
 function onSectionChange() {
-  loadArticle(currentSectionId.value ?? undefined)
+  articleStore.setAigcCheckResult(null)
   loadBindings()
 }
 
@@ -2013,6 +2014,7 @@ async function handleGenerate() {
   if (!currentSectionId.value) return
   articleStore.setOllamaWarning(null)
   articleStore.setVerificationReport(null)
+  articleStore.setAigcCheckResult(null)
   await generateSection(currentSectionId.value, {
     onDone: async () => {
       await loadArticle(currentSectionId.value ?? undefined)
@@ -2031,11 +2033,118 @@ async function handleGenerate() {
     onImageSuggestions: (suggestions) => {
       articleStore.setImageSuggestions(suggestions)
     },
+    onRewriting: (msg) => {
+      ElMessage.info({ message: `⏳ ${msg}`, duration: 4000, showClose: true })
+    },
+    onRewrittenContent: async () => {
+      await loadArticle(currentSectionId.value ?? undefined)
+      ElMessage.success({ message: '去AI化改写完成，内容已更新', duration: 5000, showClose: true })
+    },
   })
+}
+
+async function handleGenerateAll() {
+  if (!articleId.value || !article.value?.sections?.length) return
+  const confirmed = await ElMessageBox.confirm(
+    '将按顺序生成全部章节（正文→案例→Q&A→小结等，已跳过的章节会跳过），每个章节会基于前序内容进行写作。已有内容的章节将被覆盖。',
+    '一键生成全文',
+    { confirmButtonText: '开始生成', cancelButtonText: '取消', type: 'info' }
+  ).catch(() => false)
+  if (!confirmed) return
+
+  fullDocGenerating.value = true
+  fullDocTotalCount.value = 0
+  fullDocDoneCount.value = 0
+  streamedText.value = ''
+  streamPhase.value = 'writing'
+  articleStore.setOllamaWarning(null)
+  articleStore.setVerificationReport(null)
+  articleStore.setAigcCheckResult(null)
+
+  try {
+    const headers: Record<string, string> = {}
+    const electron = typeof window !== 'undefined' && (window as any).electronAPI
+    if (electron?.getLocalApiKey) {
+      const key = await electron.getLocalApiKey()
+      if (key) headers['X-Local-Api-Key'] = key
+    }
+    const res = await fetch(`http://127.0.0.1:8765/api/v1/medcomm/articles/${articleId.value}/generate-all`, {
+      method: 'POST',
+      headers,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+    const reader = res.body?.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const evt = JSON.parse(line.slice(6))
+            if (evt.type === 'batch_start') {
+              fullDocTotalCount.value = evt.total_sections || 0
+            } else if (evt.type === 'section_start') {
+              streamedText.value = ''
+              streamPhase.value = 'writing'
+              currentSectionId.value = evt.section_id
+              const sec = article.value?.sections?.find((s: any) => s.id === evt.section_id)
+              const label = sec?.title || evt.section_type
+              ElMessage.info({ message: `正在生成：${label}（${evt.index}/${evt.total}）`, duration: 3000 })
+            } else if (evt.type === 'delta') {
+              streamedText.value += evt.text || ''
+            } else if (evt.type === 'rewriting') {
+              streamPhase.value = 'rewriting'
+              streamedText.value = ''
+            } else if (evt.type === 'rewritten_content' && evt.content) {
+              streamedText.value = evt.content
+            } else if (evt.type === 'section_done') {
+              fullDocDoneCount.value = evt.index
+              streamedText.value = ''
+              streamPhase.value = null
+              if (article.value?.sections) {
+                const s = article.value.sections.find((x: any) => x.id === evt.section_id)
+                if (s) s.has_content = true
+              }
+            } else if (evt.type === 'title_generated' && evt.title) {
+              articleTitleDraft.value = evt.title
+              if (article.value) {
+                article.value = { ...article.value, title: evt.title }
+                articleStore.setCurrent(article.value)
+              }
+            } else if (evt.type === 'batch_done') {
+              streamedText.value = ''
+              streamPhase.value = null
+              await loadArticle()
+              ElMessage.success({ message: `全文 ${evt.completed} 个章节已全部生成完成`, duration: 5000 })
+            } else if (evt.type === 'error') {
+              ElMessage.error(evt.message || '生成出错')
+            }
+          } catch (_) {}
+        }
+      }
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    ElMessage.error(`全文生成失败：${msg}`)
+  } finally {
+    fullDocGenerating.value = false
+    streamedText.value = ''
+    streamPhase.value = null
+    await loadArticle(currentSectionId.value ?? undefined)
+  }
 }
 
 async function handleExport(format: string) {
   if (!articleId.value) return
+  await saveBeforeExport()
   try {
     const checkRes = await api.medcomm.exportCheck(articleId.value)
     const check = checkRes.data
@@ -2082,9 +2191,17 @@ async function locateIssueText(text: string) {
   const needle = (text || '').trim()
   if (!needle || !articleId.value) return
 
+  const _norm = (s: string) => s.replace(/[「」""''《》【】\s]/g, '')
+  const normNeedle = _norm(needle)
+
+  function _plainContains(json: unknown): boolean {
+    const plain = extractPlainFromTiptapJson(json)
+    return plain.includes(needle) || _norm(plain).includes(normNeedle)
+  }
+
   let targetSectionId: number | null = null
   const curId = currentSectionId.value
-  if (contentJson.value && extractPlainFromTiptapJson(contentJson.value).includes(needle)) {
+  if (contentJson.value && _plainContains(contentJson.value)) {
     targetSectionId = curId
   } else {
     const sections = article.value?.sections || []
@@ -2093,7 +2210,7 @@ async function locateIssueText(text: string) {
       try {
         const res = await api.medcomm.getArticle(articleId.value, s.id)
         const j = res.data?.content_json
-        if (j && extractPlainFromTiptapJson(j).includes(needle)) {
+        if (j && _plainContains(j)) {
           targetSectionId = s.id
           break
         }
@@ -2287,27 +2404,64 @@ async function doExport(format: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  const ext = { html: 'html', docx: 'docx', pdf: 'pdf', txt: 'txt', md: 'md' }[format] || 'txt'
+  const ext = { html: 'html', docx: 'docx', pdf: 'pdf', txt: 'txt', md: 'md', json: 'json' }[format] || 'txt'
   a.download = `${article.value?.title || article.value?.topic || 'article'}.${ext}`
   a.click()
   URL.revokeObjectURL(url)
 }
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+
+let _saveTimer: ReturnType<typeof setTimeout> | null = null
+let _skipNextAutoSave = false
 
 function onContentUpdate(json: any) {
   contentJson.value = json
-  if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(async () => {
-    if (!articleId.value) return
-    try {
-      await api.medcomm.updateArticleContent(articleId.value, json, currentSectionId.value ?? undefined)
-    } catch (e) {
-      console.error('保存失败', e)
-    } finally {
-      saveTimer = null
+  articleStore.setContentJson(json)
+  if (!_skipNextAutoSave) {
+    contentDirty.value = true
+    debouncedSave(json)
+  }
+}
+
+function debouncedSave(json: any) {
+  if (_saveTimer) clearTimeout(_saveTimer)
+  _saveTimer = setTimeout(() => {
+    void persistContent(json)
+  }, 2000)
+}
+
+async function persistContent(json: any) {
+  if (!articleId.value || !json) return
+  saving.value = true
+  const cf = article.value?.content_format || 'article'
+  try {
+    if (cf === 'article') {
+      await api.medcomm.saveFullContent(articleId.value, json)
+    } else if (currentSectionId.value) {
+      await api.medcomm.updateArticleContent(articleId.value, json, currentSectionId.value)
     }
-  }, 800)
+    contentDirty.value = false
+  } catch {
+    ElMessage.error('自动保存失败，请手动保存')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleManualSave() {
+  if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null }
+  await persistContent(contentJson.value)
+  if (!contentDirty.value) {
+    ElMessage.success('已保存')
+  }
+}
+
+async function saveBeforeExport(): Promise<boolean> {
+  if (!contentDirty.value) return true
+  if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null }
+  await persistContent(contentJson.value)
+  return !contentDirty.value
 }
 
 onMounted(() => {
@@ -2331,6 +2485,7 @@ onMounted(() => {
   window.addEventListener(AUTH_USER_CHANGED_EVENT, handleAuthUserChanged as EventListener)
 })
 onUnmounted(() => {
+  if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null }
   window.removeEventListener(AUTH_USER_CHANGED_EVENT, handleAuthUserChanged as EventListener)
   articleStore.clear()
 })
@@ -2377,6 +2532,24 @@ watch(showExternalSearchDialog, (v) => {
 watch(indexedBindings, () => {
   syncCitationRefsInEditor()
 }, { deep: true })
+
+watch(
+  () => articleStore.aigcCheckResult,
+  (result) => {
+    if (!editorRef.value) return
+    if (result?.paragraphs?.length) {
+      nextTick(() => {
+        const applied = editorRef.value?.applyAigcWarnings?.(result.paragraphs)
+        if (applied) {
+          ElMessage.success(`已在编辑器中高亮 ${applied} 个风险段落`)
+        }
+      })
+    } else {
+      editorRef.value?.clearAigcWarnings?.()
+    }
+  },
+  { deep: true },
+)
 watch(
   () => route.query.section_id,
   () => {
@@ -2578,74 +2751,33 @@ async function handleAuthUserChanged() {
   overflow-y: auto;
 }
 
-.section-tabs {
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid #eee;
-  background: #fafafa;
-  position: relative;
-}
-
-.section-tabs :deep(.el-radio-group) {
-  display: flex;
-  flex-wrap: wrap;
-}
-
-.section-skipped :deep(.el-radio-button__inner) {
-  opacity: 0.5;
-  background: #f5f5f5 !important;
-}
-
-.skipped-label {
-  text-decoration: line-through;
-  color: #9ca3af;
-}
-
-.section-context-menu {
-  position: fixed;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
-  padding: 4px 0;
-  z-index: 2000;
-  min-width: 140px;
-}
-
-.ctx-item {
-  padding: 6px 16px;
-  font-size: 0.85rem;
-  cursor: pointer;
-  color: #374151;
-}
-
-.ctx-item:hover {
-  background: #f0f9ff;
-  color: #409eff;
-}
-
-.ctx-item-danger:hover {
-  background: #fef2f2;
-  color: #f56c6c;
-}
-
-.ctx-item-disabled {
-  color: #c0c4cc;
-  cursor: not-allowed;
-}
-
-.ctx-item-disabled:hover {
-  background: transparent;
-  color: #c0c4cc;
-}
-
 .stream-preview {
-  padding: 0.5rem 1rem;
+  margin: 0.5rem 1rem;
+  padding: 0.75rem 1rem;
   background: #f0f9ff;
-  border-bottom: 1px solid #e0f2fe;
-  font-size: 0.9rem;
+  border: 1px solid #bae6fd;
+  border-radius: 8px;
+  font-size: 0.85rem;
   white-space: pre-wrap;
-  max-height: 120px;
+  max-height: 300px;
   overflow-y: auto;
+}
+.stream-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  color: #0369a1;
+  margin-bottom: 0.4rem;
+  font-size: 0.82rem;
+}
+.stream-preview-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+.stream-preview-body {
+  color: #334155;
+  line-height: 1.6;
 }
 
 .series-visual-collapse {
@@ -2704,9 +2836,30 @@ async function handleAuthUserChanged() {
 }
 
 .editor-area {
+  display: flex;
+  flex-direction: column;
   flex: 1;
+  min-height: 0;
+  margin: 0 1rem 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+  transition: min-height 0.3s ease;
+}
+.editor-area__main {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 1rem;
+}
+.editor-area--empty .editor-area__main {
+  min-height: 60px;
+  flex: 0 1 auto;
+}
+/* 新建文章时整块收缩，避免空白占满屏 */
+.editor-area--empty {
+  flex: 0;
 }
 
 .export-check-summary {
@@ -2753,54 +2906,6 @@ async function handleAuthUserChanged() {
 .pc-text.ins { color: #67c23a; }
 .pc-actions { margin-top: 0.35rem; display: flex; gap: 0.5rem; }
 
-.auto-references {
-  margin: 1.5rem 0 1rem;
-  padding: 1rem 1.25rem;
-  background: #fafafa;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-}
-.auto-references-header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid #e5e7eb;
-}
-.auto-references-title {
-  font-weight: 600;
-  font-size: 0.95rem;
-  color: #374151;
-}
-.auto-references-list {
-  margin: 0;
-  padding-left: 1.5rem;
-}
-.auto-ref-item {
-  font-size: 0.85rem;
-  line-height: 1.6;
-  color: #4b5563;
-  margin-bottom: 0.35rem;
-}
-.auto-ref-item::marker {
-  color: #9ca3af;
-}
-.auto-ref-text {
-  word-break: break-word;
-}
-.auto-ref-link {
-  flex-shrink: 0;
-  margin-left: 6px;
-  color: #409eff;
-  text-decoration: none;
-  font-size: 13px;
-  opacity: 0.7;
-  transition: opacity 0.2s;
-}
-.auto-ref-link:hover {
-  opacity: 1;
-}
 .auto-ref-item {
   display: flex;
   align-items: baseline;

@@ -44,6 +44,24 @@ function startHealthCheck(onUnhealthy, onHealthy) {
 
 async function start(envExtra = {}) {
   if (backendProcess) return
+
+  const attach =
+    process.env.MEDCOMM_ATTACH_TO_EXISTING_BACKEND === '1' ||
+    process.env.MEDCOMM_ATTACH_TO_EXISTING_BACKEND === 'true'
+  if (attach) {
+    const ok = await checkHealth()
+    if (ok) {
+      console.log(
+        '[MedComm] MEDCOMM_ATTACH_TO_EXISTING_BACKEND: 复用已在运行的后端',
+        BACKEND_URL
+      )
+      return
+    }
+    console.warn(
+      '[MedComm] MEDCOMM_ATTACH_TO_EXISTING_BACKEND 已设置，但当前无健康后端，将尝试新启动'
+    )
+  }
+
   const pythonPath = getPythonPath()
   const backendDir = getBackendDir()
   const env = { ...process.env, ...envExtra }

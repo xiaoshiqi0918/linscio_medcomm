@@ -1,98 +1,89 @@
 # 提示词索引
 
-本文档列出 prompt-example 中所有提示词文件及其对应的代码位置。  
-**说明**：带 `(*)` 的表示代码仍从 Python 模块加载，prompt-example 中为同步副本，供维护与版本管理；后续可接入 loader 实现运行时从文件加载。
+本文档列出 `prompt-example/prompts/` 下文件与代码的对应关系。  
+路径优先使用**新分层目录**；括号内为兼容回退路径。
 
 ---
 
-## Layer 0 / 1（已接入 loader）
+## Layer 0
 
-| 文件 | 代码位置 |
-|------|----------|
-| prompts/layer0_system.txt | prompts/system.py |
-| prompts/layer1_anti_hallucination.txt | prompts/anti_hallucination.py |
-
----
-
-## 验证与核实
-
-| 文件 | 代码位置 |
-|------|----------|
-| prompts/verification/claim_verify.txt | prompts/verification.py CLAIM_VERIFY_PROMPT |
-| prompts/verification/fact_verify.txt | prompts/verification.py FACT_VERIFY_PROMPT |
-| prompts/verification/reading_level.txt | prompts/verification.py READING_LEVEL_PROMPT |
-| prompts/verification/suggest_images.txt | prompts/verification.py SUGGEST_IMAGES_PROMPT |
-| prompts/verification/analogy_anti_examples.txt | 质量自评比喻检查参照（load_verification("analogy_anti_examples")） |
+| 文件 | 代码 |
+|------|------|
+| `layer0/system.txt`（旧：`layer0_system.txt`） | `loader.load_layer0_system` → `system.py` `MEDCOMM_SYSTEM_PROMPT` |
+| `layer0/writing_sop_core.txt`（旧：根目录同名） | `loader.load_writing_sop` |
+| `part1/writing_sop.txt`（旧：根目录同名） | `loader.load_full_writing_sop_document`（可选接入） |
 
 ---
 
-## 形式简版（Format Section Fallback）
+## Layer 1
 
-| 文件 | 代码位置 |
-|------|----------|
-| prompts/format_section.json | prompts/format_section.py FORMAT_SECTION_PROMPTS |
-| prompts/format_section_default.txt | prompts/format_section.py DEFAULT_PROMPT |
-
----
-
-## 条漫 Agent
-
-| 文件 | 代码位置 |
-|------|----------|
-| prompts/comic/planner.txt | comic/comic_agent.py _get_comic_planner_prompt |
-| prompts/comic/panel.txt | comic/comic_agent.py _get_comic_panel_prompt |
+| 文件 | 代码 |
+|------|------|
+| `layer1/anti_hallucination.txt` | `loader.load_layer1_anti_hallucination` → `anti_hallucination.py` |
+| `layer1/visual_anti.txt` | `load_layer1_visual_anti` |
+| `layer1/script_anti.txt` | `load_layer1_script_anti` |
+| `layer1/children_audience_patch.txt` | `load_children_audience_patch` → `audiences.py` |
+| `anti_hallucination.py` 内各形式族常量 | 形式专属规则仍以代码为主，可按需拆到 `layer1/formats/` 并接 loader |
 
 ---
 
-## 患者手册 Agent
+## Part 1
 
-| 文件 | 代码位置 |
-|------|----------|
-| prompts/handbook/cover.txt | handbook/handbook_agent.py _get_cover_prompt |
-| prompts/handbook/disease_intro.txt | handbook/handbook_agent.py _get_disease_intro_prompt |
-| prompts/handbook/symptoms.txt | handbook/handbook_agent.py _get_symptoms_prompt |
-| prompts/handbook/treatment.txt | handbook/handbook_agent.py _get_treatment_prompt |
-| prompts/handbook/daily_care.txt | handbook/handbook_agent.py _get_daily_care_prompt |
-| prompts/handbook/visit_tips.txt | handbook/handbook_agent.py _get_visit_tips_prompt |
-| prompts/handbook/fallback.txt | handbook/handbook_agent.py get_base_prompt fallback |
+| 文件 | 代码 |
+|------|------|
+| `part1/auxiliary/*.txt`（旧：`auxiliary/*.txt`） | `load_auxiliary` → `auxiliary_prompts.py` |
+| `part1/writing_sop.txt` | 完整 SOP 文本 |
 
 ---
 
-## 润色 Agent
+## Part 2
 
-| 文件 | 代码位置 |
-|------|----------|
-| prompts/polish/language_polish.txt | polish/polish_agent.py LanguagePolishAgent |
-| prompts/polish/platform_adapt.txt | polish/polish_agent.py PlatformAdaptAgent |
+运行时以文献绑定 + `prompt_builder` 动态组装为主；见 `part2/README.md`。
 
 ---
 
-## 图像生成
+## Part 3
 
-| 文件 | 代码位置 |
-|------|----------|
-| prompts/imagegen/style_system.json | imagegen/prompt_builder.py STYLE_SYSTEM_PROMPTS |
-| prompts/imagegen/quality_suffix.txt | imagegen/prompt_builder.py QUALITY_SUFFIX |
-| prompts/imagegen/safety_negative.txt | imagegen/prompt_builder.py SAFETY_NEGATIVE |
-| prompts/imagegen/image_type_templates.json | imagegen/prompt_builder.py IMAGE_TYPE_TEMPLATES |
-| prompts/imagegen/translate_system.txt | imagegen/prompt_builder.py 翻译 system prompt |
-
----
-
-## 任务提示词（Task Prompts）(*)
-
-| 文件 | 代码位置 |
-|------|----------|
-| prompts/task/article_intro.txt | task_prompts.py get_article_intro |
-| prompts/task/article_body.txt | task_prompts.py get_article_body |
-| prompts/task/platform_config.json | task_prompts.py PLATFORM_HOOKS / PLATFORM_FORMAT / PLATFORM_WORD_GUIDE |
-
-**说明**：task_prompts.py 中尚有 article_case, article_qa, article_summary, debunk_*, story_*, research_*, oral_*, drama_*, storyboard_*, audio_*, card_*, picture_book_*, poster_*, quiz_*, h5_* 等大量提示词。其结构类似，可在本目录下按 `task/{format}_{section}.txt` 命名逐步迁移，并接入 loader。
+| 文件 | 代码 |
+|------|------|
+| `part3/task/*.txt`（旧：`task/*.txt`） | `load_task_guideline` → `prompt_builder._load_writing_guideline` |
+| `part3/task/platform_config.json` | `load_platform_config` |
+| `part3/format_section.json` | `load_format_section` → `format_section.py` |
+| `part3/format_section_default.txt` | `load_format_section_default` |
 
 ---
 
-## 接入说明
+## 文献分析
 
-- **已接入**：Layer 0/1 通过 `prompts/loader.py` 在运行时从 prompt-example 加载
-- **待接入**：verification、format_section、comic、handbook、polish、imagegen、task 等需在对应模块中调用 loader 并从文件加载
-- 接入时保留代码内默认值作为回退，确保 prompt-example 不存在或加载失败时系统仍可运行
+| 文件 | 代码 |
+|------|------|
+| `literature/analysis_single.txt` | `load_literature_analysis_single` → `analyzer.py` 回退 `ANALYSIS_SYSTEM_PROMPT` |
+| `literature/per_paper.txt` | `load_literature_per_paper` |
+| `literature/synthesis.txt` | `load_literature_synthesis` |
+
+---
+
+## 去 AI 化（deai）
+
+| 文件 | 代码 |
+|------|------|
+| `deai/rewrite_full.txt` | `load_deai_rewrite_full_template` → `deai_rewriter`（占位 `{content}`） |
+| `deai/opening.txt`、`ending.txt`、`paragraph.txt` | 段落级改写模板 |
+| `deai/system_override.txt` | **非空则整段替换**动态 system；空则使用 `_build_deai_system_prompt` |
+
+---
+
+## 验证 / 配图 / 其他
+
+| 目录 | 代码 |
+|------|------|
+| `verification/*.txt` | `load_verification` |
+| `imagegen/*` | `load_imagegen_*` → `imagegen/prompt_builder.py` |
+| `comic/`、`handbook/`、`polish/` | `load_comic_guideline`、`load_handbook_guideline`、`load_polish` |
+
+---
+
+## 同步说明
+
+- 修改 `prompt-example` 内文件后，**重启**使用这些 loader 的进程即可，无需改 Python 常量（除非回退逻辑触发）。
+- 若需与代码内嵌字符串完全一致，可 periodically 用仓库脚本从 `.py` 导出到 txt（或使用当前已导出的 `literature/`、`deai/` 为基准）。

@@ -417,8 +417,49 @@ def _fallback_image_suggestions(content: str, topic: str = "", specialty: str = 
 
 
 def normalize_terms_node(state: MedCommSectionState) -> MedCommSectionState:
-    """术语标准化（占位，可接入 medical_terms 替换）"""
-    return {**state, "next": "save"}
+    """术语标准化 + 读者向格式的内部标签清理安全网"""
+    import re
+
+    content_format = state.get("content_format", "article")
+    _READER_FACING = {
+        "article", "qa_article", "debunk", "story", "research_read",
+        "comic_strip", "card_series", "poster", "picture_book", "long_image",
+        "oral_script", "drama_script", "storyboard", "patient_handbook",
+    }
+    if content_format not in _READER_FACING:
+        return {**state, "next": "save"}
+
+    content = state.get("verified_content", state.get("generated_content", ""))
+    if not content:
+        return {**state, "next": "save"}
+
+    original = content
+    content = re.sub(r"\[共识\]", "", content)
+    content = re.sub(r"\[推断[:：][^\]]*\]", "", content)
+    content = re.sub(r"\[\[待补充(?:[:：][^\]]*?)?\]\]", "", content)
+    content = re.sub(r"\[DATA[:：][^\]]*\]", "", content)
+    content = re.sub(r"\[文献(\d+)\]", r"[\1]", content)
+    content = re.sub(
+        r"^.*(?:主题：|形式：|平台：|文章类型：|内容形式：|目标读者：).*[\|｜]?.*$",
+        "", content, flags=re.MULTILINE,
+    )
+    content = re.sub(r"^#+\s*(案例|Q&A|问答)\s*$", "", content, flags=re.MULTILINE)
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    content = re.sub(r"  +", " ", content)
+    content = content.strip()
+
+    if content != original:
+        import logging
+        _log = logging.getLogger("uvicorn.error")
+        _log.info("[normalize_terms] Stripped %d internal tags from reader-facing output",
+                  len(original) - len(content))
+
+    return {
+        **state,
+        "verified_content": content,
+        "generated_content": content,
+        "next": "save",
+    }
 
 
 async def save_node(state: MedCommSectionState) -> MedCommSectionState:

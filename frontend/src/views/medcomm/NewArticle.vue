@@ -121,6 +121,27 @@
             </div>
           </template>
           <p class="report-topic">{{ analysisReport.research_topic }}</p>
+          <div v-if="analysisReport.evidence_level" class="report-meta-tag">
+            <el-tag type="info" effect="plain" size="small">证据等级：{{ analysisReport.evidence_level }}</el-tag>
+          </div>
+        </el-card>
+
+        <el-card shadow="never" class="report-card" v-if="analysisReport.evidence_overview">
+          <template #header>
+            <div class="report-header">
+              <el-icon color="#409eff"><TrendCharts /></el-icon>
+              <span>证据概览</span>
+            </div>
+          </template>
+          <el-descriptions :column="2" size="small" border>
+            <el-descriptions-item label="纳入文献">{{ analysisReport.evidence_overview.total_papers }} 篇</el-descriptions-item>
+            <el-descriptions-item label="整体证据强度">{{ analysisReport.evidence_overview.overall_evidence_level }}</el-descriptions-item>
+            <el-descriptions-item label="研究设计" :span="2">
+              <span v-if="Array.isArray(analysisReport.evidence_overview.study_designs)">{{ analysisReport.evidence_overview.study_designs.join('、') }}</span>
+              <span v-else>{{ analysisReport.evidence_overview.study_designs }}</span>
+            </el-descriptions-item>
+            <el-descriptions-item label="总样本量" :span="2">{{ analysisReport.evidence_overview.total_sample_size }}</el-descriptions-item>
+          </el-descriptions>
         </el-card>
 
         <el-card shadow="never" class="report-card" v-if="analysisReport.key_findings?.length">
@@ -133,6 +154,49 @@
           <ul class="report-list">
             <li v-for="(f, i) in analysisReport.key_findings" :key="i">{{ f }}</li>
           </ul>
+        </el-card>
+
+        <el-card shadow="never" class="report-card" v-if="analysisReport.consistency_analysis">
+          <template #header>
+            <div class="report-header">
+              <el-icon color="#909399"><Connection /></el-icon>
+              <span>文献一致性分析</span>
+            </div>
+          </template>
+          <div class="consistency-section" v-if="analysisReport.consistency_analysis.consensus?.length">
+            <div class="consistency-label consensus-label">共识</div>
+            <ul class="report-list">
+              <li v-for="(c, i) in analysisReport.consistency_analysis.consensus" :key="'con-'+i">{{ c }}</li>
+            </ul>
+          </div>
+          <div class="consistency-section" v-if="analysisReport.consistency_analysis.contradictions?.length">
+            <div class="consistency-label contradiction-label">矛盾</div>
+            <ul class="report-list">
+              <li v-for="(c, i) in analysisReport.consistency_analysis.contradictions" :key="'contra-'+i">{{ c }}</li>
+            </ul>
+          </div>
+          <div class="consistency-section" v-if="analysisReport.consistency_analysis.complementary?.length">
+            <div class="consistency-label complementary-label">互补</div>
+            <ul class="report-list">
+              <li v-for="(c, i) in analysisReport.consistency_analysis.complementary" :key="'comp-'+i">{{ c }}</li>
+            </ul>
+          </div>
+          <div class="consistency-section" v-if="analysisReport.consistency_analysis.gaps?.length">
+            <div class="consistency-label gaps-label">待解答</div>
+            <ul class="report-list muted">
+              <li v-for="(g, i) in analysisReport.consistency_analysis.gaps" :key="'gap-'+i">{{ g }}</li>
+            </ul>
+          </div>
+        </el-card>
+
+        <el-card shadow="never" class="report-card" v-if="analysisReport.consistency_notes">
+          <template #header>
+            <div class="report-header">
+              <el-icon color="#909399"><Connection /></el-icon>
+              <span>一致性说明</span>
+            </div>
+          </template>
+          <p>{{ analysisReport.consistency_notes }}</p>
         </el-card>
 
         <div class="report-grid">
@@ -154,9 +218,10 @@
         <el-card shadow="never" class="report-card" v-if="analysisReport.key_data_points?.length">
           <template #header><span>核心数据</span></template>
           <el-table :data="analysisReport.key_data_points" size="small" stripe>
-            <el-table-column prop="label" label="指标" />
-            <el-table-column prop="value" label="数值" />
-            <el-table-column prop="source" label="来源" />
+            <el-table-column prop="label" label="指标" min-width="120" />
+            <el-table-column prop="value" label="数值" min-width="180" />
+            <el-table-column prop="source" label="来源" min-width="140" />
+            <el-table-column prop="context" label="上下文" min-width="140" v-if="hasDataPointContext" />
           </el-table>
         </el-card>
 
@@ -196,6 +261,16 @@
           <ul class="report-list muted">
             <li v-for="(l, i) in analysisReport.limitations" :key="i">{{ l }}</li>
           </ul>
+        </el-card>
+
+        <el-card shadow="never" class="report-card" v-if="analysisReport.suggested_audience">
+          <template #header><span>建议受众</span></template>
+          <p>
+            <el-tag :type="analysisReport.suggested_audience === form.target_audience ? 'success' : 'info'" effect="plain">
+              {{ audienceLabel(analysisReport.suggested_audience) }}
+            </el-tag>
+            <span v-if="analysisReport.audience_rationale" class="audience-rationale">{{ analysisReport.audience_rationale }}</span>
+          </p>
         </el-card>
       </div>
 
@@ -330,14 +405,20 @@
           </span>
         </el-form-item>
         <el-form-item label="模板">
-          <el-select v-model="form.template_id" placeholder="选择模板（可选）" clearable>
+          <el-select v-model="form.template_id" placeholder="选择模板（可选）" clearable style="width: 100%;">
             <el-option
               v-for="t in filteredTemplates"
               :key="t.id"
               :label="t.name"
               :value="t.id"
-            />
+            >
+              <div class="template-option">
+                <span>{{ t.name }}</span>
+                <span class="template-option-meta">{{ t.section_count }}章 · {{ t.target_word_count || '-' }}字</span>
+              </div>
+            </el-option>
           </el-select>
+          <span v-if="selectedTemplateDesc" class="field-hint">{{ selectedTemplateDesc }}</span>
         </el-form-item>
         <el-form-item>
           <el-button @click="currentStep = selectedPapers.length ? 1 : 0">上一步</el-button>
@@ -351,7 +432,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Close, Loading, DataAnalysis, CircleCheckFilled, Promotion, Document } from '@element-plus/icons-vue'
+import { Close, Loading, DataAnalysis, CircleCheckFilled, Promotion, Document, TrendCharts, Connection } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import FormatPicker from '@/components/common/FormatPicker.vue'
 import { api, API_BASE, getLocalApiKeyHeaderForFetch } from '@/api'
@@ -478,6 +559,13 @@ async function startAnalysis() {
           const evt = JSON.parse(line.slice(6))
           if (evt.type === 'start' || evt.type === 'progress') {
             analysisMessage.value = evt.message || ''
+          } else if (evt.type === 'paper_start') {
+            analysisMessage.value = evt.message || `正在精读第 ${evt.index}/${evt.total} 篇…`
+          } else if (evt.type === 'paper_done') {
+            analysisMessage.value = evt.message || `第 ${evt.index}/${evt.total} 篇分析完成`
+          } else if (evt.type === 'synthesizing') {
+            analysisMessage.value = evt.message || '正在综合分析…'
+            analysisStreamText.value = ''
           } else if (evt.type === 'delta') {
             analysisStreamText.value += evt.text
           } else if (evt.type === 'report') {
@@ -503,6 +591,11 @@ async function startAnalysis() {
     analyzing.value = false
   }
 }
+
+const hasDataPointContext = computed(() => {
+  const pts = analysisReport.value?.key_data_points
+  return Array.isArray(pts) && pts.some((p: any) => p.context)
+})
 
 function applyAnalysisSuggestions() {
   if (!analysisReport.value) return
@@ -601,7 +694,6 @@ const customWordCount = ref(1500)
 const FORMAT_SECTION_CONFIGS: Record<string, { sections: { value: string; label: string; required: boolean }[]; optionalKeys: string[] }> = {
   article: {
     sections: [
-      { value: 'intro', label: '引言', required: true },
       { value: 'body', label: '正文', required: true },
       { value: 'case', label: '案例', required: false },
       { value: 'qa', label: 'Q&A', required: false },
@@ -896,12 +988,50 @@ const templates = ref<any[]>([])
 const filteredTemplates = computed(() =>
   templates.value.filter((t: any) => t.content_format === form.content_format)
 )
+const selectedTemplateDesc = computed(() => {
+  if (!form.template_id) return ''
+  const t = templates.value.find((t: any) => t.id === form.template_id)
+  return t?.description || ''
+})
 
-watch(() => form.content_format, async (fmt) => {
+watch(() => form.content_format, async (fmt, oldFmt) => {
+  if (oldFmt && fmt !== oldFmt) {
+    form.template_id = null
+  }
   if (fmt === 'picture_book') form.target_audience = 'children'
   const res = await api.templates.getTemplates(form.content_format)
   templates.value = res.data?.items || []
 }, { immediate: true })
+
+watch(() => form.template_id, async (tid) => {
+  if (!tid) return
+  try {
+    const res = await api.templates.getTemplate(tid)
+    const tmpl = res.data
+    if (!tmpl) return
+    if (tmpl.target_word_count) {
+      const presets = [800, 1200, 2000, 3000]
+      if (presets.includes(tmpl.target_word_count)) {
+        form.target_word_count = tmpl.target_word_count
+      } else {
+        form.target_word_count = 0
+        customWordCount.value = tmpl.target_word_count
+      }
+    }
+    if (tmpl.target_audience) form.target_audience = tmpl.target_audience
+    if (tmpl.reading_level) form.reading_level = tmpl.reading_level
+    if (tmpl.specialty) form.specialty = tmpl.specialty
+    if (tmpl.platform) form.platform = tmpl.platform
+    if (Array.isArray(tmpl.structure) && tmpl.structure.length) {
+      const types = tmpl.structure.map((s: any) =>
+        typeof s === 'string' ? s : s.section_type || s.id || s
+      )
+      includedSections.value = types
+    }
+  } catch {
+    // template detail load failed
+  }
+})
 
 watch(() => form.platform, (plat) => {
   const defaultWc = PLATFORM_DEFAULT_WORD_COUNT[plat] || 1500
@@ -1215,6 +1345,53 @@ h2 {
   color: #999;
 }
 
+.report-meta-tag {
+  margin-top: 0.5rem;
+}
+
+.consistency-section {
+  margin-bottom: 0.75rem;
+}
+
+.consistency-section:last-child {
+  margin-bottom: 0;
+}
+
+.consistency-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  display: inline-block;
+  margin-bottom: 0.35rem;
+}
+
+.consensus-label {
+  background: #f0f9eb;
+  color: #67c23a;
+}
+
+.contradiction-label {
+  background: #fef0f0;
+  color: #f56c6c;
+}
+
+.complementary-label {
+  background: #ecf5ff;
+  color: #409eff;
+}
+
+.gaps-label {
+  background: #fdf6ec;
+  color: #e6a23c;
+}
+
+.audience-rationale {
+  margin-left: 0.75rem;
+  font-size: 0.85rem;
+  color: #666;
+}
+
 .analysis-error {
   margin-bottom: 1rem;
 }
@@ -1298,5 +1475,17 @@ h2 {
   display: flex;
   gap: 0.75rem;
   justify-content: flex-end;
+}
+
+.template-option {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.template-option-meta {
+  font-size: 12px;
+  color: #909399;
 }
 </style>

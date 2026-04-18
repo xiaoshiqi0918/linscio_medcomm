@@ -101,17 +101,28 @@ def apply_med_claim_marks_to_doc(doc: dict[str, Any], verify_report: dict[str, A
     if not isinstance(verified, list) or not verified:
         return doc
     content = doc.get("content")
-    if not isinstance(content, list) or len(content) != 1:
+    if not isinstance(content, list) or not content:
         return doc
-    para = content[0]
-    if not isinstance(para, dict) or para.get("type") != "paragraph":
+
+    new_content: list[dict[str, Any]] = []
+    changed = False
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") not in ("paragraph", "heading"):
+            new_content.append(block)
+            continue
+        parsed = _paragraph_plain_and_text_nodes(block)
+        if not parsed:
+            new_content.append(block)
+            continue
+        plain, _nodes = parsed
+        spans = _find_spans(plain, verified)
+        if not spans:
+            new_content.append(block)
+            continue
+        new_inner = _build_paragraph_content(plain, spans)
+        new_content.append({**block, "content": new_inner})
+        changed = True
+
+    if not changed:
         return doc
-    parsed = _paragraph_plain_and_text_nodes(para)
-    if not parsed:
-        return doc
-    plain, _nodes = parsed
-    spans = _find_spans(plain, verified)
-    if not spans:
-        return doc
-    new_inner = _build_paragraph_content(plain, spans)
-    return {"type": "doc", "content": [{**para, "content": new_inner}]}
+    return {"type": "doc", "content": new_content}

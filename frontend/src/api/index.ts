@@ -214,6 +214,7 @@ export const api = {
       http.post<{ text: string; provider: string; fallback_reason?: string }>(
         '/api/v1/translate',
         { text, target_lang: targetLang, source_lang: sourceLang },
+        { timeout: 60000 },
       ),
     status: () =>
       http.get<{ providers: Array<{ id: string; name: string; available: boolean }>; active: string }>(
@@ -258,8 +259,17 @@ export const api = {
       http.patch(`/api/v1/medcomm/articles/${id}/title`, { title }),
     updateArticleContent: (id: number, contentJson: any, sectionId?: number) =>
       http.patch(`/api/v1/medcomm/articles/${id}`, { content_json: contentJson }, { params: { section_id: sectionId } }),
+    saveFullContent: (id: number, contentJson: any) =>
+      http.put<{ ok: boolean }>(`/api/v1/medcomm/articles/${id}/save-full-content`, { content_json: contentJson }),
     recheckSection: (sectionId: number) =>
       http.post<{ ok: boolean; verify_report: any }>(`/api/v1/medcomm/sections/${sectionId}/recheck`),
+    aigcCheckSection: (sectionId: number) =>
+      http.get<{ ok: boolean; summary: any; overall: any; paragraphs: any[] }>(`/api/v1/medcomm/sections/${sectionId}/aigc-check`),
+    aigcCheckArticle: (articleId: number, contentJson?: any) =>
+      http.post<{ ok: boolean; summary: any; overall: any; paragraphs: any[] }>(
+        `/api/v1/medcomm/articles/${articleId}/aigc-check`,
+        contentJson ? { content_json: contentJson } : {},
+      ),
     skipSection: (sectionId: number) =>
       http.patch<{ ok: boolean; status: string }>(`/api/v1/medcomm/sections/${sectionId}/skip`),
     unskipSection: (sectionId: number) =>
@@ -448,6 +458,8 @@ export const api = {
       collection_id?: number | null;
       tag_ids?: number[];
     }) => http.post('/api/v1/literature/search/save', data),
+    designKeywords: (description: string) =>
+      http.post<{ groups: string[]; raw: string }>('/api/v1/literature/search/design-keywords', { description }, { timeout: 30000 }),
     analyzeLiterature: (data: { paper_ids: number[]; topic_hint?: string }) =>
       http.post('/api/v1/literature/analyze', data, {
         responseType: 'text',
@@ -464,8 +476,16 @@ export const api = {
   templates: {
     getTemplates: (contentFormat?: string) =>
       http.get('/api/v1/templates', { params: contentFormat ? { content_format: contentFormat } : {} }),
-    createTemplate: (data: { name: string; content_format?: string; platform?: string; specialty?: string; structure?: any; description?: string }) =>
+    getTemplate: (id: number) =>
+      http.get(`/api/v1/templates/${id}`),
+    createTemplate: (data: Record<string, any>) =>
       http.post('/api/v1/templates', data),
+    updateTemplate: (id: number, data: Record<string, any>) =>
+      http.put(`/api/v1/templates/${id}`, data),
+    deleteTemplate: (id: number) =>
+      http.delete(`/api/v1/templates/${id}`),
+    duplicateTemplate: (id: number) =>
+      http.post(`/api/v1/templates/${id}/duplicate`),
   },
   auth: {
     login: (data?: { username?: string; password?: string }) =>

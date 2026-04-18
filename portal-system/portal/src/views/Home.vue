@@ -16,7 +16,7 @@
               <span class="hero-title-cn">拥有专属 AI 助手</span>
             </h1>
             <p class="hero-desc reveal reveal-d2">
-              LinScio AI 覆盖学术论文写作、文献智能分析、医学科普、数据统计全流程，真实引用，专业规范，科研效率显著提升。
+              LinScio AI 覆盖学术论文写作、文献智能分析、科普内容创作、数据统计全流程，真实引用，专业规范，科研效率显著提升。
             </p>
             <div class="hero-actions reveal reveal-d3">
               <router-link to="/auth" class="btn btn-base btn-primary-ui btn-lg">免费开始使用</router-link>
@@ -163,11 +163,11 @@ function delayClass(idx) {
 
 const sellingPoints = [
   { icon: '📚', title: '真实引用，杜绝幻觉', desc: '参考文献从文献库真实检索提取，每条引用可溯源核实。' },
-  { icon: '🎯', title: '学科专属，深度调优', desc: '面向临床医学、高校科研场景，输出更专业。' },
+  { icon: '🎯', title: '学科专属，深度调优', desc: '面向高校科研与专业科普场景深度优化，输出更专业、更可信。' },
   { icon: '⚡', title: '全流程覆盖，高效提升', desc: '覆盖从选题到投稿全流程，显著减少重复劳动。' },
   { icon: '🔒', title: '数据安全，本地优先', desc: '支持本地存储与内网环境，敏感数据更可控。' },
   { icon: '🤖', title: '多模型协作，弹性切换', desc: '支持主流大模型和本地模型，按任务灵活路由。' },
-  { icon: '🏥', title: '医学场景专注', desc: '围绕医学科研工作流设计，不是通用工具套壳。' },
+  { icon: '🏥', title: '专业场景深耕', desc: '围绕科研与专业科普工作流深度设计，不是通用工具套壳。' },
 ]
 
 const featureTabs = [
@@ -205,6 +205,17 @@ const featureTabs = [
     mockAI: '两组差异具有统计学意义（t=3.24, df=48, P=0.002），均值差 5.6（95%CI: 2.1-9.1）。',
   },
   {
+    key: 'medcomm',
+    label: '科普创作',
+    tag: 'MedComm 科普创作助手',
+    title: '一键生成全文，自动去AI化改写',
+    desc: '从模板选择到全文生成，再到去AI化改写与AIGC检测，全流程一站式完成，支持多平台多格式导出。',
+    points: ['一键生成全文 + 流式实时预览', '内置去AI化改写，降低AIGC检测率', 'AIGC段落级检测与定位', '模板库驱动，自定义章节结构', '多格式导出（Word / HTML / Markdown）'],
+    mockTitle: 'MedComm · 科普创作',
+    mockUser: '以"生物素对临床检测的干扰"为主题，生成微信科普文',
+    mockAI: '正在生成全文...已完成，进入去AI化改写阶段，优化句式节奏与段落衔接...',
+  },
+  {
     key: 'model',
     label: '多模型',
     tag: '多模型协作',
@@ -219,17 +230,18 @@ const featureTabs = [
 
 const modules = [
   { icon: '✍️', name: 'Schola 学术写作', desc: '覆盖选题、综述、正文与投稿准备。' },
-  { icon: '🏥', name: 'MedComm 医学科普', desc: '专业内容转化为可传播、可理解表达。' },
+  { icon: '🏥', name: 'MedComm 科普创作', desc: '一键生成全文，内置去AI化改写与AIGC检测，多平台多格式导出。' },
   { icon: '📖', name: 'Literature 文献分析', desc: '文献批量解析、关联与检索。' },
   { icon: '📊', name: 'Analyzer 数据分析', desc: '统计结果解读与学术化表述。' },
   { icon: '📋', name: 'QCC 品管圈', desc: '医疗质量改进流程与报告辅助。' },
 ]
 
 const faqs = [
-  { q: 'LinScio AI 和通用 AI 有什么区别？', a: 'LinScio AI 面向科研场景深度优化，强调真实引用、规范写作和流程可追溯。' },
+  { q: 'LinScio AI 和通用 AI 有什么区别？', a: 'LinScio AI 面向科研与专业科普场景深度优化，强调真实引用、规范写作和流程可追溯，而非通用对话工具。' },
+  { q: 'MedComm 科普创作的"去AI化"是什么意思？', a: '系统在生成全文后，会自动进行多轮改写，优化句式节奏、段落衔接和叙事结构，降低AIGC检测率，使内容更接近真人写作风格。' },
   { q: '我的研究数据安全吗？', a: '支持本地优先与内网部署，敏感数据可控，不默认用于模型训练。' },
   { q: '支持高校内网环境吗？', a: '支持。可结合本地模型实现离线或半离线运行。' },
-  { q: '支持哪些模型？', a: '支持主流云端模型与本地模型，可按任务质量/成本灵活切换。' },
+  { q: '科普文章支持哪些导出格式？', a: '支持 Word（.docx）、HTML、Markdown 和纯文本导出，参考文献在导出时自动附加，格式与编辑器一致。' },
 ]
 
 onMounted(() => {

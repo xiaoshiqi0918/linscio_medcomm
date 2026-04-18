@@ -10,6 +10,7 @@ export function useStreamGenerate() {
   const generating = ref(false)
   const error = ref<string | null>(null)
   const streamedText = ref('')
+  const streamPhase = ref<'writing' | 'rewriting' | null>(null)
 
   const ollamaWarning = ref<string | null>(null)
 
@@ -27,11 +28,14 @@ export function useStreamGenerate() {
       onReadingLevelSkipped?: (reason: string) => void
       onTitleGenerated?: (title: string) => void
       onImageSuggestions?: (suggestions: Array<Record<string, unknown>>) => void
+      onRewriting?: (message: string) => void
+      onRewrittenContent?: (content: string) => void
     } = {}
   ) {
     generating.value = true
     error.value = null
     streamedText.value = ''
+    streamPhase.value = 'writing'
     ollamaWarning.value = null
 
     try {
@@ -90,6 +94,13 @@ export function useStreamGenerate() {
                     bound_count: evt.bound_count,
                     message: evt.message,
                   })
+                } else if (evt.type === 'rewriting' && evt.message) {
+                  streamPhase.value = 'rewriting'
+                  streamedText.value = ''
+                  callbacks.onRewriting?.(evt.message)
+                } else if (evt.type === 'rewritten_content' && evt.content) {
+                  streamedText.value = evt.content
+                  callbacks.onRewrittenContent?.(evt.content)
                 } else if (evt.type === 'ollama_warning' && evt.message) {
                   ollamaWarning.value = evt.message
                   callbacks.onOllamaWarning?.(evt.message)
@@ -116,8 +127,9 @@ export function useStreamGenerate() {
       callbacks.onError?.(msg)
     } finally {
       generating.value = false
+      streamPhase.value = null
     }
   }
 
-  return { generating, error, streamedText, ollamaWarning, generateSection }
+  return { generating, error, streamedText, streamPhase, ollamaWarning, generateSection }
 }

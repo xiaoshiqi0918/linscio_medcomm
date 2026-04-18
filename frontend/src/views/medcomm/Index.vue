@@ -59,10 +59,11 @@
           {{ formatDate(row.updated_at || row.created_at) }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column label="操作" width="260" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="previewArticle(row)">预览</el-button>
           <el-button link type="primary" size="small" @click="downloadWord(row)">下载</el-button>
+          <el-button v-if="isVisualFormat(row.content_format)" link type="primary" size="small" @click="downloadJson(row)">JSON</el-button>
           <el-button link type="primary" size="small" @click="editArticle(row.id)">编辑</el-button>
           <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
@@ -81,6 +82,9 @@
       <div class="preview-toolbar">
         <el-button type="primary" size="small" @click="downloadWord(previewRow)" :loading="downloading">
           下载 Word
+        </el-button>
+        <el-button v-if="isVisualFormat(previewRow?.content_format)" size="small" @click="downloadJson(previewRow)" :loading="downloadingJson">
+          下载 JSON
         </el-button>
         <el-button size="small" @click="editArticle(previewRow?.id)">前往编辑</el-button>
       </div>
@@ -121,6 +125,12 @@ const previewHtml = ref('')
 const previewTitle = ref('')
 const previewRow = ref<any>(null)
 const downloading = ref(false)
+const downloadingJson = ref(false)
+
+const VISUAL_FORMATS = ['comic_strip', 'card_series', 'poster', 'picture_book', 'long_image', 'storyboard']
+function isVisualFormat(fmt: string | undefined | null): boolean {
+  return !!fmt && VISUAL_FORMATS.includes(fmt)
+}
 
 async function loadArticles() {
   loading.value = true
@@ -185,6 +195,28 @@ async function downloadWord(row: any) {
     ElMessage.error('下载失败')
   } finally {
     downloading.value = false
+  }
+}
+
+async function downloadJson(row: any) {
+  if (!row) return
+  downloadingJson.value = true
+  try {
+    const res = await api.medcomm.exportArticle(row.id, 'json')
+    const blob = new Blob([res.data], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${row.title || row.topic || '文章'}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    ElMessage.success('JSON 下载成功')
+  } catch {
+    ElMessage.error('JSON 下载失败')
+  } finally {
+    downloadingJson.value = false
   }
 }
 

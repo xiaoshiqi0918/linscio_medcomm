@@ -9,6 +9,32 @@ from sqlalchemy import select
 from app.models.article import Article, ArticleSection, ArticleContent, ArticleLiteratureBinding
 
 
+def _short_authors_for_export(authors_raw: str | None) -> str:
+    """authors 列可能为 JSON 数组或分号分隔字符串。"""
+    if not authors_raw:
+        return ""
+    s = authors_raw.strip()
+    if s.startswith("["):
+        try:
+            data = json.loads(s)
+            if isinstance(data, list) and data:
+                names: list[str] = []
+                for it in data[:5]:
+                    if isinstance(it, dict) and it.get("name"):
+                        names.append(str(it["name"]).strip())
+                    elif isinstance(it, str) and it.strip():
+                        names.append(it.strip())
+                if not names:
+                    return ""
+                return f"{names[0]} et al." if len(data) > 1 else names[0]
+        except Exception:
+            pass
+    if ";" in s:
+        a0 = s.split(";")[0].strip()
+        return f"{a0} et al." if s.count(";") >= 1 else a0
+    return s[:300]
+
+
 def article_export_title_display(article: Any) -> str:
     """篇首标题：优先已保存的 title，否则回退 topic"""
     t = (getattr(article, "title", None) or "").strip()
@@ -123,6 +149,73 @@ async def load_article_sections(article_id: int, db: AsyncSession) -> tuple[Arti
     if not parts:
         parts = [(s.title or s.section_type, "", s.section_type) for s in sections]
     return article, parts
+
+
+async def load_article_sections_json(
+    article_id: int, db: AsyncSession
+) -> tuple[Article, list[tuple[str, dict | None, str]]]:
+    """加载文章及章节原始 TipTap JSON，返回 (article, [(title, content_json_dict, section_type), ...])"""
+    result = await db.execute(select(Article).where(Article.id == article_id, Article.deleted_at.is_(None)))
+    article = result.scalar_one_or_none()
+    if not article:
+        raise ValueError("Article not found")
+    sec_result = await db.execute(
+        select(ArticleSection).where(ArticleSection.article_id == article_id).order_by(ArticleSection.order_num)
+    )
+    sections = sec_result.scalars().all()
+    parts: list[tuple[str, dict | None, str]] = []
+    platform = article.platform or "wechat"
+    for sec in sections:
+        cont_result = await db.execute(
+            select(ArticleContent).where(
+                ArticleContent.section_id == sec.id,
+                ArticleContent.is_current == True,
+            )
+        )
+        candidates = cont_result.scalars().all()
+        c = next((x for x in candidates if x.platform == platform), None) or next(
+            (x for x in candidates if x.platform is None), candidates[0] if candidates else None
+        )
+        doc = None
+        if c and c.content_json:
+            try:
+                doc = json.loads(c.content_json)
+            except Exception:
+                pass
+        parts.append((sec.title or sec.section_type, doc, sec.section_type))
+    return article, parts
+
+
+async def load_bound_references(article_id: int, db: AsyncSession) -> list[str]:
+    """加载文章绑定的参考文献，返回格式化后的引用列表"""
+    from app.models.literature import LiteraturePaper
+    bind_result = await db.execute(
+        select(ArticleLiteratureBinding)
+        .where(ArticleLiteratureBinding.article_id == article_id)
+        .order_by(ArticleLiteratureBinding.priority.asc(), ArticleLiteratureBinding.id.asc())
+    )
+    bindings = bind_result.scalars().all()
+    if not bindings:
+        return []
+    paper_ids = [b.paper_id for b in bindings]
+    paper_result = await db.execute(select(LiteraturePaper).where(LiteraturePaper.id.in_(paper_ids)))
+    papers = {p.id: p for p in paper_result.scalars().all()}
+    refs = []
+    for i, b in enumerate(bindings, 1):
+        p = papers.get(b.paper_id)
+        if not p:
+            continue
+        authors = _short_authors_for_export(p.authors)
+        title = p.title or ""
+        journal = p.journal or ""
+        year = p.year or ""
+        doi = p.doi or ""
+        parts = [s for s in [authors, title, journal, str(year) if year else ""] if s]
+        line = f"[{i}] {'. '.join(parts)}."
+        if doi:
+            line += f" https://doi.org/{doi}" if not doi.startswith("http") else f" {doi}"
+        refs.append(line)
+    return refs
 
 
 async def collect_orphan_citations(

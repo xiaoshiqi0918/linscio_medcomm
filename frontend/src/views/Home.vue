@@ -1,7 +1,7 @@
 <template>
   <div class="home">
     <h1>LinScio MedComm</h1>
-    <p class="subtitle">医学科普写作智能体</p>
+    <p class="subtitle">科普内容创作助手</p>
     <el-space wrap>
       <el-button type="primary" @click="$router.push('/medcomm')">进入科普写作</el-button>
       <el-button @click="$router.push('/settings')">设置</el-button>

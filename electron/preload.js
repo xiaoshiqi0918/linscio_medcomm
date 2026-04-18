@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPortalActivateUrl: () => ipcRenderer.invoke('get-portal-activate-url'),
   portalLogin: (email, password) => ipcRenderer.invoke('portal-login', email, password),
   deactivateLicense: () => ipcRenderer.invoke('deactivate-license'),
+  getLicenseCache: () => ipcRenderer.invoke('get-license-cache'),
   downloadSpecialty: (specialtyId, specialtyName, version, fromVersion) =>
     ipcRenderer.invoke('download-specialty', specialtyId, specialtyName, version, fromVersion),
   getPackStatus: () => ipcRenderer.invoke('get-pack-status'),

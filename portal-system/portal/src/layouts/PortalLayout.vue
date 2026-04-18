@@ -47,7 +47,7 @@
               <span class="brand-sub">聆思恪</span>
             </span>
           </div>
-          <p class="footer-desc">面向高校科研人员的 AI 学术助手，覆盖从选题到发表的关键流程。</p>
+          <p class="footer-desc">面向高校科研人员的 AI 学术与科普创作助手，覆盖论文写作、文献分析、科普创作到数据统计全流程。</p>
         </div>
 
         <div>

@@ -187,14 +187,62 @@
 
     <!-- 外部多源检索 -->
     <el-dialog v-model="showExternalSearchDialog" title="检索外部文献（PubMed/CrossRef）" width="920px">
+      <!-- 检索词设计 -->
+      <div class="keyword-design-section">
+        <div class="keyword-design-header" @click="kwDesignExpanded = !kwDesignExpanded">
+          <span class="keyword-design-title">🔬 检索词智能设计</span>
+          <el-icon :class="{ 'is-rotated': kwDesignExpanded }"><arrow-down /></el-icon>
+        </div>
+        <div v-show="kwDesignExpanded" class="keyword-design-body">
+          <div class="keyword-design-input-row">
+            <el-input
+              v-model="kwDesignInput"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 4 }"
+              placeholder="描述你的写作主题，例如：我想写一篇关于慢性病与生活方式结合领域的科普文章，请帮我设计检索参考文献的关键词"
+              style="flex: 1;"
+            />
+            <el-button
+              type="primary"
+              :loading="kwDesignLoading"
+              @click="doDesignKeywords"
+              style="margin-left: 8px; align-self: flex-start;"
+            >生成关键词</el-button>
+          </div>
+          <div v-if="kwDesignGroups.length" class="keyword-design-result">
+            <div class="keyword-design-result-label">生成的检索关键词（可编辑）：</div>
+            <div
+              v-for="(group, idx) in kwDesignGroups"
+              :key="idx"
+              class="keyword-design-group"
+            >
+              <el-tag size="small" type="info" class="keyword-group-index">{{ idx + 1 }}</el-tag>
+              <el-input
+                v-model="kwDesignGroups[idx]"
+                size="small"
+                style="flex: 1;"
+              />
+              <el-button size="small" text type="danger" @click="kwDesignGroups.splice(idx, 1)">✕</el-button>
+            </div>
+            <div class="keyword-design-actions">
+              <el-button size="small" type="primary" @click="sendDesignToTranslate">发送至中译英 ↓</el-button>
+              <el-button size="small" @click="sendDesignToQuery">直接用作检索词</el-button>
+              <el-button size="small" text @click="kwDesignGroups.push('')">+ 添加一组</el-button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 中译英辅助 -->
       <div class="translate-assist-bar">
         <span class="translate-assist-label">中译英辅助</span>
         <el-input
           v-model="translateInput"
-          placeholder="输入中文关键词，如：糖尿病"
-          style="width: 240px;"
+          type="textarea"
+          :autosize="{ minRows: 1, maxRows: 3 }"
+          placeholder="输入中文关键词，如：糖尿病，或从上方检索词设计模块发送"
+          style="width: 340px;"
           size="small"
-          @keyup.enter="doTranslateKeyword"
         />
         <el-button size="small" type="primary" plain :loading="translateLoading" @click="doTranslateKeyword">翻译</el-button>
         <template v-if="translateOutput">
@@ -578,6 +626,10 @@ const externalPreview = ref<any | null>(null)
 const translateInput = ref('')
 const translateOutput = ref('')
 const translateLoading = ref(false)
+const kwDesignExpanded = ref(false)
+const kwDesignInput = ref('')
+const kwDesignGroups = ref<string[]>([])
+const kwDesignLoading = ref(false)
 const addTab = ref('doi')
 const doiOrPmid = ref('')
 const fetching = ref(false)
@@ -1378,6 +1430,51 @@ function openExternalSearch() {
   if (!externalQuery.value) externalQuery.value = searchQuery.value || ''
 }
 
+async function doDesignKeywords() {
+  const desc = kwDesignInput.value.trim()
+  if (!desc) {
+    ElMessage.warning('请输入你的写作主题或需求描述')
+    return
+  }
+  kwDesignLoading.value = true
+  kwDesignGroups.value = []
+  try {
+    const res = await api.literature.designKeywords(desc)
+    const groups = (res.data as any)?.groups || []
+    if (!groups.length) {
+      ElMessage.warning('未能生成关键词，请重试或调整描述')
+      return
+    }
+    kwDesignGroups.value = groups
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '关键词生成失败')
+  } finally {
+    kwDesignLoading.value = false
+  }
+}
+
+function sendDesignToTranslate() {
+  const text = kwDesignGroups.value.filter(g => g.trim()).join('\n')
+  if (!text) return
+  translateInput.value = text
+  translateOutput.value = ''
+  ElMessage.success('已发送到中译英辅助')
+}
+
+function sendDesignToQuery() {
+  const parts = kwDesignGroups.value
+    .map(g => g.trim())
+    .filter(Boolean)
+    .map(g => {
+      const terms = g.split(/[,，]/).map(t => t.trim()).filter(Boolean)
+      return terms.length > 1 ? `(${terms.join(' OR ')})` : terms[0] || ''
+    })
+    .filter(Boolean)
+  if (!parts.length) return
+  externalQuery.value = parts.join(' AND ')
+  ElMessage.success('已生成检索式')
+}
+
 async function doTranslateKeyword() {
   const text = translateInput.value.trim()
   if (!text) {
@@ -1771,9 +1868,65 @@ h2 { margin-bottom: 1rem; }
 .capture-history-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
 .capture-history-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .empty-hint { color: var(--el-text-color-placeholder); font-size: 0.9em; margin: 0.5rem 0; }
-.translate-assist-bar {
+.keyword-design-section {
+  margin-bottom: 10px;
+  border: 1px solid #e6d9f5;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.keyword-design-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #f5f0ff;
+  cursor: pointer;
+  user-select: none;
+}
+.keyword-design-header:hover { background: #ede4fb; }
+.keyword-design-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #7c3aed;
+}
+.keyword-design-header .el-icon {
+  transition: transform 0.2s;
+  color: #7c3aed;
+}
+.keyword-design-header .el-icon.is-rotated { transform: rotate(180deg); }
+.keyword-design-body {
+  padding: 10px 12px;
+  background: #faf8ff;
+}
+.keyword-design-input-row {
+  display: flex;
+  align-items: flex-start;
+}
+.keyword-design-result {
+  margin-top: 10px;
+}
+.keyword-design-result-label {
+  font-size: 12px;
+  color: #606266;
+  margin-bottom: 6px;
+}
+.keyword-design-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+.keyword-group-index {
+  flex-shrink: 0;
+}
+.keyword-design-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.translate-assist-bar {
+  display: flex;
+  align-items: flex-start;
   gap: 8px;
   flex-wrap: wrap;
   padding: 8px 12px;

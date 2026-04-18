@@ -41,24 +41,24 @@ PROVIDER_MODEL_TIERS: dict[str, dict] = {
     },
     "anthropic": {
         "env_key": "ANTHROPIC_API_KEY",
-        "quality": ["claude-3-5-sonnet-20241022"],
-        "balanced": ["claude-3-5-sonnet-20241022"],
-        "fast": ["claude-3-5-sonnet-20241022"],
-        "reasoning": ["claude-3-5-sonnet-20241022"],
+        "quality": ["claude-sonnet-4-6", "claude-opus-4-6"],
+        "balanced": ["claude-sonnet-4-6", "claude-haiku-4-5"],
+        "fast": ["claude-haiku-4-5", "claude-sonnet-4-6"],
+        "reasoning": ["claude-opus-4-6", "claude-sonnet-4-6"],
     },
     "gemini": {
         "env_key": "GOOGLE_API_KEY",
         "quality": ["gemini-2.5-pro", "gemini-2.5-flash"],
-        "balanced": ["gemini-2.5-flash", "gemini-2.0-flash"],
-        "fast": ["gemini-2.0-flash", "gemini-2.5-flash"],
+        "balanced": ["gemini-2.5-flash"],
+        "fast": ["gemini-2.5-flash"],
         "reasoning": ["gemini-2.5-pro", "gemini-2.5-flash"],
     },
     "zhipu": {
         "env_key": "ZHIPU_API_KEY",
-        "quality": ["glm-4-plus", "glm-4", "glm-4-flash"],
-        "balanced": ["glm-4-flash", "glm-4-air"],
-        "fast": ["glm-4-flash", "glm-4-air", "glm-3-turbo"],
-        "reasoning": ["glm-4-plus", "glm-4"],
+        "quality": ["glm-4.7", "glm-4-plus", "glm-4-flash"],
+        "balanced": ["glm-4-flash", "glm-4.7-flash"],
+        "fast": ["glm-4.7-flash", "glm-4-flash"],
+        "reasoning": ["glm-4.7", "glm-4-plus"],
     },
     "qwen": {
         "env_key": "DASHSCOPE_API_KEY",
@@ -69,24 +69,24 @@ PROVIDER_MODEL_TIERS: dict[str, dict] = {
     },
     "moonshot": {
         "env_key": "MOONSHOT_API_KEY",
-        "quality": ["kimi-latest", "moonshot-v1-128k"],
-        "balanced": ["kimi-latest", "moonshot-v1-32k"],
-        "fast": ["moonshot-v1-8k", "kimi-latest"],
-        "reasoning": ["kimi-latest"],
+        "quality": ["kimi-k2.5", "kimi-k2-0905-preview"],
+        "balanced": ["kimi-k2.5", "kimi-k2-turbo-preview"],
+        "fast": ["kimi-k2-turbo-preview", "kimi-k2.5"],
+        "reasoning": ["kimi-k2-thinking", "kimi-k2-thinking-turbo", "kimi-k2.5"],
     },
     "siliconflow": {
         "env_key": "SILICONFLOW_API_KEY",
-        "quality": ["deepseek-ai/DeepSeek-V3", "Qwen/Qwen2.5-72B-Instruct"],
-        "balanced": ["Qwen/Qwen2.5-32B-Instruct", "Qwen/Qwen2.5-7B-Instruct"],
-        "fast": ["Qwen/Qwen2.5-7B-Instruct", "THUDM/glm-4-9b-chat"],
+        "quality": ["deepseek-ai/DeepSeek-V3", "Qwen/Qwen3-32B"],
+        "balanced": ["Qwen/Qwen3-32B", "Qwen/Qwen2.5-7B-Instruct"],
+        "fast": ["Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen3-32B"],
         "reasoning": ["deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-V3"],
     },
     "openrouter": {
         "env_key": "OPENROUTER_API_KEY",
-        "quality": ["openrouter/anthropic/claude-3.7-sonnet", "openrouter/openai/gpt-4o"],
+        "quality": ["openrouter/anthropic/claude-sonnet-4.6", "openrouter/openai/gpt-4o"],
         "balanced": ["openrouter/openai/gpt-4o-mini", "openrouter/google/gemini-2.5-flash"],
-        "fast": ["openrouter/openai/gpt-4o-mini", "openrouter/google/gemini-2.0-flash-001"],
-        "reasoning": ["openrouter/anthropic/claude-3.7-sonnet:thinking", "openrouter/deepseek/deepseek-r1"],
+        "fast": ["openrouter/openai/gpt-4o-mini", "openrouter/google/gemini-2.5-flash"],
+        "reasoning": ["openrouter/anthropic/claude-opus-4.6", "openrouter/deepseek/deepseek-r1"],
     },
     "qiniu": {
         "env_key": "QINIU_MAAS_API_KEY",
@@ -114,14 +114,14 @@ MODEL_HINTS = {
     "default": "gpt-4o-mini",
     "quality": "gpt-4o",
     "fast": "gpt-4o-mini",
-    "claude": "claude-3-5-sonnet-20241022",
+    "claude": "claude-sonnet-4-6",
     # Google
     "gemini": "gemini-2.5-flash",
     # 国内大模型
     "zhipu": "glm-4-flash",
     "qwen": "qwen-turbo",
-    "moonshot": "moonshot-v1-8k",
-    "kimi": "kimi-latest",
+    "moonshot": "kimi-k2-turbo-preview",
+    "kimi": "kimi-k2.5",
     "deepseek": "deepseek-chat",
     "siliconflow": "Qwen/Qwen2.5-7B-Instruct",
 }
@@ -130,11 +130,10 @@ MODEL_HINTS = {
 # 使用 OpenAI 兼容接口，仅需 base_url + api_key 即可调用
 DOMESTIC_PROVIDERS = {
     # 智谱 GLM
-    "glm-4": ("https://open.bigmodel.cn/api/paas/v4/", "ZHIPU_API_KEY"),
+    "glm-4.7": ("https://open.bigmodel.cn/api/paas/v4/", "ZHIPU_API_KEY"),
+    "glm-4.7-flash": ("https://open.bigmodel.cn/api/paas/v4/", "ZHIPU_API_KEY"),
     "glm-4-flash": ("https://open.bigmodel.cn/api/paas/v4/", "ZHIPU_API_KEY"),
     "glm-4-plus": ("https://open.bigmodel.cn/api/paas/v4/", "ZHIPU_API_KEY"),
-    "glm-4-air": ("https://open.bigmodel.cn/api/paas/v4/", "ZHIPU_API_KEY"),
-    "glm-3-turbo": ("https://open.bigmodel.cn/api/paas/v4/", "ZHIPU_API_KEY"),
     # 通义千问（阿里云百炼）
     "qwen-turbo": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"),
     "qwen-plus": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"),
@@ -147,40 +146,31 @@ DOMESTIC_PROVIDERS = {
     # Google AI Studio（Gemini，OpenAI 兼容端点）
     "gemini-2.5-flash": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),
     "gemini-2.5-pro": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),
-    "gemini-2.0-flash": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),
     # 月之暗面 Kimi
-    "moonshot-v1-8k": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
-    "moonshot-v1-32k": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
-    "moonshot-v1-128k": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
-    "kimi-latest": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
+    "kimi-k2.5": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
+    "kimi-k2-0905-preview": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
+    "kimi-k2-turbo-preview": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
+    "kimi-k2-thinking": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
+    "kimi-k2-thinking-turbo": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
+    "kimi-k2-0711-preview": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
     # 深度求索
     "deepseek-chat": ("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
     "deepseek-coder": ("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
     "deepseek-reasoner": ("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
     # 硅基流动（聚合多模型）
+    "Qwen/Qwen3-32B": ("https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
     "Qwen/Qwen2.5-7B-Instruct": ("https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
-    "Qwen/Qwen2.5-72B-Instruct": ("https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
-    "Qwen/Qwen2.5-32B-Instruct": ("https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
-    "deepseek-ai/DeepSeek-V2.5": ("https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
     "deepseek-ai/DeepSeek-V3": ("https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
     "deepseek-ai/DeepSeek-R1": ("https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
-    "THUDM/glm-4-9b-chat": ("https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
-    "THUDM/glm-4-plus": ("https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
     "meta-llama/Llama-4-Scout-17B-16E-Instruct": ("https://api.siliconflow.cn/v1", "SILICONFLOW_API_KEY"),
     # OpenRouter（聚合）
     "openrouter/openai/gpt-4o-mini": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/openai/gpt-4o": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-    "openrouter/anthropic/claude-3.5-sonnet": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-    "openrouter/anthropic/claude-3.7-sonnet": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-    "openrouter/anthropic/claude-3.7-sonnet:thinking": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-    "openrouter/anthropic/claude-3.5-haiku": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-    "openrouter/google/gemini-2.0-flash-001": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+    "openrouter/anthropic/claude-sonnet-4.6": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+    "openrouter/anthropic/claude-opus-4.6": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+    "openrouter/anthropic/claude-haiku-4.5": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/google/gemini-2.5-flash": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/google/gemini-2.5-pro": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-    "openrouter/google/gemini-1.5-pro": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-    "openrouter/google/gemini-1.5-flash": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-    "openrouter/meta-llama/llama-3.1-70b-instruct": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-    "openrouter/meta-llama/llama-3.1-405b-instruct": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/deepseek/deepseek-r1": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/deepseek/deepseek-v3": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/meta-llama/llama-4-scout": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
@@ -200,21 +190,23 @@ MODEL_MAX_TOKENS: dict[str, int] = {
     "gpt-4.1-mini": 1_047_576,
     "gpt-4.1": 1_047_576,
     # Anthropic
-    "claude-3-5-sonnet-20241022": 200_000,
-    "claude-3-5-haiku-20241022": 200_000,
+    "claude-sonnet-4-6": 1_000_000,
+    "claude-opus-4-6": 1_000_000,
+    "claude-haiku-4-5": 200_000,
     # Google AI Studio
     "gemini-2.5-flash": 1_048_576,
     "gemini-2.5-pro": 1_048_576,
-    "gemini-2.0-flash": 1_048_576,
     # DeepSeek
     "deepseek-chat": 64_000,
     "deepseek-coder": 16_000,
     "deepseek-reasoner": 64_000,
     # Moonshot / Kimi
-    "kimi-latest": 131_072,
-    "moonshot-v1-8k": 8_192,
-    "moonshot-v1-32k": 32_768,
-    "moonshot-v1-128k": 131_072,
+    "kimi-k2.5": 262_144,
+    "kimi-k2-0905-preview": 262_144,
+    "kimi-k2-turbo-preview": 262_144,
+    "kimi-k2-thinking": 131_072,
+    "kimi-k2-thinking-turbo": 262_144,
+    "kimi-k2-0711-preview": 131_072,
     # DashScope / Qwen
     "qwen3-235b-a22b": 131_072,
     "qwen-turbo": 131_072,
@@ -225,35 +217,24 @@ MODEL_MAX_TOKENS: dict[str, int] = {
     "qwen-max-latest": 32_768,
     "qwen-long": 10_000_000,
     # 智谱 GLM
-    "glm-4": 128_000,
+    "glm-4.7": 205_000,
+    "glm-4.7-flash": 205_000,
     "glm-4-flash": 128_000,
     "glm-4-plus": 128_000,
-    "glm-4-air": 128_000,
-    "glm-3-turbo": 128_000,
     # 硅基流动
+    "Qwen/Qwen3-32B": 131_072,
     "Qwen/Qwen2.5-7B-Instruct": 32_768,
-    "Qwen/Qwen2.5-32B-Instruct": 32_768,
-    "Qwen/Qwen2.5-72B-Instruct": 32_768,
-    "deepseek-ai/DeepSeek-V2.5": 32_768,
-    "deepseek-ai/DeepSeek-V3": 64_000,
-    "deepseek-ai/DeepSeek-R1": 64_000,
-    "THUDM/glm-4-9b-chat": 128_000,
-    "THUDM/glm-4-plus": 128_000,
+    "deepseek-ai/DeepSeek-V3": 164_000,
+    "deepseek-ai/DeepSeek-R1": 164_000,
     "meta-llama/Llama-4-Scout-17B-16E-Instruct": 131_072,
     # OpenRouter
     "openrouter/openai/gpt-4o-mini": 128_000,
     "openrouter/openai/gpt-4o": 128_000,
-    "openrouter/anthropic/claude-3.5-sonnet": 200_000,
-    "openrouter/anthropic/claude-3.7-sonnet": 200_000,
-    "openrouter/anthropic/claude-3.7-sonnet:thinking": 200_000,
-    "openrouter/anthropic/claude-3.5-haiku": 200_000,
-    "openrouter/google/gemini-2.0-flash-001": 1_048_576,
+    "openrouter/anthropic/claude-sonnet-4.6": 1_000_000,
+    "openrouter/anthropic/claude-opus-4.6": 1_000_000,
+    "openrouter/anthropic/claude-haiku-4.5": 200_000,
     "openrouter/google/gemini-2.5-flash": 1_048_576,
     "openrouter/google/gemini-2.5-pro": 1_048_576,
-    "openrouter/google/gemini-1.5-pro": 2_097_152,
-    "openrouter/google/gemini-1.5-flash": 1_048_576,
-    "openrouter/meta-llama/llama-3.1-70b-instruct": 131_072,
-    "openrouter/meta-llama/llama-3.1-405b-instruct": 131_072,
     "openrouter/deepseek/deepseek-r1": 64_000,
     "openrouter/deepseek/deepseek-v3": 64_000,
     "openrouter/meta-llama/llama-4-scout": 131_072,
@@ -267,6 +248,45 @@ MODEL_MAX_TOKENS: dict[str, int] = {
 
 DEFAULT_MODEL = "gpt-4o-mini"
 
+# 已废弃模型 → 新模型的自动迁移映射
+_DEPRECATED_MODEL_MAP: dict[str, str] = {
+    # Moonshot (2025 → 2026)
+    "kimi-latest": "kimi-k2.5",
+    "moonshot-v1-8k": "kimi-k2-turbo-preview",
+    "moonshot-v1-32k": "kimi-k2.5",
+    "moonshot-v1-128k": "kimi-k2-0905-preview",
+    # Anthropic (retired Oct 2025)
+    "claude-3-5-sonnet-20241022": "claude-sonnet-4-6",
+    "claude-3-5-haiku-20241022": "claude-haiku-4-5",
+    # Gemini (deprecated Feb 2026)
+    "gemini-2.0-flash": "gemini-2.5-flash",
+    # Zhipu GLM (legacy)
+    "glm-4": "glm-4.7",
+    "glm-4-air": "glm-4.7-flash",
+    "glm-3-turbo": "glm-4.7-flash",
+    # SiliconFlow (deprecated March 2026)
+    "Qwen/Qwen2.5-32B-Instruct": "Qwen/Qwen3-32B",
+    "Qwen/Qwen2.5-72B-Instruct": "Qwen/Qwen3-32B",
+    "deepseek-ai/DeepSeek-V2.5": "deepseek-ai/DeepSeek-V3",
+    "THUDM/glm-4-9b-chat": "Qwen/Qwen2.5-7B-Instruct",
+    "THUDM/glm-4-plus": "Qwen/Qwen3-32B",
+    # OpenRouter Claude (retired/expiring)
+    "openrouter/anthropic/claude-3.5-sonnet": "openrouter/anthropic/claude-sonnet-4.6",
+    "openrouter/anthropic/claude-3.7-sonnet": "openrouter/anthropic/claude-sonnet-4.6",
+    "openrouter/anthropic/claude-3.7-sonnet:thinking": "openrouter/anthropic/claude-opus-4.6",
+    "openrouter/anthropic/claude-3.5-haiku": "openrouter/anthropic/claude-haiku-4.5",
+    # OpenRouter Gemini (deprecated)
+    "openrouter/google/gemini-2.0-flash-001": "openrouter/google/gemini-2.5-flash",
+    "openrouter/google/gemini-1.5-pro": "openrouter/google/gemini-2.5-pro",
+    "openrouter/google/gemini-1.5-flash": "openrouter/google/gemini-2.5-flash",
+}
+
+
+def _migrate_model(model: str) -> str:
+    """将废弃模型名映射到新模型名；未命中则原样返回。"""
+    return _DEPRECATED_MODEL_MAP.get(model, model)
+
+
 # ── 用户全局默认模型（内存缓存，由 API 层写入） ──────────────────────────
 _user_default_model: str = ""
 
@@ -274,7 +294,7 @@ _user_default_model: str = ""
 def set_user_default_model(model: str) -> None:
     """由 system API 调用，将用户选择的模型写入内存缓存。"""
     global _user_default_model
-    _user_default_model = (model or "").strip()
+    _user_default_model = _migrate_model((model or "").strip())
 
 
 def get_user_default_model() -> str:
@@ -290,7 +310,7 @@ async def load_user_default_model_from_db(user_id: int = 1) -> None:
         async with AsyncSessionLocal() as db:
             val = await UserSettingService.get(db, user_id, "default_model", default="")
             if val:
-                _user_default_model = val
+                _user_default_model = _migrate_model(val)
     except Exception:
         pass
 
@@ -333,8 +353,8 @@ def _infer_env_key(model: str) -> str:
 def _find_any_available_model() -> str | None:
     """扫描所有 Provider，返回第一个配置了 API Key 的模型 id；无则返回 None。"""
     preferred_order = [
-        "deepseek-chat", "gemini-2.5-flash", "kimi-latest",
-        "glm-4-flash", "qwen-turbo", "moonshot-v1-8k",
+        "deepseek-chat", "gemini-2.5-flash", "kimi-k2.5",
+        "glm-4-flash", "qwen-turbo", "kimi-k2-turbo-preview",
     ]
     for m in preferred_order:
         if m in DOMESTIC_PROVIDERS:
@@ -345,7 +365,7 @@ def _find_any_available_model() -> str | None:
         if os.environ.get(env_key, "").strip():
             return m
     if os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        return "claude-3-5-sonnet-20241022"
+        return "claude-sonnet-4-6"
     if os.environ.get("OPENAI_API_KEY", "").strip():
         return "gpt-4o-mini"
     return None
@@ -434,9 +454,9 @@ async def resolve_model(
                 )
                 val = r.scalar_one_or_none()
                 if val:
-                    _user_default_model = val
-                    if _model_has_key(val):
-                        return val
+                    _user_default_model = _migrate_model(val)
+                    if _model_has_key(_user_default_model):
+                        return _user_default_model
         except Exception:
             pass
 
@@ -562,7 +582,7 @@ async def _get_user_model_from_cache_or_db() -> str:
             )
             val = r.scalar_one_or_none()
             if val:
-                _user_default_model = val
+                _user_default_model = _migrate_model(val)
     except Exception:
         pass
     return _user_default_model

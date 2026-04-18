@@ -117,6 +117,20 @@ onMounted(async () => {
   eApi.onVersionPolicies?.((list) => {
     licenseStore.setVersionPolicies(list)
   })
+
+  // 主动拉取一次当前授权缓存，修复 ActivationGuide 登录后事件丢失的时序问题
+  if (eApi.getLicenseCache) {
+    try {
+      const cache = await eApi.getLicenseCache()
+      if (cache?.base) {
+        if (cache.base.valid) {
+          licenseStore.setBase({ valid: true, ...cache.base })
+        } else {
+          licenseStore.setBase({ valid: false, ...cache.base })
+        }
+      }
+    } catch { /* ignore */ }
+  }
 })
 </script>
 

@@ -115,13 +115,19 @@ async def generate_section_stream(
                 pass
 
     # 读取同一篇文章中已生成的前序章节内容（通用上下文记忆）
+    import logging
+    _log = logging.getLogger(__name__)
+
     prior_sections_context = ""
     try:
         from app.services.format_router import SECTION_TYPES_BY_FORMAT, SECTION_TITLES
         all_section_types = SECTION_TYPES_BY_FORMAT.get(content_format, [])
         current_idx = all_section_types.index(section_type) if section_type in all_section_types else -1
+        _log.info("[prior_sections] format=%s section=%s idx=%d total_types=%d",
+                  content_format, section_type, current_idx, len(all_section_types))
         if current_idx > 0:
             prior_types = all_section_types[:current_idx]
+            _log.info("[prior_sections] looking for prior types: %s", prior_types)
             async with AsyncSessionLocal() as db:
                 sec_result = await db.execute(
                     select(ArticleSection).where(
@@ -130,6 +136,7 @@ async def generate_section_stream(
                     ).order_by(ArticleSection.order_num)
                 )
                 prior_secs = sec_result.scalars().all()
+                _log.info("[prior_sections] found %d section records in DB", len(prior_secs))
                 titles_map = SECTION_TITLES.get(content_format, {})
                 parts = []
                 for ps in prior_secs:
@@ -142,10 +149,12 @@ async def generate_section_stream(
                     candidates = cont_result.scalars().all()
                     c = next((x for x in candidates if getattr(x, "platform", None) == platform), None) or (candidates[0] if candidates else None)
                     if not c or not c.content_json:
+                        _log.info("[prior_sections] section %s (id=%d): no content found", ps.section_type, ps.id)
                         continue
                     try:
                         doc = json.loads(c.content_json)
                     except Exception:
+                        _log.warning("[prior_sections] section %s: content_json parse failed", ps.section_type)
                         continue
                     def _extract_text(node):
                         if isinstance(node, str):
@@ -161,9 +170,19 @@ async def generate_section_stream(
                     if text:
                         label = titles_map.get(ps.section_type, ps.section_type)
                         parts.append(f"【{label}】\n{text}")
+                        _log.info("[prior_sections] section %s: extracted %d chars", ps.section_type, len(text))
+                    else:
+                        _log.info("[prior_sections] section %s: extracted empty text", ps.section_type)
                 if parts:
                     prior_sections_context = "\n\n".join(parts)
-    except Exception:
+                    _log.info("[prior_sections] ✅ total prior context: %d chars from %d sections",
+                              len(prior_sections_context), len(parts))
+                else:
+                    _log.warning("[prior_sections] ⚠️ no prior content extracted (sections exist but empty)")
+        else:
+            _log.info("[prior_sections] first section or unknown type, no prior context needed")
+    except Exception as exc:
+        _log.error("[prior_sections] ❌ failed to read prior sections: %s", exc, exc_info=True)
         prior_sections_context = ""
 
     # 文献通道检索（用于写作注入与后续事实核验）
@@ -236,7 +255,7 @@ async def generate_section_stream(
         yield {"type": "error", "message": f"模型初始化失败：{e}"}
         return
 
-    system_prompt = _build_system_prompt(content_format)
+    system_prompt = _build_system_prompt(content_format, platform=platform, target_audience=target_audience)
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": enhanced_prompt},
@@ -250,7 +269,7 @@ async def generate_section_stream(
                 "type": "literature_warning",
                 "level": "critical",
                 "bound_count": bound_paper_count,
-                "message": "未绑定任何参考文献，生成内容将全部标注为[共识]或[[待补充]]，建议返回配置页添加文献后再生成。",
+                "message": "未绑定任何参考文献，生成内容将缺少文献支撑，建议返回配置页添加文献后再生成。",
             }
         else:
             yield {
@@ -290,11 +309,66 @@ async def generate_section_stream(
                 extract_provenance_summary,
                 detect_uncited_medical_facts,
             )
-            report["ai_patterns"] = detect_ai_patterns(full_content)
+            ai_patterns_result = detect_ai_patterns(full_content)
+            report["ai_patterns"] = ai_patterns_result
             report["provenance"] = extract_provenance_summary(full_content)
             report["uncited_facts"] = detect_uncited_medical_facts(full_content)
 
+            # ── 去AI化多轮自动改写：始终触发 ──
+            ai_score = ai_patterns_result.get("score", 100)
+            if len(full_content.strip()) >= 100:
+                yield {"type": "rewriting", "message": "正在执行去AI化改写..."}
+                from app.services.enhancement.deai_rewriter import rewrite_multi_pass
+
+                async def _on_rewrite_progress(msg: str):
+                    pass  # progress via SSE already sent above
+
+                rewritten, was_rewritten, rewrite_stats = await rewrite_multi_pass(
+                    content=full_content,
+                    section_type=section_type,
+                    article_id=article_id,
+                    article_default_model=article_default_model,
+                    platform=platform,
+                    target_audience=target_audience,
+                )
+                if was_rewritten:
+                    full_content = rewritten
+                    ai_patterns_after = detect_ai_patterns(full_content)
+                    report["ai_patterns_before_rewrite"] = ai_patterns_result
+                    report["ai_patterns"] = ai_patterns_after
+                    report["deai_rewrite"] = {
+                        "applied": True,
+                        "rounds": rewrite_stats.get("rounds", 1),
+                        "score_before": ai_score,
+                        "score_after": ai_patterns_after.get("score", 0),
+                        **{k: v for k, v in rewrite_stats.items() if k != "rounds"},
+                    }
+                    yield {"type": "rewritten_content", "content": full_content}
+
             yield {"type": "verify_report", "report": report}
+
+        # 读者向格式：清理可能残留的内部标签、元数据泄露、空占位标题
+        from app.agents.prompts.system import _READER_FACING_CONTENT_FORMATS
+        if content_format in _READER_FACING_CONTENT_FORMATS:
+            import re
+            full_content = re.sub(r"\[共识\]", "", full_content)
+            full_content = re.sub(r"\[推断[:：][^\]]*\]", "", full_content)
+            full_content = re.sub(r"\[\[待补充(?:[:：][^\]]*?)?\]\]", "", full_content)
+            full_content = re.sub(r"\[DATA[:：][^\]]*\]", "", full_content)
+            full_content = re.sub(r"\[文献(\d+)\]", r"[\1]", full_content)
+            full_content = re.sub(
+                r"^.*(?:主题：|形式：|平台：|文章类型：|内容形式：|目标读者：).*[\|｜]?.*$",
+                "", full_content, flags=re.MULTILINE,
+            )
+            full_content = re.sub(r"^#+\s*(引言|前言|正文|案例|Q&A|问答|小结|结语)\s*$", "", full_content, flags=re.MULTILINE)
+            full_content = re.sub(r"\[N\]", "", full_content)
+            full_content = re.sub(
+                r"(?:\n---\n|\n-{3,}\n)?\s*(?:^#+\s*)?参考文献.*",
+                "", full_content, flags=re.DOTALL | re.MULTILINE,
+            )
+            full_content = re.sub(r"\n{3,}", "\n\n", full_content)
+            full_content = re.sub(r"  +", " ", full_content)
+            full_content = full_content.strip()
 
         # 配图建议：仅 article 形式，条漫/分镜/卡片每格已有画面描述则跳过
         image_suggestions = []

@@ -191,7 +191,7 @@ async def test_api_key(req: TestApiKeyRequest | None = None):
         "openai": (os.environ.get("OPENAI_API_KEY", ""), "https://api.openai.com/v1", "gpt-4o-mini"),
         "deepseek": (os.environ.get("DEEPSEEK_API_KEY", ""), "https://api.deepseek.com/v1", "deepseek-chat"),
         "zhipu": (os.environ.get("ZHIPU_API_KEY", ""), "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
-        "moonshot": (os.environ.get("MOONSHOT_API_KEY", ""), "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+        "moonshot": (os.environ.get("MOONSHOT_API_KEY", ""), "https://api.moonshot.cn/v1", "kimi-k2.5"),
         "siliconflow": (os.environ.get("SILICONFLOW_API_KEY", ""), "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
         "dashscope": (os.environ.get("DASHSCOPE_API_KEY", ""), "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-turbo"),
         "google_ai": (os.environ.get("GOOGLE_API_KEY", ""), "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.5-flash"),
@@ -221,10 +221,12 @@ _DISPLAY_NAMES: dict[str, str] = {
     "deepseek-chat": "DeepSeek V3",
     "deepseek-coder": "DeepSeek Coder",
     "deepseek-reasoner": "DeepSeek R1",
-    "kimi-latest": "Kimi K2",
-    "moonshot-v1-8k": "Moonshot v1 8K",
-    "moonshot-v1-32k": "Moonshot v1 32K",
-    "moonshot-v1-128k": "Moonshot v1 128K",
+    "kimi-k2.5": "Kimi K2.5",
+    "kimi-k2-turbo-preview": "Kimi K2 Turbo",
+    "kimi-k2-thinking": "Kimi K2 Thinking",
+    "kimi-k2-thinking-turbo": "Kimi K2 Thinking Turbo",
+    "kimi-k2-0905-preview": "Kimi K2 0905",
+    "kimi-k2-0711-preview": "Kimi K2 0711",
     "qwen3-235b-a22b": "Qwen3 235B",
     "qwen-turbo": "Qwen Turbo",
     "qwen-turbo-latest": "Qwen Turbo (Latest)",
@@ -233,11 +235,10 @@ _DISPLAY_NAMES: dict[str, str] = {
     "qwen-max": "Qwen Max",
     "qwen-max-latest": "Qwen Max (Latest)",
     "qwen-long": "Qwen Long",
-    "glm-4": "GLM-4",
+    "glm-4.7": "GLM-4.7",
+    "glm-4.7-flash": "GLM-4.7 Flash",
     "glm-4-flash": "GLM-4 Flash",
     "glm-4-plus": "GLM-4 Plus",
-    "glm-4-air": "GLM-4 Air",
-    "glm-3-turbo": "GLM-3 Turbo",
 }
 
 
@@ -276,13 +277,13 @@ async def list_llm_models():
         _add("gpt-4.1", "GPT-4.1", "openai")
     # Anthropic
     if os.environ.get("ANTHROPIC_API_KEY"):
-        _add("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", "anthropic")
-        _add("claude-3-5-haiku-20241022", "Claude 3.5 Haiku", "anthropic")
+        _add("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic")
+        _add("claude-opus-4-6", "Claude Opus 4.6", "anthropic")
+        _add("claude-haiku-4-5", "Claude Haiku 4.5", "anthropic")
     # Google AI Studio
     if os.environ.get("GOOGLE_API_KEY"):
         _add("gemini-2.5-flash", "Gemini 2.5 Flash", "google_ai")
         _add("gemini-2.5-pro", "Gemini 2.5 Pro", "google_ai")
-        _add("gemini-2.0-flash", "Gemini 2.0 Flash", "google_ai")
     # DOMESTIC_PROVIDERS（跳过已添加的模型，避免重复）
     for model_id, (_, env_key) in DOMESTIC_PROVIDERS.items():
         if model_id in added_ids:

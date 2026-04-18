@@ -127,7 +127,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    title: 'LinScio MedComm - 医学科普写作智能体',
+    title: 'LinScio MedComm - 科普内容创作助手',
   })
 
   const rendererIndex = path.join(__dirname, '../dist/index.html')
@@ -311,7 +311,7 @@ async function startBackend() {
   } catch (e) { /* keychain 不可用时忽略 */ }
 
   if (!startBackend._restartCount) startBackend._restartCount = 0
-  backend.start(env)
+  await backend.start(env)
 }
 
 async function reloadBackendWithLatestKeys() {
@@ -409,12 +409,13 @@ ipcMain.handle('portal-login', async (_, email, password) => {
     }
     if (data.access_token) {
       await keychain.setPassword('access_token', data.access_token)
+      if (data.email) await keychain.setPassword('portal_email', data.email)
       authChecker.clearLicenseCache(global.licenseCache)
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('license-activated', { token: data.access_token })
         setTimeout(() => {
           authChecker.checkAuthStatus(mainWindow, global.licenseCache, data.access_token)
-        }, 500)
+        }, 2500)
       }
       return { ok: true, email: data.email, expires_at: data.expires_at, days_remaining: data.days_remaining }
     }
@@ -427,6 +428,7 @@ ipcMain.handle('portal-login', async (_, email, password) => {
 ipcMain.handle('deactivate-license', async () => {
   try {
     await keychain.deletePassword('access_token')
+    await keychain.deletePassword('portal_email').catch(() => {})
     authChecker.clearLicenseCache(global.licenseCache)
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('show-activation-guide')
@@ -435,6 +437,17 @@ ipcMain.handle('deactivate-license', async () => {
   } catch (e) {
     return { ok: false, error: e.message }
   }
+})
+
+ipcMain.handle('get-license-cache', async () => {
+  const cache = global.licenseCache
+  let portalEmail = ''
+  try { portalEmail = await keychain.getPassword('portal_email') || '' } catch {}
+  if (authChecker.isCacheValid(cache) && cache.data?.base) {
+    return { base: cache.data.base, portalEmail }
+  }
+  const token = await keychain.getPassword('access_token').catch(() => null)
+  return { base: null, hasToken: !!token, portalEmail }
 })
 
 ipcMain.handle('download-specialty', async (_, specialtyId, specialtyName, version, fromVersion) => {

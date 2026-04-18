@@ -176,6 +176,60 @@
           <p v-else class="clean-hint">未发现 AI 痕迹</p>
         </div>
 
+        <!-- AIGC 段落级检测 -->
+        <div class="aigc-para-block">
+          <div class="block-title">
+            <span>AIGC 段落检测</span>
+            <el-button
+              size="small"
+              :loading="aigcChecking"
+              @click="runAigcCheck"
+            >
+              {{ aigcCheckResult ? '重新检测' : '开始检测' }}
+            </el-button>
+          </div>
+          <template v-if="aigcCheckResult">
+            <div class="aigc-summary-row">
+              <el-tag :type="aigcSummaryTagType" size="small">总分 {{ aigcCheckResult.summary.overall_score }}</el-tag>
+              <span class="aigc-summary-text">
+                {{ aigcCheckResult.summary.total_paragraphs }}段：
+                <span v-if="aigcCheckResult.summary.high_risk_count" class="risk-high">{{ aigcCheckResult.summary.high_risk_count }}高危</span>
+                <span v-if="aigcCheckResult.summary.medium_risk_count" class="risk-medium">{{ aigcCheckResult.summary.medium_risk_count }}中危</span>
+                <span v-if="aigcCheckResult.summary.low_risk_count" class="risk-low">{{ aigcCheckResult.summary.low_risk_count }}正常</span>
+              </span>
+            </div>
+            <div
+              v-for="p in aigcCheckResult.paragraphs.filter((x: any) => x.risk_level !== 'low')"
+              :key="p.index"
+              class="aigc-para-card"
+              :class="'aigc-para-' + p.risk_level"
+            >
+              <div class="aigc-para-header">
+                <el-tag :type="p.risk_level === 'high' ? 'danger' : 'warning'" size="small" effect="dark">
+                  {{ p.risk_level === 'high' ? '高危' : '中危' }}
+                </el-tag>
+                <span class="aigc-para-idx">第{{ p.index + 1 }}段</span>
+                <el-button size="small" text type="primary" @click="locateAigcParagraph(p)">定位</el-button>
+              </div>
+              <div class="aigc-para-text">{{ p.text }}</div>
+              <div v-if="p.issues.length" class="aigc-para-issues">
+                <div v-for="(issue, j) in p.issues" :key="j" class="aigc-issue-item">
+                  <el-tag :type="issue.severity === 'high' ? 'danger' : 'warning'" size="small" effect="plain">
+                    {{ issueTypeLabel(issue.type) }}
+                  </el-tag>
+                  <span class="aigc-issue-matched">{{ issue.matched }}</span>
+                </div>
+              </div>
+              <div v-if="p.suggestions.length" class="aigc-para-suggestions">
+                <div v-for="(s, k) in p.suggestions" :key="k" class="aigc-suggestion-item">💡 {{ s }}</div>
+              </div>
+            </div>
+            <p v-if="!aigcCheckResult.paragraphs.filter((x: any) => x.risk_level !== 'low').length" class="clean-hint">
+              所有段落均通过 AIGC 检测
+            </p>
+          </template>
+        </div>
+
         <!-- 共识标注缺失检测 -->
         <div v-if="uncitedFacts" class="uncited-block" :class="{ 'clean-block': !uncitedFacts.uncited_count }">
           <div class="block-title">
@@ -592,6 +646,93 @@ function aiCategoryLabel(cat: string): string {
   return _AI_CATEGORY_LABELS[cat] || cat
 }
 
+// ── AIGC 段落级检测 ──
+const aigcChecking = ref(false)
+const aigcCheckResult = computed(() => articleStore.aigcCheckResult)
+
+const aigcSummaryTagType = computed<'' | 'success' | 'warning' | 'danger'>(() => {
+  const score = aigcCheckResult.value?.summary?.overall_score ?? 100
+  if (score >= 75) return 'success'
+  if (score >= 50) return 'warning'
+  return 'danger'
+})
+
+const _ISSUE_TYPE_LABELS: Record<string, string> = {
+  formulaic_rhetoric: '套话句式',
+  false_emphasis: '虚假强调',
+  triple_parallel: '三项并列',
+  symmetric_structure: '对称结构',
+  tour_guide: '导游腔',
+  ai_buzzword: 'AI用语',
+  summary_cliche: '总结套话',
+  emotional_ending: '情感结尾',
+  safety_filler: '安全套话',
+  low_burstiness: '句长均匀',
+  no_short_sentence: '缺极短句',
+  narrow_range: '句长范围窄',
+  consecutive_similar_length: '连续等长句',
+  explainer_tone: '解释腔',
+  ai_opener: 'AI式开头',
+  causal_cliche: '因果套话',
+  progression_cliche: '递进套话',
+  summary_pattern: '概括套话',
+  safety_reminder: '提醒前缀',
+  metaphor_intro: '比喻引导',
+  rhetorical_question: '设问自答',
+  over_smooth_transition: '过度流畅',
+  parallel_rhetoric: '排比修辞',
+  academic_tone: '学术腔',
+  low_vocabulary_diversity: '词汇单一',
+  high_connector_density: '过渡词密',
+  repetitive_opening: '段首重复',
+  noun_phrase_stacking: '定语堆叠',
+  monotone_punctuation: '标点单一',
+}
+function issueTypeLabel(t: string) { return _ISSUE_TYPE_LABELS[t] || t }
+
+async function runAigcCheck() {
+  const articleId = articleStore.current?.id
+  const sectionId = articleStore.currentSectionId
+  const cf = articleStore.current?.content_format || 'article'
+  const useArticleLevel = cf === 'article' && articleId
+  if (!useArticleLevel && !sectionId) {
+    ElMessage.warning('请先选中一个章节')
+    return
+  }
+  aigcChecking.value = true
+  try {
+    const res = useArticleLevel
+      ? await api.medcomm.aigcCheckArticle(articleId!, articleStore.contentJson)
+      : await api.medcomm.aigcCheckSection(sectionId!)
+    if (res.data?.ok) {
+      articleStore.setAigcCheckResult({
+        summary: res.data.summary,
+        paragraphs: res.data.paragraphs,
+      })
+      const high = res.data.summary.high_risk_count ?? 0
+      const medium = res.data.summary.medium_risk_count ?? 0
+      if (high === 0 && medium === 0) {
+        ElMessage.success('AIGC 段落检测通过，未发现高风险段落')
+      } else {
+        ElMessage.info(`检测完成：${high} 个高危段落，${medium} 个中危段落`)
+      }
+    } else {
+      ElMessage.warning('检测返回异常')
+    }
+  } catch {
+    ElMessage.error('AIGC 段落检测失败，请稍后重试')
+  } finally {
+    aigcChecking.value = false
+  }
+}
+
+function locateAigcParagraph(p: { text: string; full_text?: string; index: number }) {
+  const raw = (p.full_text || p.text || '').replace(/\.\.\.$/g, '').trim()
+  if (!raw) return
+  const needle = raw.length > 40 ? raw.slice(0, 40) : raw
+  articleStore.requestEditorLocate(needle)
+}
+
 const recheckingLocal = ref(false)
 async function doRecheck() {
   const sectionId = articleStore.currentSectionId
@@ -884,6 +1025,106 @@ async function doRecheck() {
   font-size: 0.78rem;
   color: #15803d;
   margin: 0;
+}
+
+/* AIGC 段落级检测 */
+.aigc-para-block {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  background: #faf5ff;
+  border: 1px solid #e9d5ff;
+  font-size: 0.8rem;
+}
+.aigc-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+.aigc-summary-text {
+  font-size: 0.78rem;
+  color: #6b7280;
+}
+.aigc-summary-text .risk-high {
+  color: #dc2626;
+  font-weight: 600;
+  margin-right: 0.3rem;
+}
+.aigc-summary-text .risk-medium {
+  color: #d97706;
+  font-weight: 600;
+  margin-right: 0.3rem;
+}
+.aigc-summary-text .risk-low {
+  color: #16a34a;
+  margin-right: 0.3rem;
+}
+.aigc-para-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.5rem;
+  margin-bottom: 0.4rem;
+  background: #fff;
+  transition: border-color 0.2s;
+}
+.aigc-para-card:hover {
+  border-color: var(--el-color-primary-light-5);
+}
+.aigc-para-high {
+  border-left: 3px solid #ef4444;
+}
+.aigc-para-medium {
+  border-left: 3px solid #f59e0b;
+}
+.aigc-para-header {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.3rem;
+}
+.aigc-para-idx {
+  font-size: 0.75rem;
+  color: #6b7280;
+  flex: 1;
+}
+.aigc-para-text {
+  font-size: 0.78rem;
+  color: #374151;
+  line-height: 1.5;
+  max-height: 3em;
+  overflow: hidden;
+  word-break: break-all;
+  margin-bottom: 0.3rem;
+}
+.aigc-para-issues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: 0.25rem;
+}
+.aigc-issue-item {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+.aigc-issue-matched {
+  font-size: 0.72rem;
+  color: #9ca3af;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.aigc-para-suggestions {
+  border-top: 1px dashed #e5e7eb;
+  padding-top: 0.25rem;
+}
+.aigc-suggestion-item {
+  font-size: 0.75rem;
+  color: #059669;
+  line-height: 1.5;
 }
 
 /* AI 辅助写作 */

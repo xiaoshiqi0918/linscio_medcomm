@@ -9,15 +9,19 @@ from app.agents.prompts import (
     MEDCOMM_SYSTEM_PROMPT,
     CHILDREN_AUDIENCE_PATCH,
 )
+from app.agents.prompts.system import get_system_prompt
 from app.agents.prompts.anti_hallucination import get_format_specific_rules
 
 
-def _build_system_prompt(content_format: str = "") -> str:
-    """System message = 精简「宪法层」+ 形式族专属规则。
-    所有核心规则（事实溯源、证据语言、安全红线、输出格式）已内置于 MEDCOMM_SYSTEM_PROMPT，
-    17 条规则 ~800 token，每条均为可执行判断标准。"""
+def _build_system_prompt(
+    content_format: str = "",
+    platform: str = "",
+    target_audience: str = "",
+) -> str:
+    """System message = Layer 0 (format-aware) + format-specific anti-hallucination rules."""
+    base = get_system_prompt(content_format, platform=platform, target_audience=target_audience)
     format_rules = get_format_specific_rules(content_format)
-    parts = [MEDCOMM_SYSTEM_PROMPT]
+    parts = [base]
     if format_rules:
         parts.append(format_rules)
     return "\n\n".join(parts)
@@ -71,7 +75,11 @@ class BaseAgent(ABC):
             article_id=state.get("article_id"),
             article_default_model=state.get("article_default_model"),
         )
-        system_prompt = _build_system_prompt(state.get("content_format", ""))
+        system_prompt = _build_system_prompt(
+            state.get("content_format", ""),
+            platform=state.get("platform", ""),
+            target_audience=state.get("target_audience", ""),
+        )
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": enhanced_prompt},

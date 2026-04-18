@@ -95,6 +95,57 @@ _MEDICAL_ZH_EN: dict[str, str] = {
 }
 
 
+def _normalize_comma_separated(query: str) -> str:
+    """Split comma/semicolon-separated concepts and join with AND.
+
+    'Chronic diseases, lifestyle, intervention methods'
+    → '(Chronic diseases) AND (lifestyle) AND (intervention methods)'
+    """
+    separators = re.compile(r"[,;，；]\s*")
+    parts = [p.strip() for p in separators.split(query) if p.strip()]
+    if len(parts) <= 1:
+        return query
+    return " AND ".join(f"({p})" for p in parts)
+
+
+async def _optimize_query_for_pubmed(query: str) -> str:
+    """Use LLM to convert a natural-language query into an optimized PubMed
+    search string with MeSH terms and Boolean operators."""
+    try:
+        from app.services.llm.openai_client import chat_completion
+        from app.services.llm.manager import TaskTier
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a PubMed search expert. Convert the user's search "
+                    "query into an optimized PubMed search string.\n"
+                    "Rules:\n"
+                    "1. Use MeSH terms with [MeSH] tags where appropriate\n"
+                    "2. Use AND between different concepts, OR between synonyms\n"
+                    "3. Keep it concise — no more than 3-4 concept groups\n"
+                    "4. Output ONLY the PubMed query string, nothing else\n"
+                    "5. Do NOT add date or language filters\n"
+                    "Example input: 'Chronic diseases, lifestyle, intervention methods'\n"
+                    "Example output: (\"Chronic Disease\"[MeSH] OR \"chronic diseases\") "
+                    "AND (\"Life Style\"[MeSH] OR lifestyle) "
+                    "AND (\"intervention\" OR \"health promotion\"[MeSH])"
+                ),
+            },
+            {"role": "user", "content": query},
+        ]
+        optimized = await chat_completion(messages, task=TaskTier.FAST)
+        optimized = (optimized or "").strip()
+        if optimized.startswith("```") and optimized.endswith("```"):
+            optimized = optimized.strip("`").strip()
+        if optimized and len(optimized) > 5:
+            return optimized
+    except Exception as exc:
+        print(f"[PubMed] LLM query optimization failed: {exc}", flush=True)
+    return ""
+
+
 async def _translate_query_to_english(query: str) -> str:
     """Translate a Chinese query to English for PubMed.
 
@@ -122,11 +173,15 @@ async def _translate_query_to_english(query: str) -> str:
             {
                 "role": "system",
                 "content": (
-                    "You are a medical literature search assistant. "
-                    "Translate the following Chinese medical search query into "
-                    "English PubMed search terms. Output ONLY the English "
-                    "search terms, nothing else. Use standard MeSH terminology "
-                    "when possible."
+                    "You are a PubMed search expert. Convert the Chinese query "
+                    "into an optimized PubMed search string.\n"
+                    "Rules:\n"
+                    "1. Translate concepts faithfully — do NOT change the topic\n"
+                    "2. Use MeSH terms with [MeSH] tags where appropriate\n"
+                    "3. Use AND between different concepts, OR between synonyms\n"
+                    "4. Keep it concise — no more than 3-4 concept groups\n"
+                    "5. Output ONLY the PubMed query string, nothing else\n"
+                    "6. Do NOT add date or language filters"
                 ),
             },
             {"role": "user", "content": query},
@@ -182,16 +237,38 @@ class PubMedSource:
             await progress_cb("准备检索 PMID", 12)
 
         effective_query = query
+        already_optimized = False
         if _CJK_RE.search(query):
             if progress_cb:
                 await progress_cb("翻译中文关键词", 18)
             effective_query = await _translate_query_to_english(query)
+            already_optimized = effective_query != query
             print(
                 f"[PubMed] Chinese query detected: '{query}' -> '{effective_query}'",
                 flush=True,
             )
 
+        if not already_optimized:
+            if progress_cb:
+                await progress_cb("优化检索式", 22)
+            optimized = await _optimize_query_for_pubmed(effective_query)
+            if optimized:
+                print(
+                    f"[PubMed] LLM optimized query: '{effective_query}' -> '{optimized}'",
+                    flush=True,
+                )
+                effective_query = optimized
+            else:
+                normalized = _normalize_comma_separated(effective_query)
+                if normalized != effective_query:
+                    print(
+                        f"[PubMed] Normalized query: '{effective_query}' -> '{normalized}'",
+                        flush=True,
+                    )
+                    effective_query = normalized
+
         q = self._build_query(effective_query, year_from, year_to, pub_types, language)
+        print(f"[PubMed] Final query: {q}", flush=True)
         params = {
             **self.COMMON_PARAMS,
             "db": "pubmed",
@@ -203,7 +280,7 @@ class PubMedSource:
         if self.api_key:
             params["api_key"] = self.api_key
 
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        async with httpx.AsyncClient(timeout=12.0) as client:
             last_err: Exception | None = None
             for attempt in range(2):
                 try:
@@ -215,12 +292,16 @@ class PubMedSource:
                     data = resp.json()
                     es = data.get("esearchresult", {})
                     pmids = es.get("idlist", [])
+                    qt = (es.get("querytranslation") or "").strip()
+                    print(
+                        f"[PubMed] querytranslation: {qt!r}  |  count={es.get('count')}",
+                        flush=True,
+                    )
                     if not pmids:
                         return []
-                    qt = (es.get("querytranslation") or "").strip()
                     if not qt:
                         print(
-                            f"[PubMed] empty querytranslation — query was not understood, returning 0 results",
+                            "[PubMed] empty querytranslation — query was not understood, returning 0 results",
                             flush=True,
                         )
                         return []
@@ -229,7 +310,6 @@ class PubMedSource:
                     return await self._fetch_summaries(client, pmids)
                 except Exception as e:
                     last_err = e
-                    # 轻量退避：NCBI 在限流时更容易返回异常结构
                     await asyncio.sleep(min(4.0, (attempt + 1) * 1.5))
                     continue
             if last_err:

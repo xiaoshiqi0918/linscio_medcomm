@@ -39,12 +39,10 @@ async def cleanup_expired_trash(db: AsyncSession) -> int:
         chunk_ids = [r[0] for r in chunk_result.fetchall()]
         if chunk_ids:
             ph = ",".join(str(i) for i in chunk_ids)
-            await db.execute(
-                text(
-                    "INSERT INTO paper_fts(paper_fts, rowid) SELECT 'delete', rowid FROM paper_fts WHERE chunk_id IN (%s)"
-                    % ph
-                )
-            )
+            try:
+                await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
+            except Exception:
+                pass
         await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper.id))
         await db.delete(paper)
 

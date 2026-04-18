@@ -1,7 +1,18 @@
 """
 提示词加载器
-优先从 prompt-example 文件夹加载，作为同步代码层的基础
-prompt-example 位于项目根目录（backend 的上级）
+优先从 prompt-example 文件夹加载，作为同步代码层的基础。
+
+目录约定（prompt-example/prompts/）：
+  layer0/     — Layer 0 系统级
+  layer1/     — Layer 1 防编造与补丁
+  part1/      — Part 1 能力增强（auxiliary、完整 SOP 等）
+  part2/      — Part 2 占位说明（运行时动态拼装为主）
+  part3/      — Part 3 任务与形式简版（task/、format_section*）
+  literature/ — 文献分析 system 提示词
+  deai/       — 去 AI 化改写模板
+  verification/、imagegen/、comic/、handbook/、polish/ 等 — 支撑模块
+
+兼容：若新路径不存在，自动回退到迁移前的旧路径（根目录同名文件）。
 """
 from pathlib import Path
 import json
@@ -19,6 +30,36 @@ def _load_file(path: Path) -> str | None:
             return path.read_text(encoding="utf-8").strip()
     except Exception:
         pass
+    return None
+
+
+def _first_available_string(paths: list[Path]) -> str | None:
+    """按顺序尝试路径，返回首个成功读取的非空字符串。"""
+    for p in paths:
+        content = _load_file(p)
+        if content:
+            return content
+    return None
+
+
+def _first_available_json(paths: list[Path]) -> dict | list | None:
+    for p in paths:
+        content = _load_file(p)
+        if content:
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                pass
+    return None
+
+
+def _load_json(path: Path) -> dict | list | None:
+    content = _load_file(path)
+    if content:
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
     return None
 
 
@@ -43,48 +84,69 @@ def load_prompt_versions() -> dict:
 
 
 def load_layer0_system() -> str | None:
-    """从 prompt-example 加载 Layer 0 系统提示词"""
-    return _load_file(_PROMPTS_DIR / "layer0_system.txt")
+    """Layer 0 系统提示词：prompts/layer0/system.txt（旧：layer0_system.txt）"""
+    return _first_available_string(
+        [
+            _PROMPTS_DIR / "layer0" / "system.txt",
+            _PROMPTS_DIR / "layer0_system.txt",
+        ]
+    )
 
 
 def load_writing_sop() -> str | None:
-    """加载精简版写作 SOP 核心原则（用于系统消息）。
+    """精简版写作 SOP 核心原则（layer0/writing_sop_core.txt）。"""
+    return _first_available_string(
+        [
+            _PROMPTS_DIR / "layer0" / "writing_sop_core.txt",
+            _PROMPTS_DIR / "writing_sop_core.txt",
+        ]
+    )
 
-    完整版 writing_sop.txt 已移入 system-knowledge/ 目录通过 RAG 按需检索，
-    系统消息中只注入核心原则摘要以节省 token。
-    """
-    return _load_file(_PROMPTS_DIR / "writing_sop_core.txt")
+
+def load_full_writing_sop_document() -> str | None:
+    """完整版写作 SOP 文本（part1/writing_sop.txt），供人工阅读或未来接入。"""
+    return _first_available_string(
+        [
+            _PROMPTS_DIR / "part1" / "writing_sop.txt",
+            _PROMPTS_DIR / "writing_sop.txt",
+        ]
+    )
 
 
 def load_layer1_anti_hallucination() -> str | None:
-    """从 prompt-example 加载 Layer 1 防编造提示词"""
-    return _load_file(_PROMPTS_DIR / "layer1_anti_hallucination.txt")
+    return _first_available_string(
+        [
+            _PROMPTS_DIR / "layer1" / "anti_hallucination.txt",
+            _PROMPTS_DIR / "layer1_anti_hallucination.txt",
+        ]
+    )
 
 
 def load_layer1_visual_anti() -> str | None:
-    """从 prompt-example 加载图示类专属防编造规则"""
-    return _load_file(_PROMPTS_DIR / "layer1_visual_anti.txt")
+    return _first_available_string(
+        [
+            _PROMPTS_DIR / "layer1" / "visual_anti.txt",
+            _PROMPTS_DIR / "layer1_visual_anti.txt",
+        ]
+    )
 
 
 def load_layer1_script_anti() -> str | None:
-    """从 prompt-example 加载脚本类专属防编造规则"""
-    return _load_file(_PROMPTS_DIR / "layer1_script_anti.txt")
+    return _first_available_string(
+        [
+            _PROMPTS_DIR / "layer1" / "script_anti.txt",
+            _PROMPTS_DIR / "layer1_script_anti.txt",
+        ]
+    )
 
 
 def load_children_audience_patch() -> str | None:
-    """从 prompt-example 加载儿童受众规范补丁"""
-    return _load_file(_PROMPTS_DIR / "children_audience_patch.txt")
-
-
-def _load_json(path: Path) -> dict | list | None:
-    """读取 JSON 文件"""
-    content = _load_file(path)
-    if content:
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            pass
-    return None
+    return _first_available_string(
+        [
+            _PROMPTS_DIR / "layer1" / "children_audience_patch.txt",
+            _PROMPTS_DIR / "children_audience_patch.txt",
+        ]
+    )
 
 
 def load_verification(name: str) -> str | None:
@@ -93,13 +155,21 @@ def load_verification(name: str) -> str | None:
 
 
 def load_format_section() -> dict | None:
-    """加载 format_section.json"""
-    return _load_json(_PROMPTS_DIR / "format_section.json")
+    return _first_available_json(
+        [
+            _PROMPTS_DIR / "part3" / "format_section.json",
+            _PROMPTS_DIR / "format_section.json",
+        ]
+    )
 
 
 def load_format_section_default() -> str | None:
-    """加载 format_section_default.txt"""
-    return _load_file(_PROMPTS_DIR / "format_section_default.txt")
+    return _first_available_string(
+        [
+            _PROMPTS_DIR / "part3" / "format_section_default.txt",
+            _PROMPTS_DIR / "format_section_default.txt",
+        ]
+    )
 
 
 def load_comic(name: str) -> str | None:
@@ -139,8 +209,13 @@ def load_convert_prompt(name: str) -> str | None:
 
 
 def load_auxiliary(name: str) -> str | None:
-    """加载辅助提示词（v2.3）：scene_desc_optimize, rag_filter, feedback_integrate, compress, term_explain"""
-    return _load_file(_PROMPTS_DIR / "auxiliary" / f"{name}.txt")
+    """加载辅助提示词：part1/auxiliary/{name}.txt（旧：prompts/auxiliary/）"""
+    return _first_available_string(
+        [
+            _PROMPTS_DIR / "part1" / "auxiliary" / f"{name}.txt",
+            _PROMPTS_DIR / "auxiliary" / f"{name}.txt",
+        ]
+    )
 
 
 def load_imagegen_style_system() -> dict | None:
@@ -176,16 +251,66 @@ def load_task(name: str) -> str | None:
 
 
 def load_task_guideline(name: str) -> str | None:
-    """加载外部写作规范模板：prompts/task/{name}.txt
-
-    用于 prompt_builder 增强层，作为写作标准参考注入（不替换基础提示词）。
-    """
-    return _load_file(_PROMPTS_DIR / "task" / f"{name}.txt")
+    """外部写作规范模板：part3/task/{name}.txt（旧：prompts/task/）。"""
+    return _first_available_string(
+        [
+            _PROMPTS_DIR / "part3" / "task" / f"{name}.txt",
+            _PROMPTS_DIR / "task" / f"{name}.txt",
+        ]
+    )
 
 
 def load_platform_config() -> dict | None:
-    """加载平台配置：prompts/task/platform_config.json"""
-    return _load_json(_PROMPTS_DIR / "task" / "platform_config.json")
+    return _first_available_json(
+        [
+            _PROMPTS_DIR / "part3" / "task" / "platform_config.json",
+            _PROMPTS_DIR / "task" / "platform_config.json",
+        ]
+    )
+
+
+# ── 文献分析（runtime 优先读文件，见 literature/analyzer.py 回退常量）──
+
+
+def load_literature_analysis_single() -> str | None:
+    """1–2 篇文献单次分析的 system prompt。"""
+    return _load_file(_PROMPTS_DIR / "literature" / "analysis_single.txt")
+
+
+def load_literature_per_paper() -> str | None:
+    """MapReduce 单篇精读的 system prompt。"""
+    return _load_file(_PROMPTS_DIR / "literature" / "per_paper.txt")
+
+
+def load_literature_synthesis() -> str | None:
+    """MapReduce 综合汇总的 system prompt。"""
+    return _load_file(_PROMPTS_DIR / "literature" / "synthesis.txt")
+
+
+# ── 去 AI 化改写 ──
+
+
+def load_deai_system_override() -> str | None:
+    """若文件非空，整段作为 system，替代动态 `_build_deai_system_prompt`。"""
+    t = _load_file(_PROMPTS_DIR / "deai" / "system_override.txt")
+    return t if t else None
+
+
+def load_deai_rewrite_full_template() -> str | None:
+    """全文改写 user 模板，须含 {content} 占位符。"""
+    return _load_file(_PROMPTS_DIR / "deai" / "rewrite_full.txt")
+
+
+def load_deai_opening_template() -> str | None:
+    return _load_file(_PROMPTS_DIR / "deai" / "opening.txt")
+
+
+def load_deai_ending_template() -> str | None:
+    return _load_file(_PROMPTS_DIR / "deai" / "ending.txt")
+
+
+def load_deai_paragraph_template() -> str | None:
+    return _load_file(_PROMPTS_DIR / "deai" / "paragraph.txt")
 
 
 # 导出版本号（供 A/B 测试或日志）

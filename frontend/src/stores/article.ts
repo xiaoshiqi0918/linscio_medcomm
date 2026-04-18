@@ -33,6 +33,20 @@ export const useArticleStore = defineStore('article', () => {
   const editorLocatePayload = ref<{ text: string; nonce: number } | null>(null)
   const imageSuggestions = ref<Array<Record<string, unknown>>>([])
 
+  /** AIGC 段落检测结果 */
+  const aigcCheckResult = ref<{
+    summary: any
+    paragraphs: Array<{
+      index: number
+      text: string
+      full_text?: string
+      risk_level: 'high' | 'medium' | 'low'
+      issues: Array<{ type: string; severity: string; matched: string }>
+      suggestions: string[]
+      sentence_stats: any
+    }>
+  } | null>(null)
+
   /** 编辑器当前选区信息 */
   const editorSelection = ref<{
     text: string
@@ -68,6 +82,10 @@ export const useArticleStore = defineStore('article', () => {
 
   function setImageSuggestions(list: Array<Record<string, unknown>>) {
     imageSuggestions.value = list
+  }
+
+  function setAigcCheckResult(result: typeof aigcCheckResult.value) {
+    aigcCheckResult.value = result
   }
 
   function setEditorSelection(sel: typeof editorSelection.value) {
@@ -121,6 +139,7 @@ export const useArticleStore = defineStore('article', () => {
     ollamaWarning.value = null
     editorLocatePayload.value = null
     imageSuggestions.value = []
+    aigcCheckResult.value = null
     editorSelection.value = null
     aiAssistResult.value = ''
     aiAssistAction.value = ''
@@ -136,6 +155,7 @@ export const useArticleStore = defineStore('article', () => {
     verificationReport,
     ollamaWarning,
     imageSuggestions,
+    aigcCheckResult,
     editorSelection,
     aiAssistResult,
     aiAssistAction,
@@ -147,6 +167,7 @@ export const useArticleStore = defineStore('article', () => {
     setVerificationReport,
     setOllamaWarning,
     setImageSuggestions,
+    setAigcCheckResult,
     setEditorSelection,
     setAiAssistResult,
     clearAiAssist,

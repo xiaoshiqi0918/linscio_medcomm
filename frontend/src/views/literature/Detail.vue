@@ -1,5 +1,5 @@
 <template>
-  <div class="literature-detail" v-loading="loading">
+  <div class="literature-detail" v-loading="loading" ref="detailRootRef">
     <div class="top-row">
       <el-button link @click="goBack">← 返回文献库</el-button>
     </div>
@@ -144,38 +144,6 @@
                 </div>
               </template>
             </div>
-
-            <!-- 选中翻译浮动按钮 -->
-            <Teleport to="body">
-              <div
-                v-if="translateBtnVisible"
-                class="translate-float-btn"
-                :style="{ top: translateBtnPos.y + 'px', left: translateBtnPos.x + 'px' }"
-                @mousedown.prevent
-                @click="doTranslateSelection"
-              >
-                翻译
-              </div>
-            </Teleport>
-
-            <!-- 翻译结果弹层（可拖拽） -->
-            <Teleport to="body">
-              <div
-                v-if="translateResultVisible"
-                class="translate-result-popover"
-                :style="{ top: translateResultPos.y + 'px', left: translateResultPos.x + 'px' }"
-              >
-                <div class="translate-result-header" @mousedown="startDragPopover">
-                  <span class="translate-result-provider">{{ translateProvider }}</span>
-                  <span class="translate-drag-hint">拖拽移动</span>
-                  <el-button link size="small" @click="copyTranslation">复制</el-button>
-                  <el-button link size="small" type="info" @click="translateResultVisible = false">关闭</el-button>
-                </div>
-                <div v-if="translateLoading" v-loading="true" style="min-height: 48px;"></div>
-                <div v-else class="translate-result-text">{{ translateResultText }}</div>
-                <div v-if="translateOriginalText" class="translate-original-text">{{ translateOriginalText }}</div>
-              </div>
-            </Teleport>
           </div>
         </el-tab-pane>
         <el-tab-pane label="我的笔记" name="notes">
@@ -347,6 +315,38 @@
           <el-button type="primary" @click="saveAnnotation">保存</el-button>
         </template>
       </el-dialog>
+
+      <!-- 选中翻译浮动按钮（全局，所有面板可用） -->
+      <Teleport to="body">
+        <div
+          v-if="translateBtnVisible"
+          class="translate-float-btn"
+          :style="{ top: translateBtnPos.y + 'px', left: translateBtnPos.x + 'px' }"
+          @mousedown.prevent
+          @click="doTranslateSelection"
+        >
+          翻译
+        </div>
+      </Teleport>
+
+      <!-- 翻译结果弹层（可拖拽） -->
+      <Teleport to="body">
+        <div
+          v-if="translateResultVisible"
+          class="translate-result-popover"
+          :style="{ top: translateResultPos.y + 'px', left: translateResultPos.x + 'px' }"
+        >
+          <div class="translate-result-header" @mousedown="startDragPopover">
+            <span class="translate-result-provider">{{ translateProvider }}</span>
+            <span class="translate-drag-hint">拖拽移动</span>
+            <el-button link size="small" @click="copyTranslation">复制</el-button>
+            <el-button link size="small" type="info" @click="translateResultVisible = false">关闭</el-button>
+          </div>
+          <div v-if="translateLoading" v-loading="true" style="min-height: 48px;"></div>
+          <div v-else class="translate-result-text">{{ translateResultText }}</div>
+          <div v-if="translateOriginalText" class="translate-original-text">{{ translateOriginalText }}</div>
+        </div>
+      </Teleport>
     </template>
   </div>
 </template>
@@ -408,6 +408,7 @@ const fulltextLoading = ref(false)
 const fulltextActiveSection = ref('')
 const chunkSectionRefs = ref<Record<string, HTMLElement>>({})
 const paperBodyRef = ref<HTMLElement | null>(null)
+const detailRootRef = ref<HTMLElement | null>(null)
 
 const fulltextSections = computed(() => {
   const seen = new Set<string>()
@@ -566,10 +567,12 @@ async function doTranslateSelection() {
 }
 
 function _providerLabel(p?: string): string {
+  if (!p) return ''
+  if (p.startsWith('llm:')) return p.slice(4)
   const map: Record<string, string> = {
     deepl: 'DeepL', google: 'Google', azure: 'Azure', llm: '大模型',
   }
-  return map[p || ''] || p || ''
+  return map[p] || p
 }
 
 function copyTranslation() {
@@ -600,7 +603,7 @@ function startDragPopover(e: MouseEvent) {
   document.addEventListener('mouseup', onUp)
 }
 
-watch(paperBodyRef, (el) => {
+watch(detailRootRef, (el) => {
   if (el) {
     el.addEventListener('mouseup', onPaperBodyMouseUp)
     document.addEventListener('mousedown', onDocumentMouseDown)
@@ -1132,8 +1135,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('mousedown', onDocumentMouseDown)
-  if (paperBodyRef.value) {
-    paperBodyRef.value.removeEventListener('mouseup', onPaperBodyMouseUp)
+  if (detailRootRef.value) {
+    detailRootRef.value.removeEventListener('mouseup', onPaperBodyMouseUp)
   }
 })
 </script>

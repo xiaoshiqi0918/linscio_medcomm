@@ -92,8 +92,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="LinScio MedComm API",
-    description="医学科普写作智能体后端 API",
-    version="0.1.1",
+    description="科普内容创作助手后端 API",
+    version="0.1.3",
     lifespan=lifespan,
 )
 
@@ -141,4 +141,4 @@ app.include_router(internal.router, prefix="/internal", tags=["internal"])
 @app.get("/health")
 async def health():
     """健康检查"""
-    return {"status": "ok", "version": "0.1.1"}
+    return {"status": "ok", "version": "0.1.3"}

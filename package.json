@@ -1,7 +1,7 @@
 {
   "name": "linscio-medcomm",
-  "version": "0.1.2",
-  "description": "LinScio MedComm - 医学科普写作智能体桌面客户端",
+  "version": "0.1.3",
+  "description": "LinScio MedComm - 科普内容创作助手桌面客户端",
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,7 @@
     "electron:dev": "NODE_ENV=development concurrently -k -n vite,electron -c blue,magenta \"vite\" \"wait-on tcp:127.0.0.1:5173 && env -u ELECTRON_RUN_AS_NODE electron .\"",
     "electron:dev:bypass": "MEDCOMM_DEV_BYPASS_AUTH=1 NODE_ENV=development concurrently -k -n vite,electron -c blue,magenta \"vite\" \"wait-on tcp:127.0.0.1:5173 && env -u ELECTRON_RUN_AS_NODE electron .\"",
     "electron:dev:electron-only": "NODE_ENV=development env -u ELECTRON_RUN_AS_NODE electron .",
+    "electron:dev:second": "MEDCOMM_DEV_BYPASS_AUTH=1 MEDCOMM_ATTACH_TO_EXISTING_BACKEND=1 NODE_ENV=development env -u ELECTRON_RUN_AS_NODE electron .",
     "electron:dev:dist": "npm run build && MEDCOMM_RENDERER=dist NODE_ENV=development env -u ELECTRON_RUN_AS_NODE electron .",
     "electron:dev:dist:bypass": "npm run build && MEDCOMM_RENDERER=dist MEDCOMM_DEV_BYPASS_AUTH=1 NODE_ENV=development env -u ELECTRON_RUN_AS_NODE electron .",
     "prebuild:python": "node scripts/download-python-standalone.js",

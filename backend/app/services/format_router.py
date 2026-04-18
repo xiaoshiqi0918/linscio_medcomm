@@ -61,7 +61,7 @@ FIELD_VISIBILITY = {
 
 # 各形式 section_type 枚举
 SECTION_TYPES_BY_FORMAT = {
-    "article": ["intro", "body", "case", "qa", "summary"],
+    "article": ["body", "case", "qa", "summary"],
     "story": ["hook", "development", "turning_point", "science_core", "resolution", "action_list", "closing_quote"],
     "debunk": ["rumor_present", "verdict", "debunk_1", "debunk_2", "debunk_3", "correct_practice", "anti_fraud"],
     "qa_article": ["qa_intro", "qa_1", "qa_2", "qa_3", "qa_4", "qa_5", "qa_summary"],
@@ -164,7 +164,7 @@ def get_all_formats() -> list[dict]:
 
 # 章节类型 → 中文标题
 SECTION_TITLES: dict[str, dict[str, str]] = {
-    "article": {"intro": "引言", "body": "正文", "case": "案例", "qa": "Q&A", "summary": "小结"},
+    "article": {"body": "正文", "case": "案例", "qa": "Q&A", "summary": "小结"},
     "story": {"hook": "引子", "development": "发展", "turning_point": "转折·就医", "science_core": "科普核心", "resolution": "结局", "action_list": "行动清单", "closing_quote": "结尾金句"},
     "debunk": {"rumor_present": "谣言还原", "verdict": "真相判定", "debunk_1": "逐条拆解·漏洞1", "debunk_2": "逐条拆解·漏洞2", "debunk_3": "逐条拆解·漏洞3", "correct_practice": "正确做法", "anti_fraud": "防骗指南"},
     "qa_article": {"qa_intro": "问题引入", "qa_1": "问答1·入门", "qa_2": "问答2·入门", "qa_3": "问答3·进阶", "qa_4": "问答4·实操", "qa_5": "问答5·特殊", "qa_summary": "总结"},

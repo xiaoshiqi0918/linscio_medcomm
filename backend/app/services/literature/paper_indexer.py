@@ -45,11 +45,10 @@ async def _clear_old_chunks(paper_id: int, db: AsyncSession) -> None:
     old_ids = [r[0] for r in old_result.fetchall()]
     if old_ids:
         ph = ",".join(str(i) for i in old_ids)
-        await db.execute(
-            text(
-                f"INSERT INTO paper_fts(paper_fts, rowid) SELECT 'delete', rowid FROM paper_fts WHERE chunk_id IN ({ph})"
-            )
-        )
+        try:
+            await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
+        except Exception:
+            pass
         await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper_id))
         await db.flush()
 

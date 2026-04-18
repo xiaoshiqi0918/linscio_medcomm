@@ -1016,6 +1016,65 @@ async def cleanup_search_cache(
     return {"deleted": deleted, "requested_by": user.id}
 
 
+class KeywordDesignRequest(BaseModel):
+    description: str
+
+
+@router.post("/search/design-keywords")
+async def design_search_keywords(
+    req: KeywordDesignRequest,
+    user: User = Depends(get_current_user),
+):
+    """根据用户的自然语言描述，由 LLM 生成结构化的中文文献检索关键词。"""
+    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.manager import TaskTier
+
+    description = req.description.strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="描述不能为空")
+    if len(description) > 2000:
+        raise HTTPException(status_code=400, detail="描述过长（上限 2000 字符）")
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是一位医学文献检索专家。根据用户对写作主题的描述，设计一组用于 PubMed "
+                "文献检索的中文关键词。\n\n"
+                "要求：\n"
+                "1. 输出 3-6 组关键词，每组是一个核心概念\n"
+                "2. 每组关键词用逗号分隔，包含核心词和 1-2 个同义词/近义词\n"
+                "3. 各组之间用换行分隔\n"
+                "4. 仅输出关键词，不要输出解释文字\n"
+                "5. 关键词应覆盖主题的核心概念、研究方法、干预手段等\n\n"
+                "示例输入：我想写一篇关于慢性病与生活方式结合领域的科普文章\n"
+                "示例输出：\n"
+                "慢性病, 慢性疾病, 非传染性疾病\n"
+                "生活方式, 健康行为, 生活习惯\n"
+                "健康干预, 行为干预, 生活方式干预\n"
+                "健康科普, 健康教育, 患者教育\n"
+                "疾病管理, 自我管理, 慢病管理"
+            ),
+        },
+        {"role": "user", "content": description},
+    ]
+    try:
+        result = await chat_completion(messages, task=TaskTier.FAST)
+        result = (result or "").strip()
+        if not result:
+            raise HTTPException(status_code=502, detail="LLM 返回为空，请重试")
+        groups = []
+        for line in result.splitlines():
+            line = line.strip().lstrip("0123456789.、)-） ")
+            if line:
+                groups.append(line)
+        return {"groups": groups, "raw": "\n".join(groups)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"关键词生成失败: {e}")
+
+
 @router.post("/search/save")
 async def save_search_result(
     req: SaveSearchResultRequest,
@@ -1338,14 +1397,13 @@ async def batch_operation(req: BatchOperationRequest, db: AsyncSession = Depends
         )
 
     elif op == "permanent":
-        from sqlalchemy import text
-
         result = await db.execute(
             select(LiteraturePaper)
             .where(LiteraturePaper.id.in_(ids))
             .where(LiteraturePaper.deleted_at.is_not(None))
         )
         papers_to_del = result.scalars().all()
+        paper_ids_to_del = [p.id for p in papers_to_del]
         base_path = Path(settings.app_data_root)
         for paper in papers_to_del:
             if paper.pdf_path:
@@ -1360,15 +1418,23 @@ async def batch_operation(req: BatchOperationRequest, db: AsyncSession = Depends
             )
             chunk_ids = [r[0] for r in chunk_result.fetchall()]
             if chunk_ids:
-                ph = ",".join(str(i) for i in chunk_ids)
                 await db.execute(
-                    text(
-                        "INSERT INTO paper_fts(paper_fts, rowid) SELECT 'delete', rowid FROM paper_fts WHERE chunk_id IN (%s)"
-                        % ph
-                    )
+                    delete(PaperChunk).where(PaperChunk.id.in_(chunk_ids))
                 )
-            await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper.id))
-            await db.delete(paper)
+                try:
+                    ph = ",".join(str(i) for i in chunk_ids)
+                    await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
+                except Exception:
+                    pass
+            else:
+                await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper.id))
+        if paper_ids_to_del:
+            await db.execute(delete(LiteraturePaperTag).where(LiteraturePaperTag.paper_id.in_(paper_ids_to_del)))
+            await db.execute(delete(LiteratureAnnotation).where(LiteratureAnnotation.paper_id.in_(paper_ids_to_del)))
+            await db.execute(delete(LiteratureAttachment).where(LiteratureAttachment.paper_id.in_(paper_ids_to_del)))
+            await db.execute(delete(ArticleLiteratureBinding).where(ArticleLiteratureBinding.paper_id.in_(paper_ids_to_del)))
+            for paper in papers_to_del:
+                await db.delete(paper)
         await db.commit()
         return {"success": True, "affected": len(papers_to_del)}
 
@@ -1745,14 +1811,11 @@ async def upload_paper_pdf(
         chunk_result = await db.execute(select(PaperChunk.id).where(PaperChunk.paper_id == paper_id))
         chunk_ids = [r[0] for r in chunk_result.fetchall()]
         if chunk_ids:
-            from sqlalchemy import text
             ph = ",".join(str(i) for i in chunk_ids)
-            await db.execute(
-                text(
-                    "INSERT INTO paper_fts(paper_fts, rowid) SELECT 'delete', rowid FROM paper_fts WHERE chunk_id IN (%s)"
-                    % ph
-                )
-            )
+            try:
+                await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
+            except Exception:
+                pass
         await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper_id))
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -1798,12 +1861,10 @@ async def delete_paper_pdf(
     chunk_ids = [r[0] for r in chunk_result.fetchall()]
     if chunk_ids:
         ph = ",".join(str(i) for i in chunk_ids)
-        await db.execute(
-            text(
-                "INSERT INTO paper_fts(paper_fts, rowid) SELECT 'delete', rowid FROM paper_fts WHERE chunk_id IN (%s)"
-                % ph
-            )
-        )
+        try:
+            await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
+        except Exception:
+            pass
     await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper_id))
 
     paper.pdf_path = None
@@ -2197,8 +2258,6 @@ async def restore_paper(paper_id: int, db: AsyncSession = Depends(get_db)):
 )
 async def permanent_delete_paper(paper_id: int, db: AsyncSession = Depends(get_db)):
     """永久删除（仅对已在回收站的文献有效），清理 PDF、附件、向量 chunk"""
-    from sqlalchemy import text
-
     result = await db.execute(select(LiteraturePaper).where(LiteraturePaper.id == paper_id))
     paper = result.scalar_one_or_none()
     if not paper:
@@ -2220,13 +2279,15 @@ async def permanent_delete_paper(paper_id: int, db: AsyncSession = Depends(get_d
     chunk_ids = [r[0] for r in chunk_result.fetchall()]
     if chunk_ids:
         ph = ",".join(str(i) for i in chunk_ids)
-        await db.execute(
-            text(
-                "INSERT INTO paper_fts(paper_fts, rowid) SELECT 'delete', rowid FROM paper_fts WHERE chunk_id IN (%s)"
-                % ph
-            )
-        )
+        try:
+            await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
+        except Exception:
+            pass
     await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper_id))
+    await db.execute(delete(LiteraturePaperTag).where(LiteraturePaperTag.paper_id == paper_id))
+    await db.execute(delete(LiteratureAnnotation).where(LiteratureAnnotation.paper_id == paper_id))
+    await db.execute(delete(LiteratureAttachment).where(LiteratureAttachment.paper_id == paper_id))
+    await db.execute(delete(ArticleLiteratureBinding).where(ArticleLiteratureBinding.paper_id == paper_id))
     await db.delete(paper)
     await db.commit()
 

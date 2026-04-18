@@ -2,12 +2,13 @@
 import asyncio
 from app.core.database import AsyncSessionLocal
 from app.models.template import ContentTemplate
+from app.services.format_router import SECTION_TITLES
 
 # (name, content_format, platform, specialty, structure_str)
 TEMPLATES = [
-    ("疾病科普标准模板", "article", "wechat", "endocrine", "intro,body,case,qa,summary"),
-    ("健康饮食科普", "article", "wechat", "", "intro,body,summary"),
-    ("研究速读精简版", "article", "journal", "", "intro,body,summary"),
+    ("疾病科普标准模板", "article", "wechat", "endocrine", "body,case,qa,summary"),
+    ("健康饮食科普", "article", "wechat", "", "body,summary"),
+    ("研究速读精简版", "article", "journal", "", "body,summary"),
     ("科普故事七章式", "story", "wechat", "", "hook,development,turning_point,science_core,resolution,action_list,closing_quote"),
     ("儿童健康小故事", "story", "wechat", "pediatric", "hook,development,turning_point,science_core,resolution"),
     ("辟谣文七段式", "debunk", "wechat", "", "rumor_present,verdict,debunk_1,debunk_2,debunk_3,correct_practice,anti_fraud"),
@@ -25,9 +26,23 @@ TEMPLATES = [
     ("患者教育手册九部式", "patient_handbook", "offline", "", "handbook_plan,cover,disease_know,treatment,daily_care,followup,emergency,faq,back_cover"),
     ("糖尿病自测5题", "quiz_article", "wechat", "", "quiz_intro,q_1,q_2,q_3,q_4,q_5,summary"),
     ("H5互动5页大纲", "h5_outline", "wechat", "", "page_cover,page_1,page_2,page_3,page_end"),
-    ("通用叙事模板", "article", "universal", "", "intro,body,summary"),
-    ("小红书种草文", "article", "xiaohongshu", "", "intro,body,summary"),
+    ("通用叙事模板", "article", "universal", "", "body,summary"),
+    ("小红书种草文", "article", "xiaohongshu", "", "body,summary"),
 ]
+
+
+def _build_structure(content_format: str, structure_str: str) -> list[dict]:
+    """Build structure list using SECTION_TITLES for proper Chinese titles."""
+    titles = SECTION_TITLES.get(content_format, {})
+    result = []
+    for i, s in enumerate(structure_str.split(",")):
+        s = s.strip()
+        result.append({
+            "section_type": s,
+            "title": titles.get(s, s),
+            "order": i + 1,
+        })
+    return result
 
 
 async def seed():
@@ -41,19 +56,21 @@ async def seed():
                     ContentTemplate.platform == platform,
                 )
             )
-            if r.scalars().first():
-                continue
-            structure = [{"section_type": s.strip(), "title": s.strip()} for s in structure_str.split(",")]
-            t = ContentTemplate(
-                name=name,
-                content_format=content_format,
-                platform=platform,
-                specialty=specialty or None,
-                structure=structure,
-                is_system=True,
-                is_active=True,
-            )
-            session.add(t)
+            existing = r.scalars().first()
+            structure = _build_structure(content_format, structure_str)
+            if existing:
+                existing.structure = structure
+            else:
+                t = ContentTemplate(
+                    name=name,
+                    content_format=content_format,
+                    platform=platform,
+                    specialty=specialty or None,
+                    structure=structure,
+                    is_system=True,
+                    is_active=True,
+                )
+                session.add(t)
         await session.commit()
     print("Templates seeded.")
 
