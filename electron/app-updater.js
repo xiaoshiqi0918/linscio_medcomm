@@ -153,13 +153,27 @@ function installAndRestart() {
 function installWindows(exePath) {
   try {
     const installDir = path.dirname(app.getPath('exe'))
-    const child = spawn(exePath, ['/S', `/D=${installDir}`], {
+
+    // Remove Windows Zone.Identifier ADS to avoid SmartScreen blocking
+    try {
+      execSync(`powershell -NoProfile -Command "Unblock-File -Path '${exePath.replace(/'/g, "''")}'"`
+        , { windowsHide: true, timeout: 5000 })
+    } catch { /* best-effort */ }
+
+    // NSIS perMachine installer requires admin privileges;
+    // spawn() cannot trigger UAC, so use PowerShell Start-Process -Verb RunAs
+    const esc = (s) => s.replace(/'/g, "''")
+    const child = spawn('powershell.exe', [
+      '-NoProfile', '-WindowStyle', 'Hidden', '-Command',
+      `Start-Process -FilePath '${esc(exePath)}' -ArgumentList '/S','/D=${esc(installDir)}' -Verb RunAs`,
+    ], {
       detached: true,
       stdio: 'ignore',
     })
+    child.on('error', () => {})
     child.unref()
 
-    setTimeout(() => app.quit(), 1000)
+    setTimeout(() => app.quit(), 1500)
     return { ok: true }
   } catch (err) {
     _downloadStatus = 'error'
@@ -175,16 +189,26 @@ function installMacOS(zipPath) {
     const appName = path.basename(appBundlePath)
     const appParent = path.dirname(appBundlePath)
     const tempDir = path.join(getUpdateDir(), '_extract')
+    const logFile = path.join(getUpdateDir(), 'update-install.log')
     const pid = process.pid
 
     if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true })
     fs.mkdirSync(tempDir, { recursive: true })
 
     const script = `#!/bin/bash
+exec > "${logFile}" 2>&1
 set -e
+
 # Wait for old process to exit
 while kill -0 ${pid} 2>/dev/null; do sleep 0.5; done
 sleep 1
+
+# Pre-flight: check write permission on parent directory
+if [ ! -w "${appParent}" ]; then
+  echo "ERROR: No write permission to ${appParent}, trying with osascript..."
+  osascript -e 'do shell script "rm -rf \\"${appBundlePath}\\"" with administrator privileges'
+  NEED_SUDO=1
+fi
 
 # Extract zip
 unzip -o -q "${zipPath}" -d "${tempDir}"
@@ -196,16 +220,18 @@ for d in "${tempDir}"/*.app; do
 done
 
 if [ -z "$APP_FOUND" ]; then
-  echo "No .app found in zip" >&2
+  echo "No .app found in zip"
   exit 1
 fi
 
 # Replace old app
-rm -rf "${appBundlePath}"
-mv "$APP_FOUND" "${appBundlePath}"
-
-# Remove quarantine
-xattr -cr "${appBundlePath}" 2>/dev/null || true
+if [ "\${NEED_SUDO:-}" = "1" ]; then
+  osascript -e 'do shell script "mv \\"'"$APP_FOUND"'\\" \\"${appBundlePath}\\" && xattr -cr \\"${appBundlePath}\\"" with administrator privileges'
+else
+  rm -rf "${appBundlePath}"
+  mv "$APP_FOUND" "${appBundlePath}"
+  xattr -cr "${appBundlePath}" 2>/dev/null || true
+fi
 
 # Cleanup
 rm -rf "${tempDir}"
@@ -221,6 +247,7 @@ open "${appBundlePath}"
       detached: true,
       stdio: 'ignore',
     })
+    child.on('error', () => {})
     child.unref()
 
     setTimeout(() => app.quit(), 500)
