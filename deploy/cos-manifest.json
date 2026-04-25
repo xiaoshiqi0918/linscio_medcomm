@@ -1,0 +1,95 @@
+{
+  "schema_version": "2.0",
+  "min_client_version": "0.1.0",
+  "updated_at": "2026-04-25T00:00:00Z",
+
+  "products": [
+    {
+      "id": "MedComm",
+      "name": "LinScio MedComm",
+      "latest_version": "0.1.3",
+      "published_at": "2026-04-25",
+      "release_notes": "科普写作、文献支撑库、知识库核心功能完善。",
+
+      "platforms": ["mac-arm64", "mac-x64", "win-x64"],
+
+      "platform_status": {
+        "mac-arm64": "available",
+        "mac-x64": "available",
+        "win-x64": "available"
+      },
+
+      "download_files": {
+        "mac-arm64": "LinScio-MedComm-0.1.3-mac-arm64.dmg",
+        "mac-x64": "LinScio-MedComm-0.1.3-mac-x64.dmg",
+        "win-x64": "LinScio-MedComm-0.1.3-win-x64.exe"
+      },
+
+      "system_requirements": {
+        "macOS": "macOS 12.0 (Monterey) 或更高",
+        "Windows": "Windows 10 (64位) 或更高",
+        "内存": "8 GB 以上推荐",
+        "磁盘": "500 MB 可用空间"
+      },
+
+      "changelog": [
+        {
+          "version": "0.1.3",
+          "date": "2026-04-25",
+          "changes": [
+            "科普写作：支持 8 种内容格式一键生成",
+            "文献支撑库：PubMed 检索 + AI 文献分析",
+            "知识库：本地文档索引 + 智能引用",
+            "多模型支持：OpenAI / DeepSeek / Kimi / Qwen / Gemini"
+          ]
+        }
+      ]
+    }
+  ],
+
+  "specialties": [
+    {
+      "id": "endocrine",
+      "product_id": "MedComm",
+      "name": "内分泌科学科包",
+      "version": "1.0.0",
+      "description": "内分泌科专业术语库、科普模板、专科知识库",
+      "includes": ["术语库", "科普模板", "专科知识"],
+      "full_package": {
+        "filename": "specialty-endocrine-1.0.0.zip",
+        "size_mb": 45,
+        "md5": ""
+      }
+    },
+    {
+      "id": "cardiology",
+      "product_id": "MedComm",
+      "name": "心内科学科包",
+      "version": "1.0.0",
+      "description": "心内科专业术语库、科普模板、专科知识库",
+      "includes": ["术语库", "科普模板", "专科知识"],
+      "full_package": {
+        "filename": "specialty-cardiology-1.0.0.zip",
+        "size_mb": 52,
+        "md5": ""
+      }
+    },
+    {
+      "id": "neurology",
+      "product_id": "MedComm",
+      "name": "神经内科学科包",
+      "version": "1.0.0",
+      "description": "神经内科专业术语库、科普模板、专科知识库",
+      "includes": ["术语库", "科普模板", "专科知识"],
+      "full_package": {
+        "filename": "specialty-neurology-1.0.0.zip",
+        "size_mb": 48,
+        "md5": ""
+      }
+    }
+  ],
+
+  "drawing_packs": [],
+
+  "bundles": []
+}

@@ -183,23 +183,8 @@ function createWindow() {
       return
     }
 
-    let token = null
-    try {
-      token = await keychain.getPassword('access_token')
-    } catch (e) { /* keychain 不可用 */ }
-    if (!token) {
-      mainWindow.webContents.send('show-activation-guide')
-    }
+    // 登录由 Vue 路由守卫 + LoginView 统一处理，不再通过 Electron IPC 触发激活引导
     mainWindow.show()
-    if (token) {
-      setTimeout(() => {
-        authChecker.checkAuthStatus(mainWindow, global.licenseCache, token)
-      }, 10000)
-      setTimeout(() => {
-        const pkgVersion = app.getVersion() || '0.0.0'
-        authChecker.checkSoftwareUpdate(mainWindow, token, pkgVersion)
-      }, 15000)
-    }
   })
   mainWindow.on('closed', () => { mainWindow = null })
 }
@@ -299,6 +284,7 @@ async function exchangeActivationCode(activationCode) {
 
 async function startBackend() {
   const env = {
+    DEPLOYMENT_MODE: 'desktop',
     LINSCIO_APP_DATA: APP_DATA_ROOT,
     LINSCIO_LOCAL_API_KEY: localApiKey,
   }

@@ -38,33 +38,26 @@ def _infer_chunk_type(chunk_index: int, total_chunks: int) -> str:
 
 async def _clear_old_chunks(paper_id: int, db: AsyncSession) -> None:
     """删除旧 chunks + FTS 索引"""
-    from app.services.vector.fts5 import ensure_paper_fts_tables
+    from app.services.vector.fts5 import ensure_paper_fts_tables, delete_paper_chunks_from_fts
     await ensure_paper_fts_tables(db)
 
     old_result = await db.execute(select(PaperChunk.id).where(PaperChunk.paper_id == paper_id))
     old_ids = [r[0] for r in old_result.fetchall()]
     if old_ids:
-        ph = ",".join(str(i) for i in old_ids)
-        try:
-            await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
-        except Exception:
-            pass
+        await delete_paper_chunks_from_fts(old_ids, db)
         await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper_id))
         await db.flush()
 
 
 async def _insert_fts(paper_id: int, db: AsyncSession) -> None:
+    from app.services.vector.fts5 import index_paper_chunk
     result = await db.execute(
         select(PaperChunk.id, PaperChunk.chunk_text)
         .where(PaperChunk.paper_id == paper_id)
         .order_by(PaperChunk.chunk_index)
     )
     for row in result.fetchall():
-        cid, content = row[0], (row[1] or "")[:10000]
-        await db.execute(
-            text("INSERT INTO paper_fts(chunk_id, content) VALUES (:cid, :content)"),
-            {"cid": cid, "content": content},
-        )
+        await index_paper_chunk(row[0], row[1], db)
 
 
 async def _replace_paper_chunks_from_text(paper_id: int, text_content: str, db: AsyncSession) -> int:

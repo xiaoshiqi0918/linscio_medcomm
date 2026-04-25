@@ -5,6 +5,7 @@ import uuid
 import asyncio
 import logging
 from datetime import datetime
+from decimal import Decimal
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1418,14 +1419,11 @@ async def batch_operation(req: BatchOperationRequest, db: AsyncSession = Depends
             )
             chunk_ids = [r[0] for r in chunk_result.fetchall()]
             if chunk_ids:
+                from app.services.vector.fts5 import delete_paper_chunks_from_fts
+                await delete_paper_chunks_from_fts(chunk_ids, db)
                 await db.execute(
                     delete(PaperChunk).where(PaperChunk.id.in_(chunk_ids))
                 )
-                try:
-                    ph = ",".join(str(i) for i in chunk_ids)
-                    await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
-                except Exception:
-                    pass
             else:
                 await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper.id))
         if paper_ids_to_del:
@@ -1811,11 +1809,8 @@ async def upload_paper_pdf(
         chunk_result = await db.execute(select(PaperChunk.id).where(PaperChunk.paper_id == paper_id))
         chunk_ids = [r[0] for r in chunk_result.fetchall()]
         if chunk_ids:
-            ph = ",".join(str(i) for i in chunk_ids)
-            try:
-                await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
-            except Exception:
-                pass
+            from app.services.vector.fts5 import delete_paper_chunks_from_fts
+            await delete_paper_chunks_from_fts(chunk_ids, db)
         await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper_id))
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -1860,11 +1855,8 @@ async def delete_paper_pdf(
     chunk_result = await db.execute(select(PaperChunk.id).where(PaperChunk.paper_id == paper_id))
     chunk_ids = [r[0] for r in chunk_result.fetchall()]
     if chunk_ids:
-        ph = ",".join(str(i) for i in chunk_ids)
-        try:
-            await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
-        except Exception:
-            pass
+        from app.services.vector.fts5 import delete_paper_chunks_from_fts
+        await delete_paper_chunks_from_fts(chunk_ids, db)
     await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper_id))
 
     paper.pdf_path = None
@@ -2278,11 +2270,8 @@ async def permanent_delete_paper(paper_id: int, db: AsyncSession = Depends(get_d
     chunk_result = await db.execute(select(PaperChunk.id).where(PaperChunk.paper_id == paper_id))
     chunk_ids = [r[0] for r in chunk_result.fetchall()]
     if chunk_ids:
-        ph = ",".join(str(i) for i in chunk_ids)
-        try:
-            await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
-        except Exception:
-            pass
+        from app.services.vector.fts5 import delete_paper_chunks_from_fts
+        await delete_paper_chunks_from_fts(chunk_ids, db)
     await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper_id))
     await db.execute(delete(LiteraturePaperTag).where(LiteraturePaperTag.paper_id == paper_id))
     await db.execute(delete(LiteratureAnnotation).where(LiteratureAnnotation.paper_id == paper_id))
@@ -2875,12 +2864,61 @@ class AnalyzeLiteratureRequest(BaseModel):
 
 
 @router.post("/analyze")
-async def analyze_literature(req: AnalyzeLiteratureRequest):
+async def analyze_literature(
+    req: AnalyzeLiteratureRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
     """SSE 流式文献分析：通读选定文献并生成结构化分析报告"""
     from app.services.literature.analyzer import analyze_literature_stream
+    from app.core.config import is_saas
+
+    saas_user_id: int | None = None
+    estimated_cost = Decimal("0")
+    if is_saas():
+        from app.core.deps import get_current_user
+        user = await get_current_user(request, db)
+        saas_user_id = user.id
+
+        total_chars = 0
+        for pid in req.paper_ids:
+            paper = await db.get(LiteraturePaper, pid)
+            if paper and paper.abstract:
+                total_chars += len(paper.abstract)
+        total_chars = max(total_chars, 1000)
+
+        from app.services.credit.pricing import calc_literature_cost, LiteratureAnalysisMode
+        estimated_cost = calc_literature_cost(total_chars, LiteratureAnalysisMode.ABSTRACT)
+
+        from app.services.credit.service import check_balance, freeze_credits, InsufficientCreditsError
+        try:
+            await check_balance(user.id, estimated_cost, db)
+            await freeze_credits(user.id, estimated_cost, db)
+            await db.commit()
+        except InsufficientCreditsError as e:
+            raise HTTPException(
+                status_code=402,
+                detail=f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分",
+            )
 
     async def _gen():
         async for evt in analyze_literature_stream(req.paper_ids, req.topic_hint):
             yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+        if saas_user_id and is_saas():
+            try:
+                from app.core.database import AsyncSessionLocal
+                from app.services.credit.service import unfreeze_credits, deduct_credits
+                async with AsyncSessionLocal() as settle_db:
+                    await unfreeze_credits(saas_user_id, estimated_cost, settle_db)
+                    await deduct_credits(
+                        saas_user_id, estimated_cost, settle_db,
+                        operation="literature_analyze",
+                        meta={"paper_ids": req.paper_ids, "char_count": total_chars},
+                    )
+                    await settle_db.commit()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error("文献分析积分结算异常: %s", e)
 
     return StreamingResponse(_gen(), media_type="text/event-stream")

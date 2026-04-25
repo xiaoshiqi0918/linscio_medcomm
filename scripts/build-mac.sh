@@ -247,11 +247,63 @@ build_client() {
 
   # 5. Electron 打包
   info "[5/5] electron-builder --mac --${ARCH}..."
-  npx electron-builder --mac "--${ARCH}" 2>&1 | grep -E '(packaging|building|target|skipped|error|⨯)' || true
+  local EB_LOG="${OUT_DIR}/electron-builder.log"
+  mkdir -p "$OUT_DIR"
+
+  set +e
+  npx electron-builder --mac "--${ARCH}" 2>&1 | tee "$EB_LOG"
+  local EB_EXIT=${PIPESTATUS[0]}
+  set -e
+
+  if [ "$EB_EXIT" -ne 0 ]; then
+    error "electron-builder 退出码 $EB_EXIT，请查看日志: $EB_LOG"
+    exit 1
+  fi
+
+  # 产物校验
+  local DMG_FILE="${OUT_DIR}/LinScio-MedComm-${VER}-mac-${ARCH}.dmg"
+  local ZIP_FILE="${OUT_DIR}/LinScio-MedComm-${VER}-mac-${ARCH}.zip"
+  local FAIL=0
 
   echo ""
-  info "客户端构建完成:"
-  ls -lh "${OUT_DIR}/"*"${ARCH}"*.dmg 2>/dev/null || warn "(未生成 DMG)"
+  if [ -f "$DMG_FILE" ]; then
+    local DMG_SZ; DMG_SZ="$(stat -f%z "$DMG_FILE" 2>/dev/null || stat -c%s "$DMG_FILE" 2>/dev/null)"
+    if [ "$DMG_SZ" -lt 10000000 ]; then
+      error "DMG 异常: 文件过小 ($(( DMG_SZ / 1024 )) KB)"
+      FAIL=1
+    else
+      info "DMG  ✓  $(( DMG_SZ / 1024 / 1024 )) MB  $DMG_FILE"
+    fi
+  else
+    error "DMG 缺失: $DMG_FILE"
+    FAIL=1
+  fi
+
+  if [ -f "$ZIP_FILE" ]; then
+    local ZIP_SZ; ZIP_SZ="$(stat -f%z "$ZIP_FILE" 2>/dev/null || stat -c%s "$ZIP_FILE" 2>/dev/null)"
+    info "ZIP  ✓  $(( ZIP_SZ / 1024 / 1024 )) MB  $ZIP_FILE"
+  else
+    warn "ZIP 缺失（如不需要应用内更新可忽略）: $ZIP_FILE"
+  fi
+
+  if [ -f "${DMG_FILE}.blockmap" ]; then
+    info "DMG blockmap ✓"
+  else
+    warn "DMG blockmap 缺失"
+  fi
+  if [ -f "${ZIP_FILE}.blockmap" ]; then
+    info "ZIP blockmap ✓"
+  else
+    warn "ZIP blockmap 缺失"
+  fi
+
+  if [ "$FAIL" -ne 0 ]; then
+    error "产物校验未通过，构建失败"
+    exit 1
+  fi
+
+  echo ""
+  info "客户端构建完成 ✓  v${VER} mac-${ARCH}"
   echo ""
 }
 

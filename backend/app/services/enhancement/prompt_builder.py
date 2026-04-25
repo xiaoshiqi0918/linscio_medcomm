@@ -1185,6 +1185,13 @@ _TEMPLATE_SECTION_MAPPING: dict[str, dict[str, str]] = {
 }
 
 
+_READING_LEVEL_LABELS = {
+    "easy": "简单易懂（小学高年级可读）",
+    "normal": "适中（普通成人可理解）",
+    "advanced": "较深入（有一定医学常识的读者）",
+}
+
+
 def _build_article_meta_block(
     topic: str,
     content_format: str,
@@ -1193,6 +1200,7 @@ def _build_article_meta_block(
     platform: str,
     target_word_count: int | None = None,
     tone: str | None = None,
+    reading_level: str | None = None,
 ) -> str:
     """结构化文章元信息，对应参考架构 Part 3 的「文章基本信息」"""
     format_name = FORMAT_NAMES.get(content_format, content_format)
@@ -1226,6 +1234,7 @@ def _build_article_meta_block(
 - 读者知识水平：{knowledge_level}
 - 目标字数：{word_count_str}
 - 语气风格：{resolved_tone}
+- 阅读难度：{_READING_LEVEL_LABELS.get(reading_level or "normal", reading_level or "适中")}
 - 发布平台：{platform_name}"""
 
 
@@ -1251,6 +1260,7 @@ async def build_enhanced_prompt(
     analysis_report: dict | None = None,
     target_word_count: int | None = None,
     tone: str | None = None,
+    reading_level: str | None = None,
 ) -> tuple[str, dict]:
     """
     四层 Prompt 架构 — User Message 装配（Part 1 + Part 2 + Part 3）。
@@ -1437,6 +1447,7 @@ async def build_enhanced_prompt(
         platform=platform,
         target_word_count=target_word_count,
         tone=tone,
+        reading_level=reading_level,
     )
     prior_block = _build_prior_sections_block(prior_sections_context, section_type, content_format)
 

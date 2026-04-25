@@ -38,11 +38,8 @@ async def cleanup_expired_trash(db: AsyncSession) -> int:
         chunk_result = await db.execute(select(PaperChunk.id).where(PaperChunk.paper_id == paper.id))
         chunk_ids = [r[0] for r in chunk_result.fetchall()]
         if chunk_ids:
-            ph = ",".join(str(i) for i in chunk_ids)
-            try:
-                await db.execute(text("DELETE FROM paper_fts WHERE chunk_id IN (%s)" % ph))
-            except Exception:
-                pass
+            from app.services.vector.fts5 import delete_paper_chunks_from_fts
+            await delete_paper_chunks_from_fts(chunk_ids, db)
         await db.execute(delete(PaperChunk).where(PaperChunk.paper_id == paper.id))
         await db.delete(paper)
 

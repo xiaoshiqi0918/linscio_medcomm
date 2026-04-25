@@ -1,7 +1,7 @@
 <template>
   <div class="app-layout">
     <AppTitleBar />
-    <LicenseBanner />
+    <LicenseBanner v-if="isElectron" />
     <div class="app-body">
       <AppSidebar />
       <div class="main-wrapper">
@@ -28,6 +28,7 @@ const router = useRouter()
 const settingsStore = useSettingsStore()
 const licenseStore = useMedcommLicenseStore()
 const authStore = useAuthStore()
+const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.isElectron
 
 let startupCheckDone = false
 async function checkUninstalledPacks(list: Array<{ id: string; name: string; local_version?: string | null }>) {
@@ -51,34 +52,37 @@ async function checkUninstalledPacks(list: Array<{ id: string; name: string; loc
 
 onMounted(async () => {
   settingsStore.loadLicense()
-  let preferred = ''
-  try {
-    preferred = window.localStorage.getItem(AUTH_PREFERRED_USERNAME_KEY) || ''
-  } catch {
-    preferred = ''
-  }
-  if (preferred) {
+
+  if (isElectron) {
+    let preferred = ''
     try {
-      await authStore.switchUser(preferred)
+      preferred = window.localStorage.getItem(AUTH_PREFERRED_USERNAME_KEY) || ''
     } catch {
-      // ignore and fall through to prompt
+      preferred = ''
     }
-  }
-  if (!preferred) {
-    try {
-      const { value } = await ElMessageBox.prompt(
-        '请输入用户名（用于隔离个人配置，如 NCBI Key、检索历史等）',
-        '选择/创建用户',
-        {
-          confirmButtonText: '进入',
-          cancelButtonText: '暂不',
-          inputPlaceholder: '例如：张三',
-        }
-      )
-      const name = String(value || '').trim()
-      if (name) await authStore.switchUser(name)
-    } catch {
-      // 用户取消
+    if (preferred) {
+      try {
+        await authStore.switchUser(preferred)
+      } catch {
+        // ignore and fall through to prompt
+      }
+    }
+    if (!preferred) {
+      try {
+        const { value } = await ElMessageBox.prompt(
+          '请输入用户名（用于隔离个人配置，如 NCBI Key、检索历史等）',
+          '选择/创建用户',
+          {
+            confirmButtonText: '进入',
+            cancelButtonText: '暂不',
+            inputPlaceholder: '例如：张三',
+          }
+        )
+        const name = String(value || '').trim()
+        if (name) await authStore.switchUser(name)
+      } catch {
+        // 用户取消
+      }
     }
   }
 

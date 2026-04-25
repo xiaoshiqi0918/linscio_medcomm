@@ -1,0 +1,180 @@
+# ============================================================
+#  AutoCut 项目脚本 — MedComm 小红书竖屏
+# ============================================================
+
+project:
+  name: "MedComm 文献驱动科普 · 小红书"
+  output_file: "medcomm_promo_xiaohongshu.mp4"
+  notes: "主片约 90～120s；source_range 需按实际录屏替换。"
+
+meta:
+  platform: xiaohongshu
+  landing_page: "https://medcomm.linscio.com.cn"
+  memory_sentence: >-
+    MedComm 先把外部文献检索进库，再用 AI 做结构化文献分析，
+    最后才把证据绑定到章节去生成——科普不是从空白文档开始的。
+  disclaimer: >-
+    本内容为软件功能演示；科普与医疗表述不构成诊疗建议；
+    发布内容请以人工审核为准，并遵守所在单位与平台规则。
+
+publish:
+  title_options:
+    - "写医学科普前先做的两件事：文献检索 + 文献分析报告"
+    - "不是先写正文，是先 PubMed 再 AI 通读多篇（MedComm 工作流）"
+    - "怕科普被怼没证据？我的顺序：检索 → 结构化分析 → 再落笔"
+  hashtags:
+    - "#文献检索"
+    - "#PubMed"
+    - "#循证"
+    - "#医学科普"
+    - "#医生科研"
+    - "#MedComm"
+  cover_lines:
+    line1: "先检索 & 分析文献"
+    line2: "再写科普"
+
+# --- 素材源 ---
+source:
+  video: "medcomm_demo_xiaohongshu.mp4"
+
+# --- 输出配置 ---
+output:
+  resolution: [1080, 1920]
+  fps: 30
+  codec: "h264"
+  bitrate: "8M"
+  layout: "split"
+  split_ratio: 0.58
+
+# --- 配音配置 ---
+voice:
+  engine: "edge_tts"
+  name: "zh-CN-XiaoxiaoNeural"
+  speed: "+0%"
+  volume: "+0%"
+
+# --- 字幕全局配置 ---
+subtitle:
+  default_style: "highlight"
+  font: "PingFang SC"
+  font_size: 46
+  position: "bottom_center"
+  color: "#FFFFFF"
+  outline_color: "#000000"
+  outline_width: 2
+  highlight_color: "#FFD700"
+
+# --- BGM ---
+bgm:
+  file: "bgm_soft.mp3"
+  volume: 0.14
+
+# --- 转场 ---
+transition:
+  type: "fade"
+  duration: 0.35
+
+# --- 智能分析全局配置 ---
+analysis:
+  weight_preset: "balanced"
+
+# ============================================================
+#  分场景定义
+# ============================================================
+scenes:
+
+  - id: 1
+    label: "开场·共情"
+    source_range: "0:00-0:20"
+    ocr_keywords: ["科普", "文献"]
+    keyword_match: "any"
+    duration: 8
+    speed: 1.0
+    narration: "写科室科普，最怕网上抄两句——没文献，心里不踏实。"
+    subtitle_style: "highlight"
+    overlays:
+      - type: "text_card"
+        content: "没文献\n心里不踏实"
+        duration: 3
+        delay: 1
+        fade: 0.35
+        style:
+          bg_color: "#2C2C2C"
+          text_color: "#FFFFFF"
+          font_size: 56
+          position: "center"
+          border_radius: 14
+
+  - id: 2
+    label: "文献检索"
+    source_range: "0:20-2:00"
+    ocr_keywords: ["外部检索", "PubMed", "Semantic Scholar", "文献库"]
+    keyword_match: "any"
+    duration: 25
+    speed: 1.0
+    compress_mode: "hybrid"
+    max_speed: 2.8
+    anchor_keywords: ["外部检索", "PubMed", "流式", "入库"]
+    anchor_padding: 2
+    narration: |
+      MedComm 先让你在软件里直接检索 PubMed、CrossRef、Semantic Scholar，
+      好文章进本地文献库，以后随时调用。
+
+  - id: 3
+    label: "文献分析"
+    source_range: "2:00-5:30"
+    ocr_keywords: ["分析文献", "证据概览", "关键发现", "共识", "矛盾"]
+    keyword_match: "any"
+    duration: 45
+    speed: 1.4
+    compress_mode: "speed"
+    max_speed: 2.2
+    anchor_keywords: ["分析文献", "证据", "关键发现", "共识", "矛盾"]
+    anchor_padding: 1.5
+    narration: |
+      新建文章前两步我固定走：选支撑文献，
+      再让 AI 通读和结构化分析——证据强度、关键结论，
+      多篇之间一致还是打架，先搞清楚再写。
+    overlays:
+      - type: "text_label"
+        content: "先分析 · 再落笔"
+        position: "top_center"
+        duration: 4
+        delay: 3
+        fade: 0.35
+        style:
+          bg_color: "#1A73E8"
+          text_color: "#FFFFFF"
+          font_size: 30
+          padding: [8, 20]
+          border_radius: 20
+
+  - id: 4
+    label: "绑定与生成"
+    source_range: "5:30-7:30"
+    ocr_keywords: ["参考文献", "绑定", "AI 生成"]
+    keyword_match: "any"
+    duration: 20
+    speed: 1.1
+    narration: "然后才把结论和绑定文献交给写作；不是聊天框里现编常识。"
+
+  - id: 5
+    label: "收尾·品牌"
+    source_range: "7:30-8:30"
+    ocr_keywords: ["导出", "MedComm"]
+    keyword_match: "any"
+    duration: 22
+    speed: 1.0
+    narration: "检索、分析、写作一条链，MedComm。"
+    overlays:
+      - type: "text_card"
+        content: "检索 → 分析 → 写作\nMedComm"
+        duration: 5
+        delay: 12
+        fade: 0.45
+        style:
+          bg_color: "#1A73E8"
+          text_color: "#FFFFFF"
+          font_size: 48
+          position: "center"
+          border_radius: 14

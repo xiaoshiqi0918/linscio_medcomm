@@ -21,18 +21,7 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function switchUser(username: string) {
-    const name = String(username || '').trim()
-    if (!name) throw new Error('username 为空')
-    const res = await api.auth.login({ username: name })
-    const token = String(res.data?.token || '')
-    if (!token) throw new Error('token 为空')
-    setAuthToken(token)
-    try {
-      window.localStorage.setItem(AUTH_PREFERRED_USERNAME_KEY, name)
-    } catch {
-      // ignore
-    }
+  async function switchUser(_username?: string) {
     await refreshMe()
     window.dispatchEvent(new CustomEvent(AUTH_USER_CHANGED_EVENT, {
       detail: {

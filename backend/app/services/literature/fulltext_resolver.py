@@ -500,10 +500,11 @@ async def _download_and_index_pdf(paper_id: int, pdf_url: str, source: str) -> b
 #  元数据回填
 # ══════════════════════════════════════════════════════════════════════
 
-async def _backfill_paper_meta(paper_id: int, parsed: ParsedPaper | None, search_meta: dict | None) -> None:
-    """用解析结果回填 paper 的 abstract / keywords（仅在原值为空时）"""
+async def _backfill_paper_meta(paper_id: int, parsed: ParsedPaper | None, search_meta: dict | None) -> str | None:
+    """用解析结果回填 paper 的 abstract / keywords / doi（仅在原值为空时），返回发现的 DOI"""
     abstract = ""
     keywords: list[str] = []
+    discovered_doi: str | None = None
 
     if parsed:
         abstract = parsed.abstract
@@ -516,15 +517,17 @@ async def _backfill_paper_meta(paper_id: int, parsed: ParsedPaper | None, search
         kw_list = (search_meta.get("keywordList") or {}).get("keyword") or []
         keywords = [str(k).strip() for k in kw_list if str(k).strip()]
 
-    if not abstract and not keywords:
-        return
+    if search_meta:
+        discovered_doi = (search_meta.get("doi") or "").strip() or None
 
     async with AsyncSessionLocal() as db:
         p = await db.get(LiteraturePaper, paper_id)
         if not p:
-            return
+            return discovered_doi
+        changed = False
         if abstract and not (p.abstract or "").strip():
             p.abstract = abstract
+            changed = True
         if keywords:
             existing = []
             try:
@@ -533,7 +536,15 @@ async def _backfill_paper_meta(paper_id: int, parsed: ParsedPaper | None, search
                 pass
             if not existing:
                 p.keywords = json.dumps(keywords, ensure_ascii=False)
-        await db.commit()
+                changed = True
+        if discovered_doi and not (p.doi or "").strip():
+            p.doi = discovered_doi
+            logger.info("[fulltext] paper %d: backfilled DOI from Europe PMC: %s", paper_id, discovered_doi)
+            changed = True
+        if changed:
+            await db.commit()
+
+    return discovered_doi
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -605,7 +616,10 @@ async def resolve_fulltext_for_paper(paper_id: int) -> None:
         # ── Level 2: PMC OA XML ──────────────────────────────────
         logger.info("[fulltext] paper %d: trying PMC OA (pmid=%s, doi=%s)", paper_id, pmid, doi)
         parsed, search_meta = await _fetch_and_parse_oa(client, pmid, doi)
-        await _backfill_paper_meta(paper_id, parsed, search_meta)
+        discovered_doi = await _backfill_paper_meta(paper_id, parsed, search_meta)
+        if not doi and discovered_doi:
+            doi = discovered_doi
+            logger.info("[fulltext] paper %d: discovered DOI via Europe PMC: %s", paper_id, doi)
 
         if parsed and (parsed.sections or len(parsed.raw_text) >= 400):
             async with AsyncSessionLocal() as db:

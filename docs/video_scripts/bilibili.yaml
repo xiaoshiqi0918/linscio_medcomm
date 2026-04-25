@@ -1,0 +1,181 @@
+# ============================================================
+#  AutoCut 项目脚本 — MedComm B站横屏
+# ============================================================
+
+project:
+  name: "MedComm 文献驱动科普 · B站"
+  output_file: "medcomm_promo_bilibili.mp4"
+  notes: "总长约 10～14min；source_range 需按实际录屏替换；部分数据源需配置 API Key。"
+
+meta:
+  platform: bilibili
+  landing_page: "https://medcomm.linscio.com.cn"
+  memory_sentence: >-
+    MedComm 先把外部文献检索进库，再用 AI 做结构化文献分析，
+    最后才把证据绑定到章节去生成——科普不是从空白文档开始的。
+  disclaimer: >-
+    本内容为软件功能演示；科普与医疗表述不构成诊疗建议；
+    发布内容请以人工审核为准，并遵守所在单位与平台规则。
+  closing_interaction: "下一期深讲 PubMed 还是 Semantic Scholar（示例）"
+
+# --- 素材源 ---
+source:
+  video: "medcomm_demo_bilibili.mp4"
+
+# --- 输出配置 ---
+output:
+  resolution: [1920, 1080]
+  fps: 30
+  codec: "h264"
+  bitrate: "12M"
+  layout: "crop"
+  split_ratio: 0.65
+
+# --- 配音配置 ---
+voice:
+  engine: "edge_tts"
+  name: "zh-CN-YunxiNeural"
+  speed: "+0%"
+  volume: "+0%"
+
+# --- 字幕全局配置 ---
+subtitle:
+  default_style: "normal"
+  font: "PingFang SC"
+  font_size: 36
+  position: "bottom_center"
+  color: "#FFFFFF"
+  outline_color: "#000000"
+  outline_width: 2
+  highlight_color: "#FFD700"
+
+# --- BGM ---
+bgm:
+  file: "bgm_soft.mp3"
+  volume: 0.12
+
+# --- 转场 ---
+transition:
+  type: "fade"
+  duration: 0.4
+
+# --- 智能分析全局配置 ---
+analysis:
+  weight_preset: "slow_explain"
+
+# ============================================================
+#  分场景定义
+# ============================================================
+scenes:
+
+  - id: 1
+    label: "片头·观点"
+    source_range: "0:00-0:40"
+    ocr_keywords: ["MedComm", "文献", "科普"]
+    keyword_match: "any"
+    duration: 35
+    speed: 1.0
+    narration: |
+      很多医生朋友做科普，最怕的是没据可依、怕被杠。
+      MedComm 的差异不是又一个会写字的 AI，
+      而是文献检索、结构化文献分析、再写作的一条闭环。
+      部分数据源需要在设置里配置 API Key，和官方教程一致。
+    subtitle_style: "highlight"
+    overlays:
+      - type: "text_label"
+        content: "功能演示 · 非医疗建议"
+        position: "top_right"
+        duration: 35
+        delay: 0
+        fade: 0.3
+        style:
+          bg_color: "#333333"
+          text_color: "#FFFFFF"
+          font_size: 22
+          padding: [4, 12]
+          border_radius: 4
+
+  - id: 2
+    label: "文献支撑库·外部检索"
+    source_range: "0:40-4:00"
+    ocr_keywords: ["外部检索", "PubMed", "CrossRef", "Semantic Scholar", "DOI", "导入"]
+    keyword_match: "any"
+    duration: 180
+    speed: 1.0
+    compress_mode: "hybrid"
+    max_speed: 2.5
+    anchor_keywords: ["外部检索", "PubMed", "流式", "保存", "入库", "DOI"]
+    anchor_padding: 2.5
+    importance_threshold: 0.35
+    narration: |
+      先把证据放进你自己的本地文献库，这是后面分析和绑定的原材料。
+      演示外部检索：可以选 PubMed、CrossRef、Semantic Scholar，
+      设关键词和年份，流式看结果，把需要的文献保存入库。
+      也可以穿插用 DOI、PMID 添加，或者导入 RIS、PDF。
+
+  - id: 3
+    label: "新建文章·文献分析（核心）"
+    source_range: "4:00-9:30"
+    ocr_keywords: ["分析文献", "核心主题", "证据", "关键发现", "共识", "矛盾"]
+    keyword_match: "any"
+    duration: 300
+    speed: 1.0
+    compress_mode: "hybrid"
+    max_speed: 2.0
+    anchor_keywords: ["分析文献", "核心研究主题", "证据概览", "关键发现", "一致性", "共识"]
+    anchor_padding: 2
+    importance_threshold: 0.38
+    narration: |
+      新建文章时，先选多篇支撑文献，再跑分析文献。
+      这一步相当于写前做一个小型的证据综合：
+      看核心研究主题、证据等级、证据概览、关键发现，
+      还有多篇文献之间是一致、矛盾还是互补。
+      后面段落生成，是把这套分析一起考虑进去，而不是空口编。
+
+  - id: 4
+    label: "编辑区·补检索与绑定"
+    source_range: "9:30-11:30"
+    ocr_keywords: ["检索支撑文献", "参考文献", "绑定", "章节"]
+    keyword_match: "any"
+    duration: 120
+    speed: 1.0
+    narration: |
+      写到一半还可以用检索支撑文献再补一篇。
+      在参考文献绑定里，可以绑到当前章节或整篇，
+      绑定范围会影响注入给模型的上下文。
+
+  - id: 5
+    label: "生成·改写·导出"
+    source_range: "11:30-14:00"
+    ocr_keywords: ["AI 生成", "AIGC", "导出", "孤儿"]
+    keyword_match: "any"
+    duration: 150
+    speed: 1.0
+    narration: |
+      AI 生成时，会把主题和绑定文献、前面的分析串起来。
+      成稿后可以再过改写、段落 AIGC 检测。
+      导出前如果有孤儿引用之类，系统会提示，记得核对。
+
+  - id: 6
+    label: "结尾·总结与互动"
+    source_range: "14:00-15:00"
+    ocr_keywords: ["MedComm", "总结"]
+    keyword_match: "any"
+    duration: 50
+    speed: 1.0
+    narration: |
+      总结一下：检索、分析、写作，是 MedComm 科普工作流的三角。
+      安装与授权以官网说明为准。
+      评论区告诉我，你更想看我下一期深讲 PubMed 还是 Semantic Scholar。
+    overlays:
+      - type: "text_card"
+        content: "medcomm.linscio.com.cn"
+        duration: 6
+        delay: 38
+        fade: 0.5
+        style:
+          bg_color: "#1A73E8"
+          text_color: "#FFFFFF"
+          font_size: 40
+          position: "center"
+          border_radius: 12

@@ -7,6 +7,7 @@ import re
 import httpx
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+_BOOL_OP_RE = re.compile(r"\b(AND|OR|NOT)\b", re.IGNORECASE)
 
 _MEDICAL_ZH_EN: dict[str, str] = {
     "糖尿病": "diabetes mellitus",
@@ -248,7 +249,8 @@ class PubMedSource:
                 flush=True,
             )
 
-        if not already_optimized:
+        has_bool_ops = bool(_BOOL_OP_RE.search(effective_query))
+        if not already_optimized and not has_bool_ops:
             if progress_cb:
                 await progress_cb("优化检索式", 22)
             optimized = await _optimize_query_for_pubmed(effective_query)
@@ -266,6 +268,11 @@ class PubMedSource:
                         flush=True,
                     )
                     effective_query = normalized
+        elif has_bool_ops:
+            print(
+                f"[PubMed] Query already has boolean operators, skipping LLM optimization: '{effective_query}'",
+                flush=True,
+            )
 
         q = self._build_query(effective_query, year_from, year_to, pub_types, language)
         print(f"[PubMed] Final query: {q}", flush=True)
@@ -280,7 +287,7 @@ class PubMedSource:
         if self.api_key:
             params["api_key"] = self.api_key
 
-        async with httpx.AsyncClient(timeout=12.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             last_err: Exception | None = None
             for attempt in range(2):
                 try:
@@ -298,13 +305,13 @@ class PubMedSource:
                         flush=True,
                     )
                     if not pmids:
+                        print(f"[PubMed] No PMIDs returned for query: {q}", flush=True)
                         return []
                     if not qt:
                         print(
-                            "[PubMed] empty querytranslation — query was not understood, returning 0 results",
+                            f"[PubMed] empty querytranslation but {len(pmids)} PMIDs found, continuing",
                             flush=True,
                         )
-                        return []
                     if progress_cb:
                         await progress_cb("获取元数据", 70)
                     return await self._fetch_summaries(client, pmids)

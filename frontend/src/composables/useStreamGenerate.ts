@@ -4,7 +4,9 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
-const BASE_URL = 'http://127.0.0.1:8765'
+import { API_BASE } from '@/api'
+
+const BASE_URL = API_BASE
 
 export function useStreamGenerate() {
   const generating = ref(false)

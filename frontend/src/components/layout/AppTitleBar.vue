@@ -6,51 +6,88 @@
       <span class="brand">聆思恪</span>
     </div>
     <div class="right no-drag">
-      <el-dropdown trigger="click" @command="onCommand">
-        <span class="user-chip">
-          {{ authStore.user?.display_name || '未登录' }}
-        </span>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <!-- API Key 状态 -->
-            <el-dropdown-item disabled class="key-status-item">
-              <span class="key-label">PubMed (NCBI)</span>
-              <span :class="['key-badge', ncbiMask ? 'configured' : 'empty']">
-                {{ ncbiMask || '未配置' }}
-              </span>
-            </el-dropdown-item>
-            <el-dropdown-item command="configNcbi">配置 NCBI Key</el-dropdown-item>
-            <el-dropdown-item command="applyNcbi" class="apply-link-item">申请 NCBI API Key ↗</el-dropdown-item>
+      <!-- SaaS 模式 -->
+      <template v-if="!isElectron">
+        <el-dropdown trigger="click" @command="onCommand">
+          <span class="user-chip">
+            {{ saasDisplayName || '未登录' }}
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item disabled class="key-status-item">
+                <span class="key-label">积分余额</span>
+                <span class="key-badge configured">{{ saasCredits }}</span>
+              </el-dropdown-item>
+              <el-dropdown-item command="settings" divided>设置</el-dropdown-item>
+              <el-dropdown-item command="saasLogout">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </template>
+      <!-- 桌面模式 -->
+      <template v-else>
+        <el-dropdown trigger="click" @command="onCommand">
+          <span class="user-chip">
+            {{ authStore.user?.display_name || '未登录' }}
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item disabled class="key-status-item">
+                <span class="key-label">PubMed (NCBI)</span>
+                <span :class="['key-badge', ncbiMask ? 'configured' : 'empty']">
+                  {{ ncbiMask || '未配置' }}
+                </span>
+              </el-dropdown-item>
+              <el-dropdown-item command="configNcbi">配置 NCBI Key</el-dropdown-item>
+              <el-dropdown-item command="applyNcbi" class="apply-link-item">申请 NCBI API Key ↗</el-dropdown-item>
 
-            <el-dropdown-item disabled class="key-status-item" divided>
-              <span class="key-label">Semantic Scholar</span>
-              <span :class="['key-badge', s2Mask ? 'configured' : 'empty']">
-                {{ s2Mask || '未配置' }}
-              </span>
-            </el-dropdown-item>
-            <el-dropdown-item command="configS2">配置 S2 Key</el-dropdown-item>
-            <el-dropdown-item command="applyS2" class="apply-link-item">申请 S2 API Key ↗</el-dropdown-item>
+              <el-dropdown-item disabled class="key-status-item" divided>
+                <span class="key-label">Semantic Scholar</span>
+                <span :class="['key-badge', s2Mask ? 'configured' : 'empty']">
+                  {{ s2Mask || '未配置' }}
+                </span>
+              </el-dropdown-item>
+              <el-dropdown-item command="configS2">配置 S2 Key</el-dropdown-item>
+              <el-dropdown-item command="applyS2" class="apply-link-item">申请 S2 API Key ↗</el-dropdown-item>
 
-            <!-- 用户操作 -->
-            <el-dropdown-item command="switch" divided>切换用户</el-dropdown-item>
-            <el-dropdown-item command="logout">退出登录</el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
+              <el-dropdown-item command="switch" divided>切换用户</el-dropdown-item>
+              <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </template>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { AUTH_USER_CHANGED_EVENT, useAuthStore } from '@/stores/auth'
-import { api } from '@/api'
+import { api, http, setAuthToken } from '@/api'
 
+const router = useRouter()
 const authStore = useAuthStore()
+const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
 const ncbiMask = ref('')
 const s2Mask = ref('')
 let lastUserChangedToastAt = 0
+
+const saasDisplayName = ref('')
+const saasCredits = ref(0)
+
+async function loadSaasInfo() {
+  if (isElectron) return
+  try {
+    const res = await http.get('/api/v1/auth/me')
+    saasDisplayName.value = res.data?.display_name || '用户'
+  } catch { /* ignore */ }
+  try {
+    const res = await http.get('/api/v1/credits/balance')
+    saasCredits.value = res.data?.total_available ?? 0
+  } catch { /* ignore */ }
+}
 
 async function refreshSummary() {
   try {
@@ -64,8 +101,12 @@ async function refreshSummary() {
 }
 
 onMounted(async () => {
-  await authStore.refreshMe()
-  await refreshSummary()
+  if (isElectron) {
+    await authStore.refreshMe()
+    await refreshSummary()
+  } else {
+    await loadSaasInfo()
+  }
   window.addEventListener(AUTH_USER_CHANGED_EVENT, onAuthUserChanged as EventListener)
 })
 
@@ -88,6 +129,22 @@ async function onAuthUserChanged(e: Event) {
 }
 
 async function onCommand(cmd: string) {
+  if (cmd === 'settings') {
+    router.push('/settings').catch(() => {})
+    return
+  }
+  if (cmd === 'saasLogout') {
+    try {
+      await ElMessageBox.confirm('确认退出当前账号？', '退出登录', {
+        confirmButtonText: '退出', cancelButtonText: '取消', type: 'warning',
+      })
+      try { await http.post('/api/v1/auth/logout') } catch { /* ignore */ }
+      setAuthToken(null)
+      router.push('/login').catch(() => {})
+      ElMessage.success('已退出')
+    } catch { /* user cancel */ }
+    return
+  }
   if (cmd === 'configNcbi') {
     try {
       const { value } = await ElMessageBox.prompt(
@@ -168,21 +225,21 @@ async function onCommand(cmd: string) {
 
 <style scoped>
 .title-bar {
-  height: 36px;
-  min-height: 36px;
+  height: 48px;
+  min-height: 48px;
   background: #1a1a2e;
   color: rgba(255,255,255,0.9);
   display: flex;
   align-items: center;
-  padding: 0 1rem;
-  font-size: 0.9rem;
+  padding: 0 1.25rem;
+  font-size: 1.05rem;
   -webkit-app-region: drag;
   justify-content: space-between;
 }
 .left { display: flex; align-items: center; }
-.app-name { font-weight: 600; }
+.app-name { font-weight: 600; font-size: 1.1rem; }
 .divider { margin: 0 0.5rem; opacity: 0.6; }
-.brand { font-size: 0.8em; opacity: 0.8; }
+.brand { font-size: 0.85em; opacity: 0.8; }
 .right { display: flex; align-items: center; }
 .no-drag { -webkit-app-region: no-drag; }
 .user-chip {

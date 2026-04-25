@@ -2,53 +2,216 @@
   <div class="settings page-container page-cards">
     <h2>设置</h2>
 
-    <!-- 账户与关于 -->
-    <el-card class="settings-card">
-      <template #header>账户与关于</template>
-      <div class="about-section" style="margin-bottom: 12px;">
-        <div class="about-row"><span class="label">本地用户</span> {{ authStore.user?.display_name || '未登录' }}{{ authStore.user ? `（ID: ${authStore.user.id}）` : '' }}</div>
-        <div class="about-row" style="gap: 8px;">
-          <el-button v-if="!authStore.user" size="small" type="primary" @click="loginLocalUser">登录本地</el-button>
-          <el-button v-else size="small" @click="switchUser">切换本地用户</el-button>
-          <el-button v-if="authStore.user" size="small" type="warning" @click="logout">退出本地</el-button>
-        </div>
+    <!-- SaaS 模式：账户与积分 -->
+    <el-card v-if="!isElectronEnv" class="settings-card">
+      <template #header>账户信息</template>
+      <div class="about-section">
+        <div class="about-row"><span class="label">用户</span> {{ saasUser?.display_name || '未登录' }}</div>
+        <div class="about-row"><span class="label">手机号</span> {{ saasUser?.phone || '-' }}</div>
+        <div class="about-row"><span class="label">注册时间</span> {{ saasUser?.created_at ? new Date(saasUser.created_at).toLocaleDateString('zh-CN') : '-' }}</div>
       </div>
-      <div class="about-section" style="margin-bottom: 12px;">
-        <div class="about-row"><span class="label">门户授权</span>
-          <span v-if="licenseStore.isValid" style="color: #16a34a;">已激活</span>
-          <span v-else-if="licenseStore.base" style="color: #dc2626;">已过期</span>
-          <span v-else style="color: #9ca3af;">未绑定</span>
-          <span v-if="portalEmail" style="margin-left: 8px; color: #374151;">{{ portalEmail }}</span>
-          <span v-if="licenseStore.expiresAt" style="margin-left: 8px; color: #6b7280;">
-            到期 {{ formatExpiry(licenseStore.expiresAt) }}
+      <div class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+        <div class="about-row"><span class="label">积分余额</span>
+          <span style="font-weight: 600; color: #1e40af;">{{ saasCredits.total_available ?? 0 }}</span>
+          <span style="margin-left: 8px; color: #6b7280; font-size: 0.85rem;">
+            （充值 {{ saasCredits.credits ?? 0 }} + 赠送 {{ saasCredits.gift_credits ?? 0 }}）
           </span>
         </div>
-        <div v-if="!licenseStore.isValid && !licenseStore.base" class="about-row" style="gap: 8px; flex-wrap: wrap; align-items: flex-end;">
-          <el-input v-model="portalEmailInput" placeholder="门户邮箱" size="small" style="width: 180px;" />
-          <el-input v-model="portalPasswordInput" type="password" placeholder="密码" size="small" style="width: 160px;" show-password />
-          <el-button size="small" type="primary" :loading="portalLoginLoading" @click="portalLogin">登录绑定</el-button>
-          <el-button size="small" @click="goPortal">去门户注册</el-button>
+        <div v-if="saasCredits.gift_credits_expire_at" class="about-row">
+          <span class="label">赠送到期</span> {{ new Date(saasCredits.gift_credits_expire_at).toLocaleDateString('zh-CN') }}
         </div>
-        <div v-else class="about-row" style="gap: 8px;">
-          <el-button size="small" @click="goPortal">前往门户</el-button>
-          <el-button v-if="hasElectronKeychain" size="small" type="danger" @click="deactivateLicense">解除授权绑定</el-button>
+        <div class="about-row"><span class="label">累计充值</span> {{ saasCredits.total_recharged ?? 0 }} 积分</div>
+        <div class="about-row"><span class="label">累计消耗</span> {{ saasCredits.total_consumed ?? 0 }} 积分</div>
+        <div class="about-row" style="margin-top: 8px;">
+          <el-button type="primary" size="small" @click="showRechargeDialog = true">充值积分</el-button>
         </div>
-        <div v-if="portalLoginError" class="about-row" style="color: #dc2626; font-size: 0.85rem;">{{ portalLoginError }}</div>
       </div>
-      <div v-if="settingsStore.isBasic" class="about-section">
-        <div class="about-row"><span class="label">当前版本</span> 基础版</div>
-        <div class="about-row"><span class="label">学科配置</span> 通用预置</div>
-        <div class="about-row"><span class="label">内容更新</span> 软件版本更新时同步</div>
-        <el-button type="primary" text size="small" @click="openMedcommSite">了解定制版</el-button>
+      <div class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+        <div class="about-row" style="align-items: center;">
+          <span class="label">推广积分</span>
+          <span style="font-weight: 600; color: #059669;">{{ saasCredits.promo?.promo_credits ?? 0 }}</span>
+          <el-tag size="small" type="success" style="margin-left: 8px;">可折现 / 可兑换授权码</el-tag>
+        </div>
+        <div class="about-row" style="color: #6b7280; font-size: 0.85rem;">
+          折现比例：1 积分 = {{ saasCredits.promo?.cash_rate ?? 0.1 }} 元 · 当前可折现约
+          <span style="font-weight: 600; color: #059669;">¥{{ saasCredits.promo?.cash_value_yuan ?? 0 }}</span>
+        </div>
+        <div v-if="saasCredits.promo?.promo_credits_expire_at" class="about-row" style="font-size: 0.85rem; color: #6b7280;">
+          推广积分到期：{{ new Date(saasCredits.promo.promo_credits_expire_at).toLocaleDateString('zh-CN') }}
+        </div>
+        <div class="promo-rules" style="margin-top: 8px; font-size: 0.85rem; color: #6b7280; line-height: 1.8;">
+          <div style="font-weight: 600; color: #374151; margin-bottom: 4px;">获取方式：邀请好友注册</div>
+          <div>· 好友注册成功：+5 推广积分（一次性）</div>
+          <div>· 好友每次充值（≥50元）：返充值金额 10% 的推广积分（不含赠送部分）</div>
+          <div style="font-weight: 600; color: #374151; margin-top: 8px; margin-bottom: 4px;">使用方式</div>
+          <div>· 折现提取（最低 {{ saasCredits.promo?.min_withdraw_credits ?? 100 }} 积分）</div>
+          <div>· 兑换客户端下载授权码（10000 推广积分 / 个，独立计算）</div>
+          <div>· 也可直接用于抵扣生成消耗</div>
+        </div>
       </div>
-      <div v-else class="about-section">
-        <div class="about-row"><span class="label">当前版本</span> {{ settingsStore.license.customSpecialties.join('、') || '定制' }}定制版</div>
-        <div class="about-row"><span class="label">学科配置</span> {{ settingsStore.license.customSpecialties.join(' · ') || '-' }}</div>
-        <div v-if="settingsStore.license.serviceExpiry" class="about-row"><span class="label">服务到期</span> {{ settingsStore.license.serviceExpiry }}</div>
-        <div class="about-row"><span class="label">内容更新</span> 季度更新 · 下次更新 {{ settingsStore.license.nextContentUpdate || '-' }}</div>
-        <el-button type="primary" text size="small" @click="openContact">联系服务支持</el-button>
+
+      <div class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+        <div style="font-weight: 600; color: #374151; margin-bottom: 8px;">兑换客户端授权码</div>
+        <div style="display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap;">
+          <div class="redeem-card">
+            <div class="redeem-title">积分兑换</div>
+            <div class="redeem-price">6000 积分</div>
+            <div class="redeem-desc">充值积分 + 赠送积分均可使用</div>
+            <el-button size="small" type="primary" @click="redeemLicense('credits')" :loading="redeemingLicense">
+              兑换
+            </el-button>
+          </div>
+          <div class="redeem-card">
+            <div class="redeem-title">推广积分兑换</div>
+            <div class="redeem-price">10000 推广积分</div>
+            <div class="redeem-desc">仅使用推广积分兑换</div>
+            <el-button size="small" type="success" @click="redeemLicense('promo_credits')" :loading="redeemingLicense">
+              兑换
+            </el-button>
+          </div>
+        </div>
+        <div v-if="redeemedCode" class="redeemed-result" style="margin-top: 12px;">
+          <el-alert type="success" :closable="false">
+            <template #title>
+              兑换成功！授权码：<span style="font-family: monospace; font-weight: 700; user-select: all;">{{ redeemedCode }}</span>
+              <el-button text size="small" style="margin-left: 8px;" @click="copyCode(redeemedCode)">复制</el-button>
+            </template>
+          </el-alert>
+        </div>
+        <div v-if="myLicenseCodes.length > 0" style="margin-top: 12px;">
+          <div style="font-size: 0.85rem; color: #6b7280; margin-bottom: 4px;">我的授权码</div>
+          <el-table :data="myLicenseCodes" size="small" stripe style="width: 100%;">
+            <el-table-column prop="code" label="授权码" width="200">
+              <template #default="{ row }">
+                <span style="font-family: monospace; font-size: 0.8rem; user-select: all;">{{ row.code }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="80">
+              <template #default="{ row }">
+                <el-tag :type="row.is_used ? 'info' : 'success'" size="small">{{ row.is_used ? '已使用' : '未使用' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="兑换时间" width="140">
+              <template #default="{ row }">{{ new Date(row.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</template>
+            </el-table-column>
+          </el-table>
+        </div>
       </div>
-      <div v-if="isElectronEnv" class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+      <div class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span class="label" style="font-weight: 600;">充值记录</span>
+          <el-button text size="small" @click="loadOrderHistory" :loading="loadingOrders">
+            {{ loadingOrders ? '加载中' : '刷新' }}
+          </el-button>
+        </div>
+        <el-table v-if="orderHistory.length > 0" :data="orderHistory" size="small" stripe style="width: 100%;">
+          <el-table-column prop="order_no" label="订单号" width="180">
+            <template #default="{ row }">
+              <span style="font-family: monospace; font-size: 0.8rem;">{{ row.order_no.slice(0, 12) }}...</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="amount_yuan" label="金额" width="80">
+            <template #default="{ row }">¥{{ row.amount_yuan }}</template>
+          </el-table-column>
+          <el-table-column prop="credits_to_add" label="积分" width="80">
+            <template #default="{ row }">{{ row.credits_to_add + row.bonus_credits }}</template>
+          </el-table-column>
+          <el-table-column prop="status" label="状态" width="100">
+            <template #default="{ row }">
+              <el-tag :type="orderStatusType(row.status)" size="small">{{ orderStatusLabel(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="created_at" label="时间" width="140">
+            <template #default="{ row }">
+              {{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-' }}
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-else style="color: #9ca3af; font-size: 0.85rem;">暂无充值记录</div>
+        <div v-if="orderTotal > orderHistory.length" style="text-align: center; margin-top: 8px;">
+          <el-button text size="small" @click="loadMoreOrders">加载更多</el-button>
+        </div>
+      </div>
+      <div class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <span class="label" style="font-weight: 600;">积分流水明细</span>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <el-select v-model="usageFilter" placeholder="全部类型" size="small" clearable style="width: 140px;">
+              <el-option label="全部" value="" />
+              <el-option label="生成消耗" value="generation" />
+              <el-option label="文献分析" value="literature_analysis" />
+              <el-option label="导出" value="export" />
+              <el-option label="充值" value="recharge" />
+              <el-option label="中断退还" value="refund" />
+            </el-select>
+            <el-date-picker
+              v-model="usageMonth"
+              type="month"
+              placeholder="按月筛选"
+              size="small"
+              format="YYYY-MM"
+              value-format="YYYY-MM"
+              style="width: 140px;"
+            />
+            <el-button text size="small" @click="loadUsageLogs" :loading="loadingUsage">刷新</el-button>
+            <el-button text size="small" type="success" @click="exportUsageCSV">导出 CSV</el-button>
+          </div>
+        </div>
+        <el-table v-if="usageLogs.length > 0" :data="usageLogs" size="small" stripe style="width: 100%;">
+          <el-table-column prop="created_at" label="时间" width="150">
+            <template #default="{ row }">
+              {{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="operation" label="操作" width="140">
+            <template #default="{ row }">
+              <span>{{ operationLabel(row.operation) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="cost" label="积分变动" width="100">
+            <template #default="{ row }">
+              <span :style="{ color: parseFloat(row.cost) > 0 ? '#ef4444' : '#059669', fontWeight: 600 }">
+                {{ parseFloat(row.cost) > 0 ? '-' + row.cost : '+' + Math.abs(parseFloat(row.cost)) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="关联" min-width="160">
+            <template #default="{ row }">
+              <span v-if="row.article_id" style="font-size: 0.8rem; color: #6b7280;">
+                文章#{{ row.article_id }}
+                <span v-if="row.section_id"> / 章节#{{ row.section_id }}</span>
+              </span>
+              <span v-else-if="row.meta?.session_id" style="font-size: 0.8rem; color: #6b7280;">
+                会话 {{ row.meta.session_id.slice(0, 8) }}...
+              </span>
+              <span v-else-if="row.meta?.reason" style="font-size: 0.8rem; color: #6b7280;">
+                {{ row.meta.reason }}
+              </span>
+              <span v-else style="font-size: 0.8rem; color: #d1d5db;">-</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-else-if="!loadingUsage" style="color: #9ca3af; font-size: 0.85rem;">暂无积分流水记录</div>
+        <div v-if="usageTotal > usageLogs.length" style="text-align: center; margin-top: 8px;">
+          <el-button text size="small" @click="loadMoreUsageLogs">加载更多</el-button>
+        </div>
+      </div>
+      <div class="about-section" style="margin-top: 12px;">
+        <el-button type="warning" size="small" @click="saasLogout">退出登录</el-button>
+      </div>
+    </el-card>
+
+    <!-- 桌面模式：账户与关于 -->
+    <el-card v-if="isElectronEnv" class="settings-card">
+      <template #header>账户与关于</template>
+      <div class="about-section" style="margin-bottom: 12px;">
+        <div class="about-row"><span class="label">当前用户</span> {{ authStore.user?.display_name || '未登录' }}</div>
+        <div class="about-row"><span class="label">手机号</span> {{ authStore.user?.phone || '-' }}</div>
+        <div class="about-row" style="gap: 8px; margin-top: 4px;">
+          <el-button v-if="authStore.user" size="small" type="warning" @click="logout">退出登录</el-button>
+        </div>
+      </div>
+      <div class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
         <div class="about-row"><span class="label">软件版本</span> v{{ appVersion }}</div>
         <div class="about-row" style="gap: 8px; align-items: center; flex-wrap: wrap;">
           <span class="label">软件更新</span>
@@ -58,40 +221,34 @@
           <span v-else style="color: #9ca3af;">当前已是最新版本</span>
           <el-button size="small" :loading="checkingUpdate" @click="manualCheckUpdate">检查更新</el-button>
 
-          <!-- 阶段一：有更新可下载 -->
           <el-button
             v-if="licenseStore.hasSoftwareUpdate && licenseStore.updateDownloadStatus === 'idle' && hasInAppUpdate"
             size="small" type="primary"
             @click="startInAppUpdate"
           >立即更新</el-button>
 
-          <!-- 回退：无应用内更新信息时走浏览器 -->
           <el-button
             v-if="licenseStore.hasSoftwareUpdate && licenseStore.updateDownloadStatus === 'idle' && !hasInAppUpdate && licenseStore.softwareUpdate?.download_url"
             size="small"
             @click="downloadUpdateLegacy"
           >浏览器下载</el-button>
 
-          <!-- 阶段二：下载中 -->
           <template v-if="licenseStore.updateDownloadStatus === 'downloading'">
             <el-button size="small" type="danger" plain @click="cancelUpdate">取消</el-button>
           </template>
 
-          <!-- 阶段三：下载完成 -->
           <el-button
             v-if="licenseStore.updateDownloadStatus === 'downloaded'"
             size="small" type="success"
             @click="installUpdate"
           >安装并重启</el-button>
 
-          <!-- 错误 -->
           <el-button
             v-if="licenseStore.updateDownloadStatus === 'error'"
             size="small"
             @click="startInAppUpdate"
           >重试</el-button>
         </div>
-        <!-- 进度条 -->
         <div v-if="licenseStore.updateDownloadStatus === 'downloading'" style="margin-top: 8px;">
           <el-progress :percentage="licenseStore.updateDownloadProgress" :stroke-width="6" />
           <span style="font-size: 12px; color: #9ca3af;">正在下载更新...</span>
@@ -105,8 +262,87 @@
       </div>
     </el-card>
 
-    <!-- 内容配置 -->
-    <el-card class="settings-card">
+    <!-- SaaS 模式：客户端下载 -->
+    <el-card v-if="!isElectronEnv" class="settings-card client-promo-card">
+      <template #header>下载客户端</template>
+      <p class="promo-desc">下载 LinScio MedComm 桌面客户端，解锁完整创作体验：</p>
+      <div class="promo-features">
+        <div class="promo-feature-item"><span class="promo-icon">🎨</span><span><b>医学绘图</b> — 文生图 / 图生图，AI 辅助生成医学插图</span></div>
+        <div class="promo-feature-item"><span class="promo-icon">📦</span><span><b>学科包</b> — 定制学科词典、科普示例库，内容由 LinScio 专业团队维护更新</span></div>
+        <div class="promo-feature-item"><span class="promo-icon">📖</span><span><b>医学词典管理</b> — 自定义术语表，生成时自动规范用词</span></div>
+        <div class="promo-feature-item"><span class="promo-icon">📝</span><span><b>科普示例库</b> — 参考优质科普范例，提升内容质量</span></div>
+        <div class="promo-feature-item"><span class="promo-icon">🔒</span><span><b>本地数据安全</b> — 所有数据存储在本地，隐私无忧</span></div>
+        <div class="promo-feature-item"><span class="promo-icon">🔑</span><span><b>自选 AI 模型</b> — 支持 OpenAI / DeepSeek / Gemini 等 10+ 模型，自主配置 API Key</span></div>
+        <div class="promo-feature-item"><span class="promo-icon">💾</span><span><b>数据备份恢复</b> — 一键完整备份与恢复，数据不丢失</span></div>
+      </div>
+
+      <div v-if="!clientProductInfo" style="margin-top: 16px; color: #9ca3af; font-size: 0.85rem;">
+        加载产品信息中...
+      </div>
+      <div v-else style="margin-top: 16px;">
+        <div style="font-weight: 600; color: #374151; margin-bottom: 8px;">
+          {{ clientProductInfo.name || 'LinScio MedComm' }}
+          <el-tag size="small" style="margin-left: 6px;">v{{ clientProductInfo.latest_version }}</el-tag>
+        </div>
+        <div v-if="!hasLicenseCode" class="download-notice">
+          <el-alert type="warning" :closable="false" show-icon>
+            <template #title>您还没有客户端授权码，请先在上方「兑换客户端授权码」中兑换后再下载。</template>
+          </el-alert>
+        </div>
+        <div v-else class="download-platforms">
+          <div
+            v-for="plat in clientPlatforms"
+            :key="plat.id"
+            class="download-plat-card"
+            :class="{ 'download-plat-card--disabled': plat.status === 'suspended' }"
+          >
+            <div class="plat-icon">{{ plat.icon }}</div>
+            <div class="plat-name">{{ plat.name }}</div>
+            <el-button
+              v-if="plat.status !== 'suspended'"
+              type="primary"
+              size="small"
+              :loading="downloadingPlatform === plat.id"
+              @click="handleDownloadClient(plat.id)"
+            >
+              下载
+            </el-button>
+            <span v-else style="font-size: 12px; color: #9ca3af;">暂未开放</span>
+          </div>
+        </div>
+        <div v-if="clientDownloadUrl" style="margin-top: 12px;">
+          <el-alert type="success" :closable="false">
+            <template #title>
+              下载已开始。如果没有自动下载，<a :href="clientDownloadUrl" target="_blank" style="color: #1e40af;">点击此处</a>
+            </template>
+          </el-alert>
+        </div>
+        <div v-if="clientDownloadError" style="margin-top: 12px;">
+          <el-alert type="error" :closable="false">
+            <template #title>{{ clientDownloadError }}</template>
+          </el-alert>
+        </div>
+
+        <!-- 下载记录 -->
+        <div v-if="downloadHistory.length > 0" style="margin-top: 16px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+          <div style="font-weight: 600; color: #374151; margin-bottom: 8px; font-size: 0.9rem;">下载记录</div>
+          <el-table :data="downloadHistory" size="small" stripe style="width: 100%;">
+            <el-table-column prop="version" label="版本" width="100">
+              <template #default="{ row }"><span style="font-family: monospace;">v{{ row.version }}</span></template>
+            </el-table-column>
+            <el-table-column prop="platform" label="平台" width="180">
+              <template #default="{ row }">{{ platformLabels[row.platform]?.name || row.platform }}</template>
+            </el-table-column>
+            <el-table-column prop="created_at" label="下载时间" width="160">
+              <template #default="{ row }">{{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-' }}</template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+    </el-card>
+
+    <!-- 桌面模式：内容配置 -->
+    <el-card v-if="isElectronEnv" class="settings-card">
       <template #header>内容配置</template>
       <div v-if="settingsStore.isBasic" class="content-config">
         <div class="config-row">
@@ -152,11 +388,18 @@
       <template #header>
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <span>学科包</span>
-          <el-button size="small" text type="primary" @click="goPortalSpecialties">前往门户选购</el-button>
+          <el-button size="small" type="primary" @click="triggerPackUpload">
+            <el-icon style="margin-right: 4px;"><Upload /></el-icon>上传学科包
+          </el-button>
+          <input ref="packFileInput" type="file" accept=".zip,.linscio" style="display: none;" @change="handlePackFileSelected" />
         </div>
       </template>
-      <div v-if="!packList.length && !packLoading" class="pack-empty">
-        <p style="color:#9ca3af;">暂无学科包。前往门户网站选购后，软件将自动识别并提示安装。</p>
+      <div v-if="packUploading" style="padding: 12px 0;">
+        <el-progress :percentage="packUploadPercent" :stroke-width="6" />
+        <span style="font-size: 0.85rem; color: #6b7280; margin-top: 4px; display: block;">{{ packUploadDetail }}</span>
+      </div>
+      <div v-if="!packList.length && !packLoading && !packUploading" class="pack-empty">
+        <p style="color:#9ca3af;">暂无学科包。点击「上传学科包」导入 .zip 或 .linscio 格式的学科包文件。</p>
       </div>
       <div v-if="packLoading" style="text-align:center;padding:1rem;color:#9ca3af;">加载中...</div>
       <div v-for="pack in packList" :key="pack.specialty_id" class="pack-item">
@@ -164,7 +407,6 @@
           <span class="pack-name">{{ pack.name || pack.specialty_id }}</span>
           <el-tag v-if="pack.status === 'installed'" type="success" size="small">已安装 v{{ pack.local_version }}</el-tag>
           <el-tag v-else-if="pack.status === 'downloading'" type="warning" size="small">安装中</el-tag>
-          <el-tag v-else-if="pack.status === 'update_available'" type="" size="small">有更新 v{{ pack.remote_version }}</el-tag>
           <el-tag v-else type="info" size="small">未安装</el-tag>
         </div>
         <div v-if="pack.status === 'installed'" class="pack-stats">
@@ -178,20 +420,10 @@
           />
           <span class="pack-progress-detail">{{ downloadingPack.detail }}</span>
         </div>
-        <div class="pack-actions">
-          <el-button
-            v-if="pack.status === 'not_installed' || pack.status === 'update_available'"
-            type="primary" size="small"
-            :loading="downloadingPack?.specialty_id === pack.specialty_id && !['done','error'].includes(downloadingPack?.status || '')"
-            @click="installPack(pack)"
-          >
-            {{ pack.status === 'update_available' ? '更新' : '安装' }}
-          </el-button>
-        </div>
       </div>
     </el-card>
 
-    <el-card class="settings-card">
+    <el-card v-if="isElectronEnv" class="settings-card">
       <template #header>API Key（Keychain 安全存储）</template>
       <el-form label-width="170px" class="api-key-form">
         <div class="api-group-title">文本生成</div>
@@ -274,7 +506,7 @@
         </el-form-item>
       </el-form>
     </el-card>
-    <el-card class="settings-card">
+    <el-card v-if="isElectronEnv" class="settings-card">
       <template #header>模型配置</template>
       <el-form label-width="140px">
         <el-form-item label="默认模型">
@@ -300,7 +532,7 @@
         </el-form-item>
       </el-form>
     </el-card>
-    <el-card class="settings-card">
+    <el-card v-if="isElectronEnv" class="settings-card">
       <template #header>隐私与调试</template>
       <el-form label-width="220px">
         <el-form-item label="记录网页采集历史">
@@ -334,14 +566,83 @@
       </el-form>
     </el-card>
     <el-button @click="$router.back()" style="margin-top: 1rem;">返回</el-button>
+
+    <!-- 充值弹窗 -->
+    <el-dialog v-model="showRechargeDialog" title="积分充值" width="520px" :close-on-click-modal="false">
+      <div v-if="!payingOrder">
+        <div class="recharge-plans">
+          <div
+            v-for="plan in rechargePlans"
+            :key="plan.amount_yuan"
+            :class="['plan-card', { active: selectedPlan === plan.amount_yuan }]"
+            @click="selectedPlan = plan.amount_yuan"
+          >
+            <div class="plan-price">¥{{ plan.amount_yuan }}</div>
+            <div class="plan-credits">{{ plan.credits }} 积分</div>
+            <div v-if="plan.bonus > 0" class="plan-bonus">赠送 {{ plan.bonus }}</div>
+            <div class="plan-unit">{{ plan.unit_price }}</div>
+          </div>
+        </div>
+        <div style="margin-top: 16px;">
+          <span style="font-size: 0.9rem; color: #374151;">支付方式：</span>
+          <el-radio-group v-model="payType" style="margin-left: 8px;">
+            <el-radio value="alipay">支付宝</el-radio>
+            <el-radio value="wxpay">微信支付</el-radio>
+          </el-radio-group>
+        </div>
+        <div style="margin-top: 12px; padding: 10px 12px; background: #fffbe6; border-radius: 6px; border: 1px solid #ffe58f;">
+          <p style="font-size: 0.8rem; color: #8c6d1f; margin: 0; line-height: 1.6;">
+            ⚠️ 退款政策：充值后 24 小时内未消费可全额退款；已消费部分退还未消费余额（扣 5% 手续费）；
+            <strong>充值超过 7 天不退款</strong>，余额可继续使用。充值即视为同意以上政策。
+          </p>
+        </div>
+        <div style="text-align: right; margin-top: 16px;">
+          <el-button @click="showRechargeDialog = false">取消</el-button>
+          <el-button type="primary" :loading="creatingOrder" @click="handleCreateOrder">
+            确认充值 ¥{{ selectedPlan }}
+          </el-button>
+        </div>
+      </div>
+      <div v-else>
+        <div class="pay-qrcode-area">
+          <p style="text-align: center; margin-bottom: 12px; color: #374151;">
+            请使用{{ payType === 'alipay' ? '支付宝' : '微信' }}扫码支付
+          </p>
+          <div v-if="payingOrder.img" style="text-align: center;">
+            <img :src="payingOrder.img" alt="支付二维码" style="max-width: 240px; border: 1px solid #e5e7eb; border-radius: 8px;" />
+          </div>
+          <div v-else-if="payingOrder.qrcode" style="text-align: center;">
+            <img :src="'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(payingOrder.qrcode)" alt="支付二维码" style="max-width: 240px; border: 1px solid #e5e7eb; border-radius: 8px;" />
+          </div>
+          <div style="text-align: center; margin-top: 12px;">
+            <p style="color: #6b7280; font-size: 0.85rem;">
+              充值 ¥{{ payingOrder.amount_yuan }} → {{ payingOrder.credits }} + {{ payingOrder.bonus }} 积分
+            </p>
+            <p style="color: #9ca3af; font-size: 0.8rem; margin-top: 4px;">
+              订单号：{{ payingOrder.order_no }}
+            </p>
+            <el-button v-if="payingOrder.pay_url" type="primary" text size="small" style="margin-top: 8px;" @click="openPayUrl">
+              打开收银台页面支付
+            </el-button>
+          </div>
+          <div style="text-align: center; margin-top: 16px;">
+            <el-button :loading="pollingPayment" @click="checkPaymentStatus">
+              {{ pollingPayment ? '查询中...' : '我已支付' }}
+            </el-button>
+            <el-button @click="cancelPayment">取消</el-button>
+          </div>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { api } from '@/api'
+import { api, http, setAuthToken } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Upload } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
 import { useAuthStore } from '@/stores/auth'
 import { useMedcommLicenseStore } from '@/stores/medcommLicense'
@@ -352,12 +653,343 @@ const contentStats = ref({ terms: 0, examples: 0, docs: 0 })
 const authStore = useAuthStore()
 const licenseStore = useMedcommLicenseStore()
 
-const portalEmail = ref('')
-const portalEmailInput = ref('')
-const portalPasswordInput = ref('')
-const portalLoginLoading = ref(false)
-const portalLoginError = ref('')
-const isElectronEnv = typeof window !== 'undefined' && !!window.electronAPI?.isElectron
+const isElectronEnv = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
+
+// SaaS 模式数据
+const saasUser = ref<any>(null)
+const saasCredits = ref<any>({})
+
+async function loadSaasProfile() {
+  if (isElectronEnv) return
+  try {
+    const res = await http.get('/api/v1/auth/me')
+    saasUser.value = res.data
+  } catch { /* ignore */ }
+  try {
+    const res = await http.get('/api/v1/credits/balance')
+    saasCredits.value = res.data
+  } catch { /* ignore */ }
+}
+
+// ── 客户端下载 ─────────────────────────────────────────────
+const clientProductInfo = ref<any>(null)
+const clientPlatforms = ref<{ id: string; name: string; icon: string; status: string }[]>([])
+const hasLicenseCode = computed(() => myLicenseCodes.value.length > 0)
+const downloadingPlatform = ref('')
+const clientDownloadUrl = ref('')
+const clientDownloadError = ref('')
+
+const platformLabels: Record<string, { name: string; icon: string }> = {
+  'mac-arm64': { name: 'macOS (Apple Silicon)', icon: '🍎' },
+  'mac-x64':   { name: 'macOS (Intel)',         icon: '🍎' },
+  'win-x64':   { name: 'Windows (x64)',         icon: '🪟' },
+}
+
+async function loadClientProductInfo() {
+  try {
+    const res = await http.get('/api/v1/download/product-info')
+    const products = res.data?.products || {}
+    const matched = products.MedComm || products.medcomm || Object.values(products)[0]
+    if (matched) {
+      clientProductInfo.value = matched
+      const statusMap = matched.platform_status || {}
+      const platIds = matched.platforms || Object.keys(matched.download_files || {})
+      const allPlats = new Set([...platIds, ...Object.keys(statusMap)])
+      clientPlatforms.value = [...allPlats].map(pid => ({
+        id: pid,
+        name: platformLabels[pid]?.name || pid,
+        icon: platformLabels[pid]?.icon || '💻',
+        status: statusMap[pid] || 'available',
+      }))
+    }
+  } catch { /* product-info 公开接口，失败时静默 */ }
+  loadDownloadHistory()
+}
+
+const downloadHistory = ref<any[]>([])
+
+async function loadDownloadHistory() {
+  try {
+    const res = await http.get('/api/v1/download/my-downloads', { params: { limit: 10 } })
+    downloadHistory.value = res.data || []
+  } catch { /* ignore */ }
+}
+
+async function handleDownloadClient(platform: string) {
+  downloadingPlatform.value = platform
+  clientDownloadUrl.value = ''
+  clientDownloadError.value = ''
+  try {
+    const res = await http.post('/api/v1/download/software', {
+      product_id: 'medcomm',
+      platform,
+    })
+    clientDownloadUrl.value = res.data.download_url
+    window.location.href = res.data.download_url
+    loadDownloadHistory()
+  } catch (e: any) {
+    const detail = e?.response?.data?.detail || ''
+    if (detail === 'no_valid_license') {
+      clientDownloadError.value = '您还没有授权码，请先兑换授权码'
+    } else {
+      clientDownloadError.value = detail || '下载失败，请稍后重试'
+    }
+  } finally {
+    downloadingPlatform.value = ''
+  }
+}
+
+// ── 充值 ─────────────────────────────────────────────────
+const showRechargeDialog = ref(false)
+const selectedPlan = ref(100)
+const payType = ref('alipay')
+const creatingOrder = ref(false)
+const payingOrder = ref<any>(null)
+const pollingPayment = ref(false)
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+const rechargePlans = [
+  { amount_yuan: 10, credits: 100, bonus: 0, unit_price: '1.00元/10积分' },
+  { amount_yuan: 50, credits: 500, bonus: 50, unit_price: '0.91元/10积分' },
+  { amount_yuan: 100, credits: 1000, bonus: 100, unit_price: '0.91元/10积分' },
+  { amount_yuan: 300, credits: 3000, bonus: 300, unit_price: '0.91元/10积分' },
+  { amount_yuan: 500, credits: 5000, bonus: 500, unit_price: '0.91元/10积分' },
+]
+
+async function handleCreateOrder() {
+  creatingOrder.value = true
+  try {
+    const res = await http.post('/api/v1/payment/create-order', {
+      amount_yuan: selectedPlan.value,
+      pay_type: payType.value,
+    })
+    payingOrder.value = res.data
+    startPolling()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '创建订单失败')
+  } finally {
+    creatingOrder.value = false
+  }
+}
+
+function startPolling() {
+  stopPolling()
+  pollTimer = setInterval(async () => {
+    if (!payingOrder.value) return
+    try {
+      const res = await http.get('/api/v1/payment/order-status', {
+        params: { order_no: payingOrder.value.order_no },
+      })
+      if (res.data.status === 'paid') {
+        stopPolling()
+        ElMessage.success('充值成功！积分已到账')
+        payingOrder.value = null
+        showRechargeDialog.value = false
+        await loadSaasProfile()
+      }
+    } catch { /* ignore */ }
+  }, 3000)
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+async function checkPaymentStatus() {
+  if (!payingOrder.value) return
+  pollingPayment.value = true
+  try {
+    const res = await http.get('/api/v1/payment/order-status', {
+      params: { order_no: payingOrder.value.order_no },
+    })
+    if (res.data.status === 'paid') {
+      stopPolling()
+      ElMessage.success('充值成功！积分已到账')
+      payingOrder.value = null
+      showRechargeDialog.value = false
+      await loadSaasProfile()
+    } else {
+      ElMessage.info('暂未查到支付结果，请稍后再试')
+    }
+  } catch {
+    ElMessage.error('查询失败')
+  } finally {
+    pollingPayment.value = false
+  }
+}
+
+function cancelPayment() {
+  stopPolling()
+  payingOrder.value = null
+}
+
+function openPayUrl() {
+  if (payingOrder.value?.pay_url) {
+    window.open(payingOrder.value.pay_url, '_blank')
+  }
+}
+
+// ── 充值记录 ──────────────────────────────────────────────
+const orderHistory = ref<any[]>([])
+const orderTotal = ref(0)
+const loadingOrders = ref(false)
+let orderPage = 1
+
+async function loadOrderHistory() {
+  loadingOrders.value = true
+  orderPage = 1
+  try {
+    const res = await http.get('/api/v1/payment/orders', {
+      params: { page: 1, page_size: 10 },
+    })
+    orderHistory.value = res.data.items || []
+    orderTotal.value = res.data.total || 0
+  } catch { /* ignore */ }
+  finally { loadingOrders.value = false }
+}
+
+async function loadMoreOrders() {
+  orderPage++
+  try {
+    const res = await http.get('/api/v1/payment/orders', {
+      params: { page: orderPage, page_size: 10 },
+    })
+    orderHistory.value.push(...(res.data.items || []))
+  } catch { orderPage-- }
+}
+
+// ── 积分流水 ──────────────────────────────────────────────
+const usageLogs = ref<any[]>([])
+const usageTotal = ref(0)
+const loadingUsage = ref(false)
+const usageFilter = ref('')
+const usageMonth = ref('')
+let usagePage = 1
+
+async function loadUsageLogs() {
+  loadingUsage.value = true
+  usagePage = 1
+  try {
+    const params: Record<string, any> = { page: 1, page_size: 20 }
+    if (usageFilter.value) params.operation = usageFilter.value
+    if (usageMonth.value) params.month = usageMonth.value
+    const res = await http.get('/api/v1/credits/usage-logs', { params })
+    usageLogs.value = res.data.items || res.data || []
+    usageTotal.value = res.data.total || usageLogs.value.length
+  } catch { /* ignore */ }
+  finally { loadingUsage.value = false }
+}
+
+async function loadMoreUsageLogs() {
+  usagePage++
+  try {
+    const params: Record<string, any> = { page: usagePage, page_size: 20 }
+    if (usageFilter.value) params.operation = usageFilter.value
+    if (usageMonth.value) params.month = usageMonth.value
+    const res = await http.get('/api/v1/credits/usage-logs', { params })
+    usageLogs.value.push(...(res.data.items || res.data || []))
+  } catch { usagePage-- }
+}
+
+function operationLabel(op: string): string {
+  const map: Record<string, string> = {
+    generation: '生成消耗',
+    literature_analysis: '文献分析',
+    export: '导出',
+    export_unwatermarked: '无水印导出',
+    recharge: '充值',
+    refund: '中断退还',
+    admin_adjust: '管理员调整',
+    section_optimization: '章节优化',
+  }
+  return map[op] || op
+}
+
+async function exportUsageCSV() {
+  try {
+    const params: Record<string, any> = {}
+    if (usageFilter.value) params.operation = usageFilter.value
+    if (usageMonth.value) params.month = usageMonth.value
+    const res = await http.get('/api/v1/credits/usage-logs/export', {
+      params,
+      responseType: 'blob',
+    })
+    const blob = new Blob([res.data], { type: 'text/csv; charset=utf-8-sig' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `积分流水_${usageMonth.value || '全部'}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('导出成功')
+  } catch {
+    ElMessage.error('导出失败')
+  }
+}
+
+function orderStatusLabel(status: string): string {
+  const map: Record<string, string> = {
+    created: '待支付', paying: '支付中', paid: '已支付',
+    expired: '已过期', closed: '已关闭',
+    partial_refund: '部分退款', full_refund: '已退款',
+  }
+  return map[status] || status
+}
+
+function orderStatusType(status: string): string {
+  const map: Record<string, string> = {
+    paid: 'success', expired: 'info', closed: 'info',
+    partial_refund: 'warning', full_refund: 'danger',
+    created: '', paying: '',
+  }
+  return map[status] || ''
+}
+
+// ── 授权码兑换 ──────────────────────────────────────────
+const redeemingLicense = ref(false)
+const redeemedCode = ref('')
+const myLicenseCodes = ref<any[]>([])
+
+async function redeemLicense(creditType: string) {
+  const costLabel = creditType === 'credits' ? '6000 积分（充值积分 + 赠送积分）' : '10000 推广积分'
+  await ElMessageBox.confirm(`确认使用 ${costLabel} 兑换一个客户端授权码？`, '兑换确认')
+  redeemingLicense.value = true
+  try {
+    const res = await http.post('/api/v1/credits/redeem-license', { credit_type: creditType })
+    redeemedCode.value = res.data.code
+    ElMessage.success('兑换成功')
+    loadSaasProfile()
+    loadMyLicenseCodes()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '兑换失败')
+  } finally { redeemingLicense.value = false }
+}
+
+async function loadMyLicenseCodes() {
+  try {
+    const res = await http.get('/api/v1/credits/my-licenses')
+    myLicenseCodes.value = res.data
+  } catch { /* ignore */ }
+}
+
+function copyCode(code: string) {
+  navigator.clipboard.writeText(code).then(() => ElMessage.success('已复制')).catch(() => {})
+}
+
+async function saasLogout() {
+  try {
+    await ElMessageBox.confirm('确认退出当前账号？', '退出登录', {
+      confirmButtonText: '退出', cancelButtonText: '取消', type: 'warning',
+    })
+    try { await http.post('/api/v1/auth/logout') } catch { /* ignore */ }
+    setAuthToken(null)
+    router.push('/login').catch(() => {})
+    ElMessage.success('已退出')
+  } catch { /* user cancel */ }
+}
 const appVersion = ref('0.0.0')
 if (isElectronEnv && window.electronAPI?.getAppVersion) {
   window.electronAPI.getAppVersion().then((v: string) => { appVersion.value = v }).catch(() => {})
@@ -376,6 +1008,10 @@ interface DownloadProgress {
 const packList = ref<PackItem[]>([])
 const packLoading = ref(false)
 const downloadingPack = ref<DownloadProgress | null>(null)
+const packFileInput = ref<HTMLInputElement | null>(null)
+const packUploading = ref(false)
+const packUploadPercent = ref(0)
+const packUploadDetail = ref('')
 
 const checkingUpdate = ref(false)
 
@@ -471,72 +1107,6 @@ function formatExpiry(iso: string) {
   }
 }
 
-async function portalLogin() {
-  const email = portalEmailInput.value.trim()
-  const pwd = portalPasswordInput.value
-  if (!email || !pwd) {
-    portalLoginError.value = '请输入邮箱和密码'
-    return
-  }
-  portalLoginLoading.value = true
-  portalLoginError.value = ''
-  try {
-    const eApi = window.electronAPI
-    if (!eApi?.portalLogin) {
-      portalLoginError.value = '当前环境不支持门户登录'
-      return
-    }
-    const res = await eApi.portalLogin(email, pwd)
-    if (res.ok) {
-      portalEmail.value = res.email || email
-      portalPasswordInput.value = ''
-      portalEmailInput.value = ''
-      ElMessage.success(`已绑定门户账号：${portalEmail.value}`)
-    } else {
-      portalLoginError.value = res.error || '登录失败'
-    }
-  } catch (e: any) {
-    portalLoginError.value = e?.message || '网络错误'
-  } finally {
-    portalLoginLoading.value = false
-  }
-}
-
-function openMedcommSite() {
-  window.electronAPI?.openExternal?.('https://medcomm.linscio.com.cn')
-}
-
-function openContact() {
-  window.electronAPI?.openExternal?.('https://medcomm.linscio.com.cn/contact')
-}
-
-async function goPortal() {
-  const eApi = window.electronAPI
-  if (!eApi?.getPortalActivateUrl || !eApi?.openExternal) return
-  const url = await eApi.getPortalActivateUrl()
-  if (url) await eApi.openExternal(url)
-}
-
-async function deactivateLicense() {
-  try {
-    await ElMessageBox.confirm(
-      '将清除本机授权信息，需要重新激活才能恢复。确认解除？',
-      '解除授权绑定',
-      { confirmButtonText: '解除', cancelButtonText: '取消', type: 'warning' }
-    )
-    const eApi = window.electronAPI
-    if (!eApi?.deactivateLicense) return
-    const res = await eApi.deactivateLicense()
-    if (res?.ok) {
-      licenseStore.$reset()
-      ElMessage.success('已解除授权，请重新激活')
-    } else {
-      ElMessage.error(res?.error || '解除失败')
-    }
-  } catch {
-    // 用户取消
-  }
-}
 
 async function loadPackStatus() {
   const eApi = window.electronAPI
@@ -573,34 +1143,55 @@ async function loadPackStatus() {
   }
 }
 
-async function installPack(pack: PackItem) {
+function triggerPackUpload() {
+  packFileInput.value?.click()
+}
+
+async function handlePackFileSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  input.value = ''
+
   const eApi = window.electronAPI
-  if (!eApi?.downloadSpecialty) {
-    ElMessage.error('当前环境不支持学科包安装')
+  if (!eApi?.installSpecialtyFromFile) {
+    ElMessage.error('当前环境不支持学科包上传安装')
     return
   }
-  downloadingPack.value = {
-    specialty_id: pack.specialty_id, name: pack.name,
-    percent: 0, status: 'requesting', detail: '准备中...',
-  }
+
+  packUploading.value = true
+  packUploadPercent.value = 0
+  packUploadDetail.value = `正在安装 ${file.name}...`
+
   try {
-    const version = pack.remote_version || pack.local_version || '1.0.0'
-    const fromVersion = pack.status === 'update_available' ? (pack.local_version || undefined) : undefined
-    const res = await eApi.downloadSpecialty(pack.specialty_id, pack.name, version, fromVersion)
+    const arrayBuffer = await file.arrayBuffer()
+    const filePath = (file as any).path || file.name
+
+    packUploadPercent.value = 30
+    packUploadDetail.value = '正在解析学科包...'
+
+    const res = await eApi.installSpecialtyFromFile(filePath, file.name)
+
     if (res?.ok) {
-      ElMessage.success(`${pack.name || pack.specialty_id} 安装完成`)
+      packUploadPercent.value = 100
+      packUploadDetail.value = '安装完成'
+      ElMessage.success(`学科包「${res.name || file.name}」安装成功`)
       await loadPackStatus()
     } else {
-      ElMessage.error(res?.error || '安装失败')
+      ElMessage.error(res?.error || '学科包安装失败')
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '安装失败')
+    ElMessage.error(e?.message || '学科包安装失败')
+  } finally {
+    setTimeout(() => {
+      packUploading.value = false
+      packUploadPercent.value = 0
+      packUploadDetail.value = ''
+    }, 1500)
   }
 }
 
-function goPortalSpecialties() {
-  window.electronAPI?.openExternal?.('https://portal.linscio.com.cn/medcomm/specialties')
-}
+
 
 const openaiKey = ref('')
 const dashscopeKey = ref('')
@@ -772,17 +1363,16 @@ function buildLocalModels(): LlmModel[] {
 }
 
 onMounted(async () => {
+  if (!isElectronEnv) {
+    await loadSaasProfile()
+    loadOrderHistory()
+    loadMyLicenseCodes()
+    loadClientProductInfo()
+    loadUsageLogs()
+  }
   await authStore.refreshMe()
   await settingsStore.loadDefaultModelFromServer()
   selectedDefaultModel.value = settingsStore.defaultModel
-
-  // 从 Keychain 加载门户邮箱（ActivationGuide 登录时已保存）
-  if (hasElectronKeychain) {
-    try {
-      const cached = await (window as any).electronAPI.getLicenseCache?.()
-      if (cached?.portalEmail) portalEmail.value = cached.portalEmail
-    } catch { /* ignore */ }
-  }
 
   // 学科包状态 + 进度监听
   loadPackStatus()
@@ -798,27 +1388,8 @@ onMounted(async () => {
       setTimeout(() => loadPackStatus(), 500)
     }
   })
-  window.electronAPI?.onNewSpecialtiesAvailable?.(async (payload) => {
+  window.electronAPI?.onNewSpecialtiesAvailable?.(async () => {
     await loadPackStatus()
-    const newIds = payload.ids || []
-    if (newIds.length > 0) {
-      const names = newIds.join('、')
-      try {
-        await ElMessageBox.confirm(
-          `您已购买新学科包：${names}，是否立即安装？`,
-          '新学科包可用',
-          { confirmButtonText: '立即安装', cancelButtonText: '稍后', type: 'info' }
-        )
-        for (const id of newIds) {
-          const pack = packList.value.find(p => p.specialty_id === id)
-          if (pack && pack.status !== 'installed') {
-            await installPack(pack)
-          }
-        }
-      } catch {
-        // 用户选择稍后
-      }
-    }
   })
 
   try {
@@ -918,42 +1489,6 @@ onMounted(async () => {
   if (current) selectedLlmProvider.value = current.provider
 })
 
-async function loginLocalUser() {
-  try {
-    const { value } = await ElMessageBox.prompt('请输入用户名（本地数据隔离用）', '登录本地用户', {
-      confirmButtonText: '登录',
-      cancelButtonText: '取消',
-      inputPlaceholder: '例如：张三',
-    })
-    const name = String(value || '').trim()
-    if (!name) return
-    await authStore.switchUser(name)
-    ElMessage.success(`已登录为：${authStore.user?.display_name || name}`)
-    router.push('/').catch(() => {})
-  } catch (e: any) {
-    if (e === 'cancel' || e === 'close') return
-    ElMessage.error('登录失败')
-  }
-}
-
-async function switchUser() {
-  try {
-    const { value } = await ElMessageBox.prompt('输入用户名（用于区分不同用户配置）', '切换用户', {
-      confirmButtonText: '登录/切换',
-      cancelButtonText: '取消',
-      inputPlaceholder: '例如：张三',
-    })
-    const name = String(value || '').trim()
-    if (!name) return
-    await authStore.switchUser(name)
-    ElMessage.success(`已切换为：${authStore.user?.display_name || name}`)
-    router.push('/').catch(() => {})
-  } catch (e: any) {
-    if (e === 'cancel' || e === 'close') return
-    ElMessage.error('切换失败')
-  }
-}
-
 async function logout() {
   try {
     await ElMessageBox.confirm('将清空本地会话 token，下次请求会重新登录。', '退出登录', {
@@ -976,6 +1511,8 @@ watch(selectedLlmProvider, (provider) => {
     selectedDefaultModel.value = filteredModelsByProvider.value[0]?.id || selectedDefaultModel.value
   }
 })
+watch(usageFilter, () => { loadUsageLogs() })
+watch(usageMonth, () => { loadUsageLogs() })
 watch(captureHistoryEnabled, (enabled) => {
   try {
     localStorage.setItem(CAPTURE_HISTORY_ENABLED_KEY, enabled ? '1' : '0')
@@ -1208,6 +1745,104 @@ h2 { margin-bottom: 1rem; }
   max-height: 280px;
   overflow: auto;
   white-space: pre-wrap;
+}
+.client-promo-card .promo-desc {
+  color: #374151;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+.promo-features {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.promo-feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.9rem;
+  color: #4b5563;
+  line-height: 1.5;
+}
+.promo-icon {
+  flex-shrink: 0;
+  font-size: 1.1rem;
+}
+.download-notice { margin-top: 12px; }
+.download-platforms {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.download-plat-card {
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 16px 20px;
+  text-align: center;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.download-plat-card--disabled { opacity: 0.5; }
+.plat-icon { font-size: 1.6rem; }
+.plat-name { font-size: 0.85rem; font-weight: 500; color: #374151; }
+.redeem-card {
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 16px;
+  text-align: center;
+  min-width: 160px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.redeem-title { font-weight: 600; color: #374151; font-size: 0.9rem; }
+.redeem-price { font-size: 1.3rem; font-weight: 700; color: #1e40af; }
+.redeem-desc { font-size: 0.8rem; color: #9ca3af; margin-bottom: 4px; }
+.recharge-plans {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.plan-card {
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 16px 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.plan-card:hover {
+  border-color: #93c5fd;
+}
+.plan-card.active {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+.plan-price {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #1e40af;
+}
+.plan-credits {
+  font-size: 0.95rem;
+  color: #374151;
+  margin-top: 4px;
+}
+.plan-bonus {
+  font-size: 0.8rem;
+  color: #059669;
+  font-weight: 600;
+  margin-top: 2px;
+}
+.plan-unit {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  margin-top: 4px;
 }
 </style>
 

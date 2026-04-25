@@ -1,6 +1,6 @@
 """系统 API"""
 import os
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -100,14 +100,21 @@ async def clear_s2_key(user: User = Depends(get_current_user), db: AsyncSession 
 
 @router.get("/user-settings/default-model")
 async def get_default_model(user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.core.config import is_saas, settings as _cfg
+    if is_saas():
+        platform_model = _cfg.get_default_model() or ""
+        return {"model": platform_model, "readonly": True}
     model = await UserSettingService.get(db, user.id, DEFAULT_MODEL_SETTING, default="")
     if model:
         set_user_default_model(model)
-    return {"model": model}
+    return {"model": model, "readonly": False}
 
 
 @router.put("/user-settings/default-model")
 async def set_default_model(body: SetDefaultModelRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.core.config import is_saas
+    if is_saas():
+        raise HTTPException(status_code=403, detail="SaaS 模式下模型由平台统一配置，用户不可更改")
     model = (body.model or "").strip()
     await UserSettingService.set(db, user.id, DEFAULT_MODEL_SETTING, model)
     set_user_default_model(model)
@@ -139,8 +146,17 @@ async def ollama_status():
 async def connection_self_check():
     """
     轻量连接自检：Ollama 可达性、常见 LLM/翻译/生图相关环境变量是否已配置。
-    不替代真实 API 调用（避免耗额度）；与 POST /apikey/test 配合使用。
+    SaaS 模式下仅返回平台状态摘要，不暴露 Key 详情。
     """
+    from app.core.config import is_saas
+    if is_saas():
+        from app.services.llm.manager import _find_any_available_model
+        has_model = _find_any_available_model() is not None
+        return {
+            "platform_mode": True,
+            "llm_available": has_model,
+            "message": "SaaS 模式，LLM 由平台统一配置" if has_model else "平台 LLM 未配置，请联系管理员",
+        }
     ollama = await ollama_status()
     llm_keys: dict[str, bool] = {
         "OPENAI_API_KEY": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
@@ -183,7 +199,10 @@ async def connection_self_check():
 
 @router.post("/apikey/test")
 async def test_api_key(req: TestApiKeyRequest | None = None):
-    """测试 API Key 是否有效：支持 OpenAI 及 OpenAI-兼容国内供应商"""
+    """测试 API Key 是否有效（仅桌面端可用）"""
+    from app.core.config import is_saas
+    if is_saas():
+        raise HTTPException(status_code=403, detail="SaaS 模式下 API Key 由平台统一管理")
     provider = (req.provider if req and req.provider else "openai").strip().lower()
     key = (req.api_key if req and req.api_key else "") or ""
 
@@ -258,7 +277,9 @@ def _model_entry(model_id: str, name: str, provider: str) -> dict:
 @router.get("/llm-models")
 async def list_llm_models():
     """
-    列出可用的 LLM 模型（根据已配置的 API Key），包含 max_tokens 供前端参考。
+    列出可用的 LLM 模型。
+    SaaS 模式：列出平台配置的模型（用户不可配置 Key）。
+    桌面模式：根据用户已配置的 API Key 列出可用模型。
     """
     available: list[dict] = []
     added_ids: set[str] = set()

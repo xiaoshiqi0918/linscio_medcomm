@@ -1,6 +1,9 @@
 import axios from 'axios'
 
-export const API_BASE = 'http://127.0.0.1:8765'
+const _isElectronEnv = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
+export const API_BASE = _isElectronEnv
+  ? 'http://127.0.0.1:8765'
+  : (import.meta.env.VITE_API_BASE ?? '')
 
 /** LLM / long-running MedPic calls (local models often exceed 30s) */
 export const MEDPIC_LLM_TIMEOUT_MS = 180000
@@ -13,7 +16,7 @@ export const http = axios.create({
 
 const AUTH_TOKEN_KEY = 'linscio_auth_token'
 let _authToken: string | null = null
-let _loginPromise: Promise<string> | null = null
+const _isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
 
 export function setAuthToken(token: string | null) {
   _authToken = token
@@ -52,7 +55,7 @@ export async function getLocalApiKeyHeaderForFetch(): Promise<Record<string, str
   return getLocalApiKeyHeader()
 }
 
-// 本机隔离：Electron 模式下添加 X-Local-Api-Key
+// Electron: X-Local-Api-Key; JWT Authorization
 http.interceptors.request.use(async (config) => {
   if (_authToken == null) {
     try {
@@ -68,32 +71,6 @@ http.interceptors.request.use(async (config) => {
     if (key) config.headers.set('X-Local-Api-Key', key)
   }
 
-  // 统一会话：没有 token 时静默登录（兼容现有“无登录 UI”）
-  if (!_authToken) {
-    if (!_loginPromise) {
-      const localHeader = await getLocalApiKeyHeader()
-      const raw = axios.create({
-        baseURL: API_BASE,
-        timeout: 30000,
-        headers: { 'Content-Type': 'application/json', ...localHeader },
-      })
-      _loginPromise = raw
-        .post('/api/v1/auth/login', {})
-        .then((res) => String(res.data?.token || ''))
-        .finally(() => {
-          _loginPromise = null
-        })
-    }
-    const tk = await _loginPromise
-    if (tk) {
-      _authToken = tk
-      try {
-        window.localStorage.setItem(AUTH_TOKEN_KEY, tk)
-      } catch {
-        // ignore
-      }
-    }
-  }
   if (_authToken) config.headers.set('Authorization', `Bearer ${_authToken}`)
   return config
 })
@@ -105,27 +82,14 @@ http.interceptors.response.use(
     const cfg = error?.config as any
     if (status === 401 && cfg && !cfg.__retried) {
       cfg.__retried = true
-      // token 可能过期/被清空：清掉并重新静默登录后重试一次
       setAuthToken(null)
       _authToken = null
-      const localHeader = await getLocalApiKeyHeader()
-      const raw = axios.create({
-        baseURL: API_BASE,
-        timeout: 30000,
-        headers: { 'Content-Type': 'application/json', ...localHeader },
-      })
-      try {
-        const res = await raw.post('/api/v1/auth/login', {})
-        const tk = String(res.data?.token || '')
-        if (tk) {
-          setAuthToken(tk)
-          _authToken = tk
-          cfg.headers = cfg.headers || {}
-          cfg.headers.Authorization = `Bearer ${tk}`
-          return http.request(cfg)
+      if (typeof window !== 'undefined') {
+        if (_isElectron) {
+          window.location.hash = '#/login'
+        } else {
+          window.location.href = '/login'
         }
-      } catch {
-        // fall through
       }
     }
     return Promise.reject(error)
@@ -488,8 +452,8 @@ export const api = {
       http.post(`/api/v1/templates/${id}/duplicate`),
   },
   auth: {
-    login: (data?: { username?: string; password?: string }) =>
-      http.post('/api/v1/auth/login', data ?? {}),
+    login: (data: { phone: string; password: string }) =>
+      http.post('/api/v1/auth/login', data),
     me: () => http.get('/api/v1/auth/me'),
     getLicense: () =>
       http.get<{

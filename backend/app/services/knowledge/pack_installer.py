@@ -108,8 +108,8 @@ async def install_specialty_pack(
 
 async def uninstall_specialty_pack(specialty_id: str, db: AsyncSession) -> dict:
     """卸载学科包：删除该学科的包来源数据（不影响用户自行上传的内容）。"""
-    from sqlalchemy import text as sa_text
     from app.models.knowledge import KnowledgeChunk
+    from app.services.vector.fts5 import delete_knowledge_chunks_from_fts
 
     counts = {"knowledge_docs": 0, "terms": 0, "examples": 0}
 
@@ -125,14 +125,7 @@ async def uninstall_specialty_pack(specialty_id: str, db: AsyncSession) -> dict:
         )
         old_ids = [r[0] for r in old_chunks.fetchall()]
         if old_ids:
-            placeholders = ",".join(str(i) for i in old_ids)
-            try:
-                await db.execute(sa_text(
-                    f"INSERT INTO knowledge_fts(knowledge_fts, rowid) "
-                    f"SELECT 'delete', rowid FROM knowledge_fts WHERE chunk_id IN ({placeholders})"
-                ))
-            except Exception:
-                pass
+            await delete_knowledge_chunks_from_fts(old_ids, db)
             await db.execute(
                 delete(KnowledgeChunk).where(KnowledgeChunk.doc_id == doc.id)
             )

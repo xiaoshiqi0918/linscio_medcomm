@@ -28,9 +28,16 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# 使用应用数据库路径（同步 URL，Alembic 标准用法）
+# 根据部署模式选择数据库 URL
 _ensure_data_dir()
-db_url = f"sqlite:///{settings.db_path}"
+if settings.deployment_mode == "desktop":
+    db_url = f"sqlite:///{settings.db_path}"
+else:
+    _raw = settings.database_url
+    if _raw.startswith("postgresql+asyncpg://"):
+        db_url = _raw.replace("postgresql+asyncpg://", "postgresql://", 1)
+    else:
+        db_url = _raw
 config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = Base.metadata

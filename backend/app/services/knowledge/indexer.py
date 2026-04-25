@@ -26,7 +26,9 @@ async def parse_and_index(
     specialty: 学科标记，会冗余写入每个 chunk 以加速检索过滤
     返回 (chunk_count, status)
     """
-    from app.services.vector.fts5 import ensure_fts_tables
+    from app.services.vector.fts5 import (
+        ensure_fts_tables, index_knowledge_chunk, delete_knowledge_chunks_from_fts,
+    )
 
     fp = Path(file_path)
     full_path = fp if fp.is_absolute() and fp.exists() else Path(settings.app_data_root) / file_path
@@ -43,14 +45,10 @@ async def parse_and_index(
 
     await ensure_fts_tables(db)
 
-    # 删除该 doc 的旧 chunk 及 FTS5 记录
     old_result = await db.execute(select(KnowledgeChunk.id).where(KnowledgeChunk.doc_id == doc_id))
     old_ids = [r[0] for r in old_result.fetchall()]
     if old_ids:
-        placeholders = ",".join(str(i) for i in old_ids)
-        await db.execute(text(
-            f"INSERT INTO knowledge_fts(knowledge_fts, rowid) SELECT 'delete', rowid FROM knowledge_fts WHERE chunk_id IN ({placeholders})"
-        ))
+        await delete_knowledge_chunks_from_fts(old_ids, db)
         await db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.doc_id == doc_id))
         await db.flush()
 
@@ -60,18 +58,13 @@ async def parse_and_index(
         db.add(chunk)
         await db.flush()
 
-    # 写入 FTS5
     result = await db.execute(
         select(KnowledgeChunk.id, KnowledgeChunk.content).where(
             KnowledgeChunk.doc_id == doc_id
         ).order_by(KnowledgeChunk.chunk_index)
     )
     for row in result.fetchall():
-        cid, content = row[0], (row[1] or "")[:10000]
-        await db.execute(
-            text("INSERT INTO knowledge_fts(chunk_id, content) VALUES (:cid, :content)"),
-            {"cid": cid, "content": content},
-        )
+        await index_knowledge_chunk(row[0], row[1], db)
     await db.commit()
     return len(chunks), "done"
 

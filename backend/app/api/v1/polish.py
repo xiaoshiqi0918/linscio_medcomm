@@ -1,5 +1,7 @@
 """润色适配 API"""
-from fastapi import APIRouter, Depends, HTTPException
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -24,18 +26,77 @@ class RunPolishRequest(BaseModel):
 
 
 @router.post("/run")
-async def polish_run(req: RunPolishRequest, db=Depends(get_db)):
+async def polish_run(req: RunPolishRequest, request: Request = None, db=Depends(get_db)):
     """执行润色：按 polish_type 调用对应 Agent（language/platform/script/visual/handbook）"""
+    from app.core.config import is_saas
     from app.services.polish import run_polish
+
+    saas_user_id: int | None = None
+    cost = Decimal("0")
+    if is_saas() and request:
+        from app.core.deps import get_current_user
+        from app.models.user import User
+        user: User = await get_current_user(request, db)
+        saas_user_id = user.id
+
+        session_obj = await db.get(PolishSession, req.session_id)
+        if session_obj:
+            from app.models.article import ArticleSection, ArticleContent
+            sec = await db.get(ArticleSection, session_obj.section_id)
+            if sec:
+                from sqlalchemy import select as _sel
+                cont_res = await db.execute(
+                    _sel(ArticleContent).where(
+                        ArticleContent.section_id == sec.id,
+                        ArticleContent.is_current == True,
+                    ).limit(1)
+                )
+                content = cont_res.scalar_one_or_none()
+                char_count = 0
+                if content and content.content_json:
+                    import json as _json
+                    try:
+                        doc = _json.loads(content.content_json)
+                        char_count = len(_json.dumps(doc.get("content", ""), ensure_ascii=False))
+                    except Exception:
+                        char_count = 500
+                char_count = max(char_count, 200)
+                from app.services.credit.pricing import calc_optimization_cost
+                cost = calc_optimization_cost(char_count)
+
+                from app.services.credit.service import check_balance, InsufficientCreditsError
+                try:
+                    await check_balance(user.id, cost, db)
+                except InsufficientCreditsError as e:
+                    raise HTTPException(
+                        status_code=402,
+                        detail=f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分",
+                    )
 
     result = await run_polish(req.session_id, db)
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
+
+    if saas_user_id and cost > 0 and is_saas():
+        try:
+            from app.services.credit.service import deduct_credits
+            await deduct_credits(
+                saas_user_id, cost, db,
+                operation="polish",
+                section_id=result.get("section_id"),
+                meta={"polish_type": result.get("polish_type", ""), "word_count": result.get("word_count", 0)},
+            )
+            await db.commit()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error("润色积分扣费异常: %s", e)
+
     return {
         "changes_count": result["changes_count"],
         "word_count": result.get("word_count"),
         "changes_summary": result.get("changes_summary"),
         "platform_tips": result.get("platform_tips", []),
+        "cost": float(cost),
     }
 
 

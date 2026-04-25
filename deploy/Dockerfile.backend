@@ -1,0 +1,27 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev libffi-dev \
+    libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf2.0-0 \
+    libcairo2 libgirepository1.0-dev gir1.2-pango-1.0 \
+    fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt /app/requirements.txt
+
+RUN pip install --no-cache-dir -r requirements.txt \
+    asyncpg psycopg2-binary redis[hiredis] bcrypt PyJWT
+
+COPY backend/ /app/
+
+RUN rm -f /app/.env
+
+ENV DEPLOYMENT_MODE=saas
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8765
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8765", "--workers", "2", "--log-level", "info"]

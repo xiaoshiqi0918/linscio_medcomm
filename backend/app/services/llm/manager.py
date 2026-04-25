@@ -3,15 +3,22 @@ LLM 管理器
 模型优先级：用户 DB 设置 > 环境变量 > 文章级 > model_hint 系统推荐 > 第一个有 Key 的模型
 支持国内主流大模型：智谱 GLM、通义千问、月之暗面 Kimi、深度求索、硅基流动等
 支持基于任务类型的智能路由：QUALITY / BALANCED / FAST / REASONING
+SaaS 专用：按具体任务类型精确路由 + primary/fallback/degraded 三级降级
 """
 import logging
 import os
+import time
 from enum import Enum
 from typing import Optional
 
 from app.core.config import settings
 
 logger = logging.getLogger("uvicorn.error")
+
+
+class AllModelsFailedError(RuntimeError):
+    """所有候选模型均调用失败"""
+    pass
 
 
 # ── 任务分层：调用方声明所需的模型能力等级 ────────────────────────────
@@ -102,6 +109,83 @@ PROVIDER_PRIORITY = [
     "deepseek", "openai", "anthropic", "gemini",
     "zhipu", "qwen", "moonshot", "siliconflow", "qiniu", "openrouter",
 ]
+
+# SaaS 模式下排除 Anthropic/Claude（方案 8.2：仅保留 GPT 和 Gemini + 国内模型）
+SAAS_PROVIDER_PRIORITY = [
+    "deepseek", "openai", "gemini",
+    "zhipu", "qwen", "moonshot", "siliconflow", "qiniu", "openrouter",
+]
+
+# ── SaaS 任务精确路由表（8.3）──────────────────────────────────────
+# primary → fallback → degraded 三级降级，按具体业务任务类型
+SAAS_TASK_ROUTES: dict[str, dict] = {
+    "literature_analysis_abstract": {
+        "primary":   "kimi-k2.5",
+        "fallback":  "deepseek-chat",
+        "degraded":  "qwen-plus",
+        "task_tier": TaskTier.BALANCED,
+    },
+    "literature_analysis_fulltext": {
+        "primary":   "gemini-2.5-pro",
+        "fallback":  "kimi-k2.5",
+        "degraded":  "qwen-plus",
+        "task_tier": TaskTier.QUALITY,
+    },
+    "generation_round1": {
+        "primary":   "gpt-4o",
+        "fallback":  "gemini-2.5-pro",
+        "degraded":  "deepseek-chat",
+        "task_tier": TaskTier.QUALITY,
+    },
+    "deai_rewrite_round2": {
+        "primary":   "gpt-4o",
+        "fallback":  "gemini-2.5-pro",
+        "degraded":  "deepseek-chat",
+        "task_tier": TaskTier.QUALITY,
+    },
+    "optimization_round3": {
+        "primary":   "gpt-4o",
+        "fallback":  "gemini-2.5-pro",
+        "degraded":  "deepseek-chat",
+        "task_tier": TaskTier.QUALITY,
+    },
+    "keyword_generation": {
+        "primary":   "deepseek-chat",
+        "fallback":  "qwen-plus",
+        "degraded":  "glm-4-flash",
+        "task_tier": TaskTier.FAST,
+    },
+    "quality_check": {
+        "primary":   "deepseek-chat",
+        "fallback":  "qwen-plus",
+        "degraded":  "glm-4-flash",
+        "task_tier": TaskTier.BALANCED,
+    },
+    "translation": {
+        "primary":   "deepseek-chat",
+        "fallback":  "qwen-plus",
+        "degraded":  "glm-4-flash",
+        "task_tier": TaskTier.FAST,
+    },
+    "polish": {
+        "primary":   "gpt-4o",
+        "fallback":  "deepseek-chat",
+        "degraded":  "qwen-plus",
+        "task_tier": TaskTier.QUALITY,
+    },
+    "verification": {
+        "primary":   "deepseek-chat",
+        "fallback":  "qwen-plus",
+        "degraded":  "glm-4-flash",
+        "task_tier": TaskTier.BALANCED,
+    },
+    "aigc_detection": {
+        "primary":   "deepseek-chat",
+        "fallback":  "qwen-plus",
+        "degraded":  "glm-4-flash",
+        "task_tier": TaskTier.FAST,
+    },
+}
 
 # env_key → provider 名反查表
 _ENV_KEY_TO_PROVIDER: dict[str, str] = {
@@ -424,15 +508,59 @@ async def resolve_model(
     article_id: Optional[int] = None,
     article_default_model: Optional[str] = None,
     model_hint: str = "default",
+    user_id: Optional[int] = None,
 ) -> str:
     """
-    解析最终使用的模型（优先级从高到低）：
-    1. 用户 DB 设置（Settings 页面选择，内存缓存 → DB 兜底）
-    2. 环境变量 MEDCOMM_DEFAULT_MODEL
-    3. 文章级 default_model（创建时保存的快照）
-    4. model_hint 系统推荐（仅在有对应 API Key 时使用）
-    5. 扫描所有 provider，返回第一个有 Key 的模型
+    解析最终使用的模型。
+
+    SaaS 模式（平台部署 Key）优先级：
+      1. 环境变量 MEDCOMM_DEFAULT_MODEL（平台运维配置）
+      2. model_hint / 扫描第一个有 Key 的模型
+
+    桌面模式（用户自部署 Key）优先级：
+      1. 用户 DB 设置（Settings 页面选择，内存缓存 → DB 兜底）
+      2. 环境变量 MEDCOMM_DEFAULT_MODEL
+      3. 文章级 default_model
+      4. model_hint 系统推荐
+      5. 扫描所有 provider，返回第一个有 Key 的模型
     """
+    from app.core.config import is_saas
+
+    if is_saas():
+        return _resolve_model_saas(model_hint)
+
+    return await _resolve_model_desktop(article_id, article_default_model, model_hint)
+
+
+def _resolve_model_saas(model_hint: str = "default") -> str:
+    """SaaS 模式：平台 .env 中配置的 API Key，用户不可自选 Key（排除 Anthropic）"""
+    env_model = settings.get_default_model()
+    if env_model and _model_has_key(env_model):
+        return env_model
+
+    hint_model = MODEL_HINTS.get(model_hint, DEFAULT_MODEL)
+    if _model_has_key(hint_model):
+        return hint_model
+
+    best = _pick_saas_model_from_providers(TaskTier.BALANCED)
+    if best:
+        return best
+
+    fallback = _find_any_available_model()
+    if fallback:
+        return fallback
+
+    raise RuntimeError(
+        "SaaS 平台未配置可用的 LLM 模型，请联系管理员设置 MEDCOMM_DEFAULT_MODEL 及对应 API Key。"
+    )
+
+
+async def _resolve_model_desktop(
+    article_id: Optional[int] = None,
+    article_default_model: Optional[str] = None,
+    model_hint: str = "default",
+) -> str:
+    """桌面模式：用户自部署 Key，支持用户自选模型"""
     global _user_default_model
 
     # 1) 内存缓存的用户默认模型（需校验 Key 可用性）
@@ -460,7 +588,6 @@ async def resolve_model(
         except Exception:
             pass
 
-    # 若用户已选模型但 Key 不可用，记录警告
     if _user_default_model and not _model_has_key(_user_default_model):
         logger.warning(
             "用户默认模型 '%s' 的 API Key 不可用，尝试自动回退",
@@ -594,12 +721,44 @@ async def resolve_model_for_task(
     article_default_model: Optional[str] = None,
 ) -> str:
     """
-    基于任务类型的智能模型路由（优先级从高到低）：
-    1. 用户默认模型 → 同 Provider 内按 task 适配（推理模型自动降级）
-    2. 环境变量 MEDCOMM_DEFAULT_MODEL → 同上适配
-    3. 文章级 default_model → 同上适配
-    4. 按 PROVIDER_PRIORITY 扫描，在最优 Provider 中按 task tier 选模型
+    基于任务类型的智能模型路由。
+
+    SaaS 模式：平台 Key，仅用 env / provider 扫描
+    桌面模式：用户自有 Key，额外走用户 DB 设置
     """
+    from app.core.config import is_saas
+
+    if is_saas():
+        return _resolve_task_saas(task)
+
+    return await _resolve_task_desktop(task, article_id, article_default_model)
+
+
+def _resolve_task_saas(task: TaskTier) -> str:
+    """SaaS: 平台统一 Key，按 task tier 选最优模型（排除 Anthropic）"""
+    env_model = settings.get_default_model()
+    if env_model and _model_has_key(env_model):
+        return _adapt_model_for_task(env_model, task)
+
+    best = _pick_saas_model_from_providers(task)
+    if best:
+        return best
+
+    fallback = _find_any_available_model()
+    if fallback:
+        return fallback
+
+    raise RuntimeError(
+        "SaaS 平台未配置可用的 LLM 模型，请联系管理员设置 MEDCOMM_DEFAULT_MODEL 及对应 API Key。"
+    )
+
+
+async def _resolve_task_desktop(
+    task: TaskTier,
+    article_id: Optional[int] = None,
+    article_default_model: Optional[str] = None,
+) -> str:
+    """桌面: 用户自有 Key + 模型偏好"""
     # 1) 用户默认模型
     user_model = await _get_user_model_from_cache_or_db()
     if user_model and _model_has_key(user_model):
@@ -632,7 +791,6 @@ async def resolve_model_for_task(
         logger.info("[task-router] %s: 自动选择 '%s'", task.value, best)
         return best
 
-    # 兜底：任意有 Key 的模型
     fallback = _find_any_available_model()
     if fallback:
         logger.info("[task-router] %s: 无匹配 tier，回退到 '%s'", task.value, fallback)
@@ -642,3 +800,146 @@ async def resolve_model_for_task(
         "无法找到可用的 LLM 模型：未找到任何已配置 Key 的模型。"
         "请在设置中配置默认模型及对应的 API Key。"
     )
+
+
+# ══════════════════════════════════════════════════════════════
+#  SaaS 精确任务路由（8.3 / 8.4 / 8.5）
+# ══════════════════════════════════════════════════════════════
+
+def resolve_model_for_saas_task(task_type: str) -> list[str]:
+    """从 SAAS_TASK_ROUTES 查表，返回 [primary, fallback, degraded] 候选模型列表。
+
+    仅返回有可用 API Key 的模型；若路由表中无此 task_type，
+    则回退到通用 _resolve_task_saas 逻辑。
+    """
+    route = SAAS_TASK_ROUTES.get(task_type)
+    if not route:
+        tier = TaskTier.BALANCED
+        model = _resolve_task_saas(tier)
+        return [model]
+
+    candidates = []
+    for key in ("primary", "fallback", "degraded"):
+        model = route.get(key)
+        if model and _model_has_key(model):
+            candidates.append(model)
+
+    if candidates:
+        return candidates
+
+    tier = route.get("task_tier", TaskTier.BALANCED)
+    best = _pick_saas_model_from_providers(tier)
+    if best:
+        return [best]
+
+    any_model = _find_any_available_model()
+    if any_model:
+        return [any_model]
+
+    raise AllModelsFailedError(
+        f"SaaS 任务 '{task_type}' 无可用模型，请联系管理员配置 API Key。"
+    )
+
+
+def _pick_saas_model_from_providers(task: TaskTier) -> str | None:
+    """SaaS 专用：按 SAAS_PROVIDER_PRIORITY 扫描（排除 Anthropic）"""
+    for provider in SAAS_PROVIDER_PRIORITY:
+        info = PROVIDER_MODEL_TIERS.get(provider)
+        if not info:
+            continue
+        if not os.environ.get(info["env_key"], "").strip():
+            continue
+        for model in info.get(task.value, []):
+            return model
+    return None
+
+
+async def log_llm_call(
+    user_id: int,
+    task_type: str,
+    model: str,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+    latency_ms: int = 0,
+    status: str = "success",
+    error: str | None = None,
+    article_id: int | None = None,
+    section_id: int | None = None,
+    session_id: str | None = None,
+    cost_usd: float | None = None,
+    cost_credits: float | None = None,
+    meta: dict | None = None,
+) -> None:
+    """写入 LlmCallLog 埋点（仅 SaaS 模式，静默失败）"""
+    try:
+        from app.core.config import is_saas
+        if not is_saas():
+            return
+        from app.core.database import AsyncSessionLocal
+        from app.models.billing import LlmCallLog
+        from decimal import Decimal
+        provider = _model_to_provider(model)
+
+        if cost_usd is None and tokens_in + tokens_out > 0:
+            cost_usd = _estimate_cost_usd(model, tokens_in, tokens_out)
+
+        async with AsyncSessionLocal() as db:
+            db.add(LlmCallLog(
+                user_id=user_id,
+                article_id=article_id,
+                section_id=section_id,
+                session_id=session_id,
+                task_type=task_type,
+                model=model,
+                provider=provider,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=latency_ms,
+                cost_usd=Decimal(str(cost_usd)) if cost_usd else None,
+                cost_credits=Decimal(str(cost_credits)) if cost_credits else None,
+                status=status,
+                error_message=error,
+                meta=meta,
+            ))
+            await db.commit()
+
+        # Prometheus 指标
+        try:
+            from app.services.observability import record_llm_call
+            record_llm_call(
+                task_type=task_type, model=model, status=status,
+                latency_s=latency_ms / 1000.0, cost_usd=cost_usd or 0,
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.debug("log_llm_call 写入失败: %s", exc)
+
+
+# 各模型每 1M token 的价格（USD），用于成本估算
+_MODEL_PRICING_PER_1M: dict[str, tuple[float, float]] = {
+    # (input_per_1M, output_per_1M)
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-2.5-flash": (0.075, 0.30),
+    "deepseek-chat": (0.27, 1.10),
+    "deepseek-reasoner": (0.55, 2.19),
+    "kimi-k2.5": (0.55, 2.00),
+    "kimi-k2-turbo-preview": (0.20, 0.60),
+    "qwen-plus": (0.80, 2.00),
+    "qwen-turbo": (0.30, 0.60),
+    "qwen-max": (2.40, 9.60),
+    "glm-4-flash": (0.10, 0.10),
+    "glm-4.7": (0.50, 0.50),
+}
+
+
+def _estimate_cost_usd(model: str, tokens_in: int, tokens_out: int) -> float:
+    """根据模型定价估算 USD 成本"""
+    pricing = _MODEL_PRICING_PER_1M.get(model)
+    if not pricing:
+        return 0.0
+    input_price, output_price = pricing
+    cost = (tokens_in / 1_000_000 * input_price) + (tokens_out / 1_000_000 * output_price)
+    return round(cost, 6)

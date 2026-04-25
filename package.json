@@ -59,7 +59,7 @@
     "beforePack": "scripts/electron-before-pack.js",
     "publish": {
       "provider": "generic",
-      "url": "https://releases.linscio.com.cn/releases/MedComm/"
+      "url": "https://releases.linscio.com/releases/MedComm/"
     },
     "appId": "com.linscio.medcomm",
     "productName": "LinScio MedComm",
@@ -72,12 +72,44 @@
       "backend/**/*",
       "build/wheels/**/*",
       "assets/**/*",
-      "workflows/**/*"
+      "workflows/**/*",
+
+      "!backend/app/services/payment/**",
+      "!backend/app/services/credit/**",
+      "!backend/app/tasks/**",
+      "!backend/app/models/billing.py",
+      "!backend/app/models/referral.py",
+      "!backend/app/core/security.py",
+      "!backend/app/core/redis.py",
+      "!backend/app/core/rate_limit.py",
+      "!backend/app/api/v1/admin.py",
+      "!backend/app/api/v1/payment.py",
+      "!backend/app/api/v1/credits.py",
+      "!backend/app/api/v1/referral.py",
+      "!backend/alembic/versions/*payment*",
+      "!backend/alembic/versions/*admin*",
+      "!backend/.env",
+      "!backend/.env.*",
+      "!backend/.data/**",
+      "!backend/.venv/**"
     ],
     "asarUnpack": [
       "backend/**/*",
       "build/wheels/**/*",
-      "workflows/**/*"
+      "workflows/**/*",
+
+      "!backend/app/services/payment/**",
+      "!backend/app/services/credit/**",
+      "!backend/app/tasks/**",
+      "!backend/app/models/billing.py",
+      "!backend/app/models/referral.py",
+      "!backend/app/core/security.py",
+      "!backend/app/core/redis.py",
+      "!backend/app/core/rate_limit.py",
+      "!backend/app/api/v1/admin.py",
+      "!backend/app/api/v1/payment.py",
+      "!backend/app/api/v1/credits.py",
+      "!backend/app/api/v1/referral.py"
     ],
     "extraResources": [
       {
@@ -103,6 +135,7 @@
         "zip"
       ],
       "category": "public.app-category.medical",
+      "identity": null,
       "artifactName": "LinScio-MedComm-${version}-mac-${arch}.${ext}"
     },
     "dmg": {

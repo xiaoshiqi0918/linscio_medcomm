@@ -1,9 +1,24 @@
-import { createRouter, createWebHashHistory } from 'vue-router'
+import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import { getAuthToken } from '@/api'
+
+const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
 
 const router = createRouter({
-  history: createWebHashHistory(),
+  history: isElectron ? createWebHashHistory() : createWebHistory(),
   routes: [
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('@/views/auth/LoginView.vue'),
+      meta: { title: '登录', guest: true },
+    },
+    {
+      path: '/register',
+      name: 'register',
+      component: () => import('@/views/auth/RegisterView.vue'),
+      meta: { title: '注册', guest: true },
+    },
     {
       path: '/',
       component: AppLayout,
@@ -79,10 +94,35 @@ const router = createRouter({
           name: 'personal-corpus',
           component: () => import('@/views/personal/PersonalCorpus.vue'),
           meta: { title: '个人语料' },
-        },
-      ],
-    },
-  ],
+      },
+    ],
+  },
+  {
+    path: '/admin',
+    component: () => import('@/views/admin/AdminLayout.vue'),
+    meta: { title: '管理后台', admin: true },
+    children: [
+      { path: '', name: 'admin-dashboard', component: () => import('@/views/admin/DashboardView.vue'), meta: { title: '仪表盘' } },
+      { path: 'users', name: 'admin-users', component: () => import('@/views/admin/UsersView.vue'), meta: { title: '用户管理' } },
+      { path: 'orders', name: 'admin-orders', component: () => import('@/views/admin/OrdersView.vue'), meta: { title: '订单管理' } },
+      { path: 'reconciliation', name: 'admin-recon', component: () => import('@/views/admin/ReconciliationView.vue'), meta: { title: '对账记录' } },
+      { path: 'licenses', name: 'admin-licenses', component: () => import('@/views/admin/LicensesView.vue'), meta: { title: '授权码管理' } },
+      { path: 'config', name: 'admin-config', component: () => import('@/views/admin/ConfigView.vue'), meta: { title: '系统配置' } },
+    ],
+  },
+],
+})
+
+// 导航守卫：未登录时跳转到登录页（桌面端与 SaaS 统一）
+router.beforeEach((to, _from, next) => {
+  const token = getAuthToken()
+  if (!token && !to.meta.guest) {
+    next({ name: 'login', query: { redirect: to.fullPath } })
+  } else if (token && to.meta.guest) {
+    next('/')
+  } else {
+    next()
+  }
 })
 
 export default router

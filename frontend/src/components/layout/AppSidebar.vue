@@ -1,6 +1,5 @@
 <template>
   <aside class="sidebar">
-    <div class="logo">LinScio MedComm</div>
     <nav class="nav-groups">
       <div class="nav-group">
         <span class="nav-group-title">主要功能</span>
@@ -8,7 +7,7 @@
           <span class="icon">✍️</span> 科普写作
         </router-link>
       </div>
-      <div class="nav-group">
+      <div v-if="isElectron" class="nav-group">
         <span class="nav-group-title">绘图 <span class="dev-tag">开发中</span></span>
         <router-link to="/drawing/txt2img" class="nav-item">
           <span class="icon">🖼️</span> 文生图
@@ -48,9 +47,9 @@
     <div class="sidebar-footer">
       <div class="footer-row">
         <span class="avatar">👤</span>
-        <span class="user-info">{{ authStore.user?.display_name || userStore.displayName }}</span>
+        <span class="user-info">{{ sidebarDisplayName }}</span>
       </div>
-      <span v-if="licenseStore.expiresAt" class="expiry-info">
+      <span v-if="isElectron && licenseStore.expiresAt" class="expiry-info">
         授权到期 {{ formatExpiry(licenseStore.expiresAt) }}
       </span>
     </div>
@@ -58,14 +57,25 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useUserStore } from '@/stores/user'
 import { useAuthStore, AUTH_USER_CHANGED_EVENT } from '@/stores/auth'
 import { useMedcommLicenseStore } from '@/stores/medcommLicense'
+import { http } from '@/api'
 
 const userStore = useUserStore()
 const authStore = useAuthStore()
 const licenseStore = useMedcommLicenseStore()
+const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
+
+const saasDisplayName = ref('')
+
+const sidebarDisplayName = computed(() => {
+  if (isElectron) {
+    return authStore.user?.display_name || userStore.displayName
+  }
+  return saasDisplayName.value || '用户'
+})
 
 function formatExpiry(iso: string) {
   try {
@@ -79,8 +89,14 @@ async function onAuthUserChanged() {
   await authStore.refreshMe()
 }
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener(AUTH_USER_CHANGED_EVENT, onAuthUserChanged as EventListener)
+  if (!isElectron) {
+    try {
+      const res = await http.get('/api/v1/auth/me')
+      saasDisplayName.value = res.data?.display_name || ''
+    } catch { /* ignore */ }
+  }
 })
 onUnmounted(() => {
   window.removeEventListener(AUTH_USER_CHANGED_EVENT, onAuthUserChanged as EventListener)
@@ -95,13 +111,6 @@ onUnmounted(() => {
   color: #e8e8e8;
   display: flex;
   flex-direction: column;
-}
-
-.logo {
-  padding: 1rem 1.25rem;
-  font-weight: 600;
-  font-size: 0.95rem;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
 }
 
 .nav-groups {

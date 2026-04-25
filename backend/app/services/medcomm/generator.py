@@ -39,6 +39,15 @@ async def generate_section_stream(
     agent = get_agent_for_section(content_format, section_type)
     skip_verify, skip_level = get_skip_flags(content_format)
 
+    reading_level = None
+    try:
+        async with AsyncSessionLocal() as _rl_db:
+            _art = await _rl_db.get(Article, article_id)
+            if _art:
+                reading_level = getattr(_art, "reading_level", None)
+    except Exception:
+        pass
+
     state = {
         "article_id": article_id,
         "section_id": section_id,
@@ -53,6 +62,7 @@ async def generate_section_stream(
         "format_meta": format_meta or {},
         "target_word_count": target_word_count,
         "skip_sections": skip_sections or [],
+        "reading_level": reading_level,
     }
 
     async def _resolve_prior_section_text(target_section_type: str) -> str:
@@ -243,6 +253,7 @@ async def generate_section_stream(
         user_id=user_id_for_corpus,
         analysis_report=analysis_report,
         target_word_count=target_word_count,
+        reading_level=reading_level,
     )
 
     try:

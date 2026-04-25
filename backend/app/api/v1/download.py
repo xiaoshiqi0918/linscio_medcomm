@@ -1,0 +1,215 @@
+"""
+客户端下载 API — SaaS 模式
+流程：用户持有有效授权码(LicenseCode) → 验证 → 从 COS manifest 获取版本 → 返回预签名下载 URL
+每次下载都记录 DownloadLog，支持版本追踪和下载统计。
+"""
+import logging
+from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from sqlalchemy import select, func, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database import get_db
+from app.core.deps import get_current_user
+from app.models.user import User
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+PLATFORM_EXT = {"win-x64": "exe", "mac-arm64": "dmg", "mac-x64": "dmg"}
+
+
+# ── 公开接口：产品信息 ──────────────────────────────────────
+
+@router.get("/product-info")
+async def get_product_info():
+    """公开接口：返回产品版本、平台列表（从 COS manifest 读取）"""
+    from app.services.cos import read_manifest
+    manifest = read_manifest()
+
+    products = {}
+    for prod in manifest.get("products", []):
+        products[prod["id"]] = {
+            "id": prod["id"],
+            "name": prod.get("name", prod["id"]),
+            "latest_version": prod.get("latest_version", "0.0.0"),
+            "platforms": prod.get("platforms", []),
+            "platform_status": prod.get("platform_status", {}),
+            "download_files": prod.get("download_files", {}),
+            "release_notes": prod.get("release_notes"),
+            "system_requirements": prod.get("system_requirements", {}),
+            "changelog": prod.get("changelog", []),
+        }
+
+    return {
+        "products": products,
+        "specialties": manifest.get("specialties", []),
+        "drawing_packs": manifest.get("drawing_packs", []),
+    }
+
+
+# ── 需登录接口：下载软件 ────────────────────────────────────
+
+class SoftwareDownloadRequest(BaseModel):
+    product_id: str = Field(default="medcomm")
+    platform: str = Field(..., description="mac-arm64 / mac-x64 / win-x64")
+
+
+@router.post("/software")
+async def download_software(
+    req: SoftwareDownloadRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    下载客户端安装包。
+    前置条件：用户持有至少一个有效授权码。
+    每次下载写入 download_logs 追踪版本分布。
+    """
+    from app.models.billing import LicenseCode, DownloadLog
+    result = await db.execute(
+        select(LicenseCode).where(LicenseCode.owner_id == user.id).limit(1)
+    )
+    license_code = result.scalar_one_or_none()
+    if not license_code:
+        raise HTTPException(status_code=403, detail="no_valid_license")
+
+    from app.services.cos import read_manifest, generate_presigned_download_url
+    manifest = read_manifest()
+
+    prod = None
+    canonical_id = req.product_id
+    for p in manifest.get("products", []):
+        if (p.get("id") or "").lower() == req.product_id.lower():
+            prod = p
+            canonical_id = p["id"]
+            break
+
+    latest_ver = (prod or {}).get("latest_version", "1.0.0")
+
+    allowed = (prod or {}).get("platforms", [])
+    if allowed and req.platform not in allowed:
+        raise HTTPException(status_code=400, detail="platform_unavailable")
+
+    overrides = (prod or {}).get("download_files", {})
+    if req.platform in overrides:
+        filename = overrides[req.platform]
+    else:
+        ext = PLATFORM_EXT.get(req.platform, "dmg")
+        filename = f"LinScio-MedComm-{latest_ver}-{req.platform}.{ext}"
+
+    cos_key = f"releases/{canonical_id}/v{latest_ver}/{filename}"
+
+    from app.core.config import settings
+    if not settings.cos_secret_id:
+        raise HTTPException(status_code=503, detail="下载服务暂不可用，COS 未配置")
+
+    download_url = generate_presigned_download_url(cos_key, expires=7200)
+
+    client_ip = request.client.host if request.client else None
+    ua = (request.headers.get("user-agent") or "")[:300]
+    dl_log = DownloadLog(
+        user_id=user.id,
+        product_id=canonical_id,
+        version=latest_ver,
+        platform=req.platform,
+        filename=filename,
+        license_code_id=license_code.id,
+        client_ip=client_ip,
+        user_agent=ua,
+    )
+    db.add(dl_log)
+    await db.commit()
+
+    logger.info(
+        "客户端下载: user=%d platform=%s version=%s log_id=%d",
+        user.id, req.platform, latest_ver, dl_log.id,
+    )
+
+    return {
+        "download_url": download_url,
+        "filename": filename,
+        "version": latest_ver,
+    }
+
+
+# ── 用户下载记录 ────────────────────────────────────────────
+
+@router.get("/my-downloads")
+async def get_my_downloads(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """查看我的下载记录"""
+    from app.models.billing import DownloadLog
+    result = await db.execute(
+        select(DownloadLog)
+        .where(DownloadLog.user_id == user.id)
+        .order_by(desc(DownloadLog.created_at))
+        .limit(limit)
+    )
+    logs = result.scalars().all()
+    return [
+        {
+            "id": log.id,
+            "product_id": log.product_id,
+            "version": log.version,
+            "platform": log.platform,
+            "filename": log.filename,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+        }
+        for log in logs
+    ]
+
+
+# ── Admin：版本分布统计 ──────────────────────────────────────
+
+@router.get("/stats/version-distribution")
+async def version_distribution(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """客户端版本分布统计（仅管理员）"""
+    if not getattr(user, "is_admin", False):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+
+    from app.models.billing import DownloadLog
+
+    # 每个版本+平台的下载人数（去重 user_id）
+    result = await db.execute(
+        select(
+            DownloadLog.version,
+            DownloadLog.platform,
+            func.count(func.distinct(DownloadLog.user_id)).label("users"),
+            func.count(DownloadLog.id).label("downloads"),
+        )
+        .group_by(DownloadLog.version, DownloadLog.platform)
+        .order_by(desc("downloads"))
+    )
+    rows = result.all()
+
+    total_users_result = await db.execute(
+        select(func.count(func.distinct(DownloadLog.user_id)))
+    )
+    total_users = total_users_result.scalar() or 0
+
+    total_downloads_result = await db.execute(
+        select(func.count(DownloadLog.id))
+    )
+    total_downloads = total_downloads_result.scalar() or 0
+
+    return {
+        "total_users": total_users,
+        "total_downloads": total_downloads,
+        "distribution": [
+            {
+                "version": row.version,
+                "platform": row.platform,
+                "users": row.users,
+                "downloads": row.downloads,
+            }
+            for row in rows
+        ],
+    }

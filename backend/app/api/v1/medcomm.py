@@ -1,13 +1,15 @@
 """MedComm 科普写作 API"""
 import json
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query
+from decimal import Decimal
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from pydantic import BaseModel
 
 from app.core.database import AsyncSessionLocal, get_domain_lock
+from app.core.config import is_saas
 from app.models.article import Article, ArticleSection, ArticleContent
 from app.services.medcomm.generator import generate_section_stream
 
@@ -344,9 +346,24 @@ async def list_articles(
 @router.post("/articles")
 async def create_article(
     req: CreateArticleRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """新建文章"""
+    # ── 入口审核：敏感词扫描 ──────────────────────────────────
+    if is_saas():
+        from app.services.moderation import scan_input
+        from app.core.deps import get_current_user as _get_mod_user
+        mod_user = await _get_mod_user(request, db)
+        input_text = " ".join(filter(None, [
+            req.topic,
+            req.target_audience,
+            req.specialty,
+        ]))
+        scan_result = await scan_input(input_text, mod_user.id, db)
+        if scan_result.has_block:
+            raise HTTPException(status_code=403, detail=scan_result.message)
+
     lock = get_domain_lock("articles")
     async with lock:
         twc = req.target_word_count or _PLATFORM_DEFAULT_WORD_COUNT.get(req.platform, 1500)
@@ -426,9 +443,10 @@ async def create_article(
 @router.get("/articles/{article_id}/export-check")
 async def export_check_route(
     article_id: int,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """导出前检查：数据占位符、绝对化表述、孤儿引用，有未处理警告时需用户确认"""
+    """导出前检查：数据占位符、绝对化表述、孤儿引用、敏感词扫描"""
     from app.services.export.utils import load_article_sections, collect_orphan_citations
     from app.services.verification.pipeline import run_export_check
 
@@ -442,6 +460,28 @@ async def export_check_route(
         if orphans:
             result["can_export"] = False
             result["message"] = (result.get("message") or "") + f"存在 {len(orphans)} 处孤儿引用（文献已移除绑定）建议修复；"
+
+        # ── SaaS 出口审核：敏感词扫描 ──
+        if is_saas() and request:
+            try:
+                from app.core.deps import get_current_user as _get_chk_user
+                from app.services.moderation import scan_export
+                chk_user = await _get_chk_user(request, db)
+                mod_result = await scan_export(full_text, chk_user.id, db, article_id=article_id)
+                if mod_result.matches:
+                    result["moderation"] = {
+                        "passed": mod_result.passed,
+                        "level": mod_result.highest_level,
+                        "message": mod_result.message,
+                        "matches": [{"word": m.word, "level": m.level, "rule": m.rule_name}
+                                    for m in mod_result.matches],
+                    }
+                    if not mod_result.passed:
+                        result["can_export"] = False
+                        result["message"] = (result.get("message") or "") + mod_result.message
+            except Exception:
+                pass
+
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -452,9 +492,46 @@ async def export_article_route(
     article_id: int,
     fmt: str = Query("html", alias="format", description="html / docx / md / pdf / txt / json"),
     platform: str | None = None,
+    watermark: bool = Query(True, description="是否带水印（无水印需 3 积分）"),
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
     """导出文章：json 导出原始结构化数据；html/docx/md/txt 走稳定合并导出；pdf 走 WeasyPrint 等形式路由。"""
+    if is_saas() and not watermark and request:
+        from app.core.deps import get_current_user as _get_exp_user
+        from app.services.credit.pricing import calc_export_cost
+        from app.services.credit.service import InsufficientCreditsError
+        exp_user = await _get_exp_user(request, db)
+        export_cost = calc_export_cost(with_watermark=False)
+
+        paid = Decimal(str(exp_user.credits or 0))
+        promo = Decimal(str(exp_user.promo_credits or 0))
+        usable = paid + promo
+        if usable < export_cost:
+            raise HTTPException(
+                status_code=402,
+                detail=f"无水印导出需要 {export_cost} 积分（赠送积分不可用于导出），当前可用 {usable} 积分",
+            )
+
+        remaining = export_cost
+        promo_deduct = min(promo, remaining)
+        remaining -= promo_deduct
+        if promo_deduct > 0:
+            exp_user.promo_credits -= promo_deduct
+        if remaining > 0:
+            exp_user.credits -= remaining
+        exp_user.total_consumed += export_cost
+
+        from app.models.billing import UsageLog
+        db.add(UsageLog(
+            user_id=exp_user.id,
+            article_id=article_id,
+            operation="export_clean",
+            cost=export_cost,
+            breakdown={"promo": float(promo_deduct), "credits": float(remaining)},
+            meta={"format": fmt, "watermark": False},
+        ))
+        await db.commit()
     from app.services.export.router import export_article as do_export
     from app.services.export.utils import (
         load_article_sections,
@@ -506,6 +583,13 @@ async def export_article_route(
             return ""
         return "\n\n## 参考文献\n\n" + "\n".join(lines)
 
+    _DISCLAIMER_TEXT = (
+        "\n\n---\n\n"
+        "**免责声明**：本文由 AI 辅助生成，仅供科普参考，不构成任何医疗建议。"
+        "文中涉及的疾病、治疗方案等信息请以专业医疗机构的诊断和建议为准。"
+        "如有健康问题，请及时就医。\n"
+    )
+
     def _merged_export(article, parts, export_fmt: str, refs_text: str = "") -> tuple[bytes, str, str]:
         """各章节合并后的通用导出"""
         base_name = (article.topic or "article").replace("/", "-")
@@ -517,10 +601,12 @@ async def export_article_route(
             if not _skip_article_legacy_intro(cf, st) and b.strip()
         ]
 
+        disclaimer = _DISCLAIMER_TEXT if (is_saas() and watermark) else ""
+
         if hide_headings:
-            md_body = "\n\n".join(b for _, b, _ in filtered) + (refs_text or "")
+            md_body = "\n\n".join(b for _, b, _ in filtered) + (refs_text or "") + disclaimer
         else:
-            md_body = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in filtered) + (refs_text or "")
+            md_body = "\n\n".join(f"## {t}\n\n{b}" for t, b, _ in filtered) + (refs_text or "") + disclaimer
 
         if export_fmt == "md":
             asset_block = (
@@ -1447,6 +1533,7 @@ async def generate_section_full(
 @router.post("/sections/{section_id}/generate")
 async def generate_section(
     section_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """SSE 流式生成章节内容"""
@@ -1459,6 +1546,50 @@ async def generate_section(
     section, article = row
     if article.deleted_at:
         raise HTTPException(status_code=404, detail="Article not found")
+
+    # ── SaaS 积分预检 + 会话追踪（单章）───────────────────────
+    sec_saas_user_id: int | None = None
+    sec_estimated_cost = Decimal("0")
+    sec_session_id: str | None = None
+    sec_is_free_gen = False
+    if is_saas():
+        from app.core.deps import get_current_user as _get_user
+        from app.models.user import User as _User
+        user: _User = await _get_user(request, db)
+        sec_saas_user_id = user.id
+
+        from app.core.rate_limit import check_generate_rate
+        await check_generate_rate(user.id)
+
+        sec_target_wc = getattr(article, "target_word_count", None) or 2000
+        total_sections = await db.execute(
+            select(func.count(ArticleSection.id)).where(ArticleSection.article_id == article.id)
+        )
+        num_sections = max(total_sections.scalar() or 1, 1)
+        from app.services.credit.pricing import calc_generation_cost
+        sec_estimated_cost = (calc_generation_cost(sec_target_wc) / Decimal(num_sections)).quantize(Decimal("0.01"))
+        sec_estimated_cost = max(sec_estimated_cost, Decimal("1"))
+
+        if not user.free_generation_used:
+            sec_is_free_gen = True
+        else:
+            from app.services.streaming_session import (
+                start_streaming_session, TooManyConcurrentStreamsError,
+            )
+            from app.services.credit.service import InsufficientCreditsError
+            try:
+                sec_session_id = await start_streaming_session(
+                    user.id, "generate_section", sec_estimated_cost, db,
+                    article_id=article.id, section_id=section.id,
+                )
+                await db.commit()
+            except InsufficientCreditsError as e:
+                raise HTTPException(
+                    status_code=402,
+                    detail=f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分",
+                )
+            except TooManyConcurrentStreamsError as e:
+                raise HTTPException(status_code=429, detail=str(e))
 
     a_id, s_id = article.id, section.id
     cf = article.content_format or "article"
@@ -1494,60 +1625,130 @@ async def generate_section(
             format_meta.setdefault("planner_items", panels_or_pages)
 
     async def event_stream():
+        from app.services.streaming_session import StreamingTokenCounter
+        token_counter = StreamingTokenCounter(sec_session_id or "")
+        stream_completed = False
         last_verify_report = None
-        async for evt in generate_section_stream(
-            article_id=a_id,
-            section_id=s_id,
-            topic=article.topic or "",
-            content_format=cf,
-            section_type=st,
-            target_audience=article.target_audience or "public",
-            platform=pf,
-            specialty=article.specialty or "",
-            article_default_model=article.default_model,
-            format_meta=format_meta,
-            scene_setup_context=scene_setup_context,
-            target_word_count=getattr(article, "target_word_count", None),
-            skip_sections=getattr(article, "skip_sections", None),
-        ):
-            if evt.get("type") == "verify_report" and evt.get("report") is not None:
-                last_verify_report = evt["report"]
-            if evt.get("type") == "done" and evt.get("content"):
-                from app.services.content_version import save_node
-                from app.services.med_claim_marks import apply_med_claim_marks_to_doc
-                from app.services.markdown_to_tiptap import markdown_to_tiptap
-                lock = get_domain_lock("articles")
-                async with lock:
-                    async with AsyncSessionLocal() as sess:
-                        doc = markdown_to_tiptap(evt["content"])
-                        doc = apply_med_claim_marks_to_doc(doc, last_verify_report)
-                        await save_node(
-                            sess,
-                            article_id=a_id,
-                            section_id=s_id,
-                            content_json=doc,
-                            version_type="ai_generated",
-                            platform=article.platform or "wechat",
-                            verify_report=last_verify_report,
-                        )
-                        sug_list = evt.get("image_suggestions")
-                        if sug_list:
-                            await sess.execute(
-                                update(ArticleSection)
-                                .where(ArticleSection.id == s_id)
-                                .values(image_suggestions=sug_list)
-                            )
-                        await sess.commit()
-            yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
-            if evt.get("type") == "done" and evt.get("content"):
-                try:
-                    title_evt = await _auto_generate_title_if_complete(a_id)
-                    if title_evt:
-                        yield f"data: {json.dumps(title_evt, ensure_ascii=False)}\n\n"
-                except Exception as te:
-                    import logging
-                    logging.getLogger(__name__).warning("auto title generation failed: %s", te)
+        try:
+            async for evt in generate_section_stream(
+                article_id=a_id,
+                section_id=s_id,
+                topic=article.topic or "",
+                content_format=cf,
+                section_type=st,
+                target_audience=article.target_audience or "public",
+                platform=pf,
+                specialty=article.specialty or "",
+                article_default_model=article.default_model,
+                format_meta=format_meta,
+                scene_setup_context=scene_setup_context,
+                target_word_count=getattr(article, "target_word_count", None),
+                skip_sections=getattr(article, "skip_sections", None),
+            ):
+                if evt.get("type") == "verify_report" and evt.get("report") is not None:
+                    last_verify_report = evt["report"]
+                if evt.get("type") == "delta" and evt.get("text"):
+                    await token_counter.add_output_tokens(evt["text"])
+                if evt.get("type") == "done" and evt.get("content"):
+                    stream_completed = True
+                    # SaaS: 零宽字符隐写水印
+                    _gen_content = evt["content"]
+                    if is_saas() and sec_saas_user_id:
+                        try:
+                            from app.services.security.watermark import embed_watermark
+                            _gen_content = embed_watermark(_gen_content, sec_saas_user_id)
+                        except Exception:
+                            pass
+                    from app.services.content_version import save_node
+                    from app.services.med_claim_marks import apply_med_claim_marks_to_doc
+                    from app.services.markdown_to_tiptap import markdown_to_tiptap
+                    lock = get_domain_lock("articles")
+                    async with lock:
+                        async with AsyncSessionLocal() as sess:
+                            doc = markdown_to_tiptap(_gen_content)
+                            doc = apply_med_claim_marks_to_doc(doc, last_verify_report)
+                            await save_node(
+                                sess,
+                                article_id=a_id,
+                                section_id=s_id,
+                                content_json=doc,
+                                version_type="ai_generated",
+                                platform=article.platform or "wechat",
+                                verify_report=last_verify_report,
+                            )
+                            sug_list = evt.get("image_suggestions")
+                            if sug_list:
+                                await sess.execute(
+                                    update(ArticleSection)
+                                    .where(ArticleSection.id == s_id)
+                                    .values(image_suggestions=sug_list)
+                                )
+                            await sess.commit()
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+                if evt.get("type") == "done" and evt.get("content"):
+                    # ── 生成后审核：敏感词扫描 ──
+                    if is_saas() and sec_saas_user_id:
+                        try:
+                            from app.services.moderation import scan_generation_output
+                            async with AsyncSessionLocal() as mod_sess:
+                                mod_result = await scan_generation_output(
+                                    evt["content"], sec_saas_user_id, mod_sess,
+                                    article_id=a_id, section_id=s_id,
+                                )
+                                if mod_result.matches:
+                                    mod_evt = {
+                                        "type": "moderation_warning",
+                                        "level": mod_result.highest_level,
+                                        "message": mod_result.message,
+                                        "matches": [{"word": m.word, "level": m.level, "rule": m.rule_name}
+                                                    for m in mod_result.matches],
+                                    }
+                                    yield f"data: {json.dumps(mod_evt, ensure_ascii=False)}\n\n"
+                        except Exception:
+                            pass
+
+                    try:
+                        title_evt = await _auto_generate_title_if_complete(a_id)
+                        if title_evt:
+                            yield f"data: {json.dumps(title_evt, ensure_ascii=False)}\n\n"
+                    except Exception as te:
+                        import logging
+                        logging.getLogger(__name__).warning("auto title generation failed: %s", te)
+        except GeneratorExit:
+            pass
+
+        # ── 单章 SaaS 积分结算 ──
+        if sec_saas_user_id and is_saas():
+            try:
+                async with AsyncSessionLocal() as settle_db:
+                    if sec_is_free_gen:
+                        from app.models.user import User as _U2
+                        _u = await settle_db.get(_U2, sec_saas_user_id, with_for_update=True)
+                        if _u:
+                            _u.free_generation_used = True
+                            await settle_db.commit()
+                    elif sec_session_id:
+                        from app.services.streaming_session import (
+                            complete_streaming_session, abort_streaming_session,
+                        )
+                        if stream_completed:
+                            await complete_streaming_session(
+                                sec_session_id,
+                                token_counter.tokens_in,
+                                token_counter.tokens_out,
+                                settle_db,
+                            )
+                        else:
+                            await abort_streaming_session(
+                                sec_session_id, settle_db,
+                                reason="client_disconnect",
+                            )
+                        await settle_db.commit()
+            except Exception as _ce:
+                import logging
+                logging.getLogger(__name__).error("[generate-section] 积分结算异常: %s", _ce)
 
     return StreamingResponse(
         event_stream(),
@@ -1559,6 +1760,7 @@ async def generate_section(
 @router.post("/articles/{article_id}/generate-all")
 async def generate_all_sections(
     article_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
     """SSE 流式按顺序生成全文所有章节，每一章节完成后保存，
@@ -1570,6 +1772,45 @@ async def generate_all_sections(
     article = art_result.scalar_one_or_none()
     if not article or article.deleted_at:
         raise HTTPException(status_code=404, detail="Article not found")
+
+    # ── SaaS 积分预检 + 会话追踪 ────────────────────────────────
+    saas_user_id: int | None = None
+    estimated_cost = Decimal("0")
+    is_free_gen = False
+    all_session_id: str | None = None
+    if is_saas():
+        from app.core.deps import get_current_user
+        from app.models.user import User
+        user: User = await get_current_user(request, db)
+        saas_user_id = user.id
+
+        from app.core.rate_limit import check_generate_rate as _check_gen_rate
+        await _check_gen_rate(user.id)
+
+        target_wc = getattr(article, "target_word_count", None) or 2000
+        from app.services.credit.pricing import calc_generation_cost
+        estimated_cost = calc_generation_cost(target_wc)
+        if not user.free_generation_used:
+            is_free_gen = True
+            _log.info("[generate-all] 用户 %d 首次免费生成，跳过扣费", user.id)
+        else:
+            from app.services.streaming_session import (
+                start_streaming_session, TooManyConcurrentStreamsError,
+            )
+            from app.services.credit.service import InsufficientCreditsError
+            try:
+                all_session_id = await start_streaming_session(
+                    user.id, "generate_all", estimated_cost, db,
+                    article_id=article.id,
+                )
+                await db.commit()
+            except InsufficientCreditsError as e:
+                raise HTTPException(
+                    status_code=402,
+                    detail=f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分",
+                )
+            except TooManyConcurrentStreamsError as e:
+                raise HTTPException(status_code=429, detail=str(e))
 
     cf = article.content_format or "article"
     pf = article.platform or "wechat"
@@ -1597,6 +1838,9 @@ async def generate_all_sections(
         from app.services.content_version import save_node
         from app.services.markdown_to_tiptap import markdown_to_tiptap
         from app.services.med_claim_marks import apply_med_claim_marks_to_doc
+        from app.services.streaming_session import StreamingTokenCounter
+
+        token_counter = StreamingTokenCounter(all_session_id or "")
 
         total = len([
             si for si in section_infos
@@ -1606,95 +1850,99 @@ async def generate_all_sections(
 
         yield f"data: {json.dumps({'type': 'batch_start', 'total_sections': total}, ensure_ascii=False)}\n\n"
 
-        for si in section_infos:
-            st = si["section_type"]
-            sec_id = si["id"]
-            if st in skip_list or _skip_article_legacy_intro(cf, st):
-                continue
+        try:
+            for si in section_infos:
+                st = si["section_type"]
+                sec_id = si["id"]
+                if st in skip_list or _skip_article_legacy_intro(cf, st):
+                    continue
 
-            _log.info("[generate-all] starting section %s (id=%d)", st, sec_id)
-            yield f"data: {json.dumps({'type': 'section_start', 'section_id': sec_id, 'section_type': st, 'index': completed + 1, 'total': total}, ensure_ascii=False)}\n\n"
+                _log.info("[generate-all] starting section %s (id=%d)", st, sec_id)
+                yield f"data: {json.dumps({'type': 'section_start', 'section_id': sec_id, 'section_type': st, 'index': completed + 1, 'total': total}, ensure_ascii=False)}\n\n"
 
-            format_meta = dict(si.get("format_meta") or {})
-            scene_setup_context = ""
-            async with AsyncSessionLocal() as _db:
-                if cf == "drama_script" and st not in ("drama_plan", "cast_table"):
-                    scene_setup_context = await _get_scene_setup_context(_db, article_id, pf)
-                elif cf == "storyboard" and st not in ("anim_plan", "char_design"):
-                    scene_setup_context = await _get_section_text(_db, article_id, "char_design", pf)
+                format_meta = dict(si.get("format_meta") or {})
+                scene_setup_context = ""
+                async with AsyncSessionLocal() as _db:
+                    if cf == "drama_script" and st not in ("drama_plan", "cast_table"):
+                        scene_setup_context = await _get_scene_setup_context(_db, article_id, pf)
+                    elif cf == "storyboard" and st not in ("anim_plan", "char_design"):
+                        scene_setup_context = await _get_section_text(_db, article_id, "char_design", pf)
 
-                planner_st = _PLANNER_SECTION_TYPE.get(cf, "planner")
-                if cf in _PLANNER_FORMATS and st != planner_st:
-                    planner_data = await _get_planner_context(_db, article_id, pf, planner_st)
-                    if planner_data:
-                        format_meta.setdefault("planner_json", planner_data)
-                        for key in ("story_arc", "story_type", "total_panels", "total_pages",
-                                    "total_sections", "main_character", "core_message",
-                                    "story_title", "color_theme", "layout_style", "story_line",
-                                    "series_theme", "visual_style", "total_cards"):
-                            if key in planner_data and key not in format_meta:
-                                format_meta[key] = planner_data[key]
-                        panels_or_pages = (planner_data.get("panels") or planner_data.get("pages")
-                                           or planner_data.get("sections") or planner_data.get("cards") or [])
-                        format_meta.setdefault("planner_items", panels_or_pages)
+                    planner_st = _PLANNER_SECTION_TYPE.get(cf, "planner")
+                    if cf in _PLANNER_FORMATS and st != planner_st:
+                        planner_data = await _get_planner_context(_db, article_id, pf, planner_st)
+                        if planner_data:
+                            format_meta.setdefault("planner_json", planner_data)
+                            for key in ("story_arc", "story_type", "total_panels", "total_pages",
+                                        "total_sections", "main_character", "core_message",
+                                        "story_title", "color_theme", "layout_style", "story_line",
+                                        "series_theme", "visual_style", "total_cards"):
+                                if key in planner_data and key not in format_meta:
+                                    format_meta[key] = planner_data[key]
+                            panels_or_pages = (planner_data.get("panels") or planner_data.get("pages")
+                                               or planner_data.get("sections") or planner_data.get("cards") or [])
+                            format_meta.setdefault("planner_items", panels_or_pages)
 
-            last_verify_report = None
-            section_content = ""
-            image_suggestions = None
+                last_verify_report = None
+                section_content = ""
+                image_suggestions = None
 
-            async for evt in generate_section_stream(
-                article_id=article_id,
-                section_id=sec_id,
-                topic=art_topic,
-                content_format=cf,
-                section_type=st,
-                target_audience=art_audience,
-                platform=pf,
-                specialty=art_specialty,
-                article_default_model=art_default_model,
-                format_meta=format_meta,
-                scene_setup_context=scene_setup_context,
-                target_word_count=art_word_count,
-                skip_sections=art_skip_sections,
-            ):
-                if evt.get("type") == "verify_report" and evt.get("report") is not None:
-                    last_verify_report = evt["report"]
-                if evt.get("type") == "delta":
-                    yield f"data: {json.dumps({'type': 'delta', 'text': evt.get('text', ''), 'section_id': sec_id}, ensure_ascii=False)}\n\n"
-                if evt.get("type") == "rewriting":
-                    yield f"data: {json.dumps({'type': 'rewriting', 'message': evt.get('message', ''), 'section_id': sec_id}, ensure_ascii=False)}\n\n"
-                if evt.get("type") == "rewritten_content" and evt.get("content"):
-                    yield f"data: {json.dumps({'type': 'rewritten_content', 'content': evt['content'], 'section_id': sec_id}, ensure_ascii=False)}\n\n"
-                if evt.get("type") == "done" and evt.get("content"):
-                    section_content = evt["content"]
-                    image_suggestions = evt.get("image_suggestions")
+                async for evt in generate_section_stream(
+                    article_id=article_id,
+                    section_id=sec_id,
+                    topic=art_topic,
+                    content_format=cf,
+                    section_type=st,
+                    target_audience=art_audience,
+                    platform=pf,
+                    specialty=art_specialty,
+                    article_default_model=art_default_model,
+                    format_meta=format_meta,
+                    scene_setup_context=scene_setup_context,
+                    target_word_count=art_word_count,
+                    skip_sections=art_skip_sections,
+                ):
+                    if evt.get("type") == "verify_report" and evt.get("report") is not None:
+                        last_verify_report = evt["report"]
+                    if evt.get("type") == "delta":
+                        await token_counter.add_output_tokens(evt.get("text", ""))
+                        yield f"data: {json.dumps({'type': 'delta', 'text': evt.get('text', ''), 'section_id': sec_id}, ensure_ascii=False)}\n\n"
+                    if evt.get("type") == "rewriting":
+                        yield f"data: {json.dumps({'type': 'rewriting', 'message': evt.get('message', ''), 'section_id': sec_id}, ensure_ascii=False)}\n\n"
+                    if evt.get("type") == "rewritten_content" and evt.get("content"):
+                        yield f"data: {json.dumps({'type': 'rewritten_content', 'content': evt['content'], 'section_id': sec_id}, ensure_ascii=False)}\n\n"
+                    if evt.get("type") == "done" and evt.get("content"):
+                        section_content = evt["content"]
+                        image_suggestions = evt.get("image_suggestions")
 
-            if section_content:
-                lock = get_domain_lock("articles")
-                async with lock:
-                    async with AsyncSessionLocal() as sess:
-                        doc = markdown_to_tiptap(section_content)
-                        doc = apply_med_claim_marks_to_doc(doc, last_verify_report)
-                        await save_node(
-                            sess,
-                            article_id=article_id,
-                            section_id=sec_id,
-                            content_json=doc,
-                            version_type="ai_generated",
-                            platform=pf,
-                            verify_report=last_verify_report,
-                        )
-                        if image_suggestions:
-                            await sess.execute(
-                                update(ArticleSection)
-                                .where(ArticleSection.id == sec_id)
-                                .values(image_suggestions=image_suggestions)
+                if section_content:
+                    lock = get_domain_lock("articles")
+                    async with lock:
+                        async with AsyncSessionLocal() as sess:
+                            doc = markdown_to_tiptap(section_content)
+                            doc = apply_med_claim_marks_to_doc(doc, last_verify_report)
+                            await save_node(
+                                sess,
+                                article_id=article_id,
+                                section_id=sec_id,
+                                content_json=doc,
+                                version_type="ai_generated",
+                                platform=pf,
+                                verify_report=last_verify_report,
                             )
-                        await sess.commit()
-                _log.info("[generate-all] ✅ section %s saved", st)
+                            if image_suggestions:
+                                await sess.execute(
+                                    update(ArticleSection)
+                                    .where(ArticleSection.id == sec_id)
+                                    .values(image_suggestions=image_suggestions)
+                                )
+                            await sess.commit()
+                    _log.info("[generate-all] section %s saved", st)
 
-            completed += 1
-            yield f"data: {json.dumps({'type': 'section_done', 'section_id': sec_id, 'section_type': st, 'index': completed, 'total': total}, ensure_ascii=False)}\n\n"
+                completed += 1
+                yield f"data: {json.dumps({'type': 'section_done', 'section_id': sec_id, 'section_type': st, 'index': completed, 'total': total}, ensure_ascii=False)}\n\n"
+        except GeneratorExit:
+            pass
 
         try:
             title_evt = await _auto_generate_title_if_complete(article_id)
@@ -1702,6 +1950,37 @@ async def generate_all_sections(
                 yield f"data: {json.dumps(title_evt, ensure_ascii=False)}\n\n"
         except Exception as te:
             _log.warning("auto title generation failed: %s", te)
+
+        # ── SaaS 积分结算 ────
+        if saas_user_id and is_saas():
+            try:
+                async with AsyncSessionLocal() as settle_db:
+                    if is_free_gen:
+                        from app.models.user import User as _User
+                        _u = await settle_db.get(_User, saas_user_id, with_for_update=True)
+                        if _u:
+                            _u.free_generation_used = True
+                            await settle_db.commit()
+                        _log.info("[generate-all] 首次免费生成已标记 user=%d", saas_user_id)
+                    elif all_session_id:
+                        from app.services.streaming_session import (
+                            complete_streaming_session, abort_streaming_session,
+                        )
+                        if completed >= total and total > 0:
+                            await complete_streaming_session(
+                                all_session_id,
+                                token_counter.tokens_in,
+                                token_counter.tokens_out,
+                                settle_db,
+                            )
+                        else:
+                            await abort_streaming_session(
+                                all_session_id, settle_db,
+                                reason="incomplete" if completed > 0 else "client_disconnect",
+                            )
+                        await settle_db.commit()
+            except Exception as credit_err:
+                _log.error("[generate-all] 积分结算异常: %s", credit_err)
 
         yield f"data: {json.dumps({'type': 'batch_done', 'completed': completed}, ensure_ascii=False)}\n\n"
 
@@ -2066,6 +2345,7 @@ def article_to_dict(a: Article) -> dict:
         "content_format": a.content_format,
         "platform": a.platform,
         "target_audience": a.target_audience,
+        "reading_level": getattr(a, "reading_level", None),
         "specialty": a.specialty,
         "status": a.status,
         "current_stage": a.current_stage,

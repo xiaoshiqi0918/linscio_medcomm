@@ -112,10 +112,8 @@ async def delete_doc(doc_id: int, db: AsyncSession = Depends(get_db)):
             r[0] for r in (await db.execute(select(KnowledgeChunk.id).where(KnowledgeChunk.doc_id == doc_id))).fetchall()
         ]
         if chunk_ids:
-            ph = ",".join(str(i) for i in chunk_ids)
-            await db.execute(text(
-                f"INSERT INTO knowledge_fts(knowledge_fts, rowid) SELECT 'delete', rowid FROM knowledge_fts WHERE chunk_id IN ({ph})"
-            ))
+            from app.services.vector.fts5 import delete_knowledge_chunks_from_fts
+            await delete_knowledge_chunks_from_fts(chunk_ids, db)
         await db.execute(delete(KnowledgeChunk).where(KnowledgeChunk.doc_id == doc_id))
         await db.delete(doc)
         await db.commit()

@@ -2068,7 +2068,7 @@ async function handleGenerateAll() {
       const key = await electron.getLocalApiKey()
       if (key) headers['X-Local-Api-Key'] = key
     }
-    const res = await fetch(`http://127.0.0.1:8765/api/v1/medcomm/articles/${articleId.value}/generate-all`, {
+    const res = await fetch(`${API_BASE}/api/v1/medcomm/articles/${articleId.value}/generate-all`, {
       method: 'POST',
       headers,
     })

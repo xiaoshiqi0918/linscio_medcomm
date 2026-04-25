@@ -22,6 +22,18 @@ from app.models.article_snapshot import ArticleSnapshot
 from app.models.personal_corpus import PersonalCorpusEntry
 from app.models.medpic_generation import MedPicGeneration
 
+# SaaS 独有模型 — 桌面端打包时这些文件会被排除，条件导入避免 ImportError
+try:
+    from app.models.billing import (
+        UsageLog, RechargeLog, UserBalanceSnapshot, CompensationVoucher,
+        PaymentOrder, RefundRecord, ReconciliationLog, LicenseCode, DownloadLog,
+        TaskRecord, StreamingSession,
+        AdminAuditLog, LlmCallLog, ContentModerationLog,
+    )
+    from app.models.referral import ReferralLog, WithdrawalLog
+except ImportError:
+    pass
+
 __all__ = [
     "Base", "User", "UserSetting", "Article", "ArticleSection", "ArticleContent", "ArticleLiteratureBinding", "ArticleExternalReference",
     "GeneratedImage", "ImagePromptTemplate", "ContentTemplate", "KnowledgeDoc", "KnowledgeChunk",

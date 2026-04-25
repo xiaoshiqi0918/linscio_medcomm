@@ -1,0 +1,208 @@
+# ============================================================
+#  AutoCut 项目脚本 — MedComm 抖音竖屏
+# ============================================================
+
+project:
+  name: "MedComm 文献驱动科普 · 抖音"
+  output_file: "medcomm_promo_douyin.mp4"
+  notes: "主片约 75～90s；source_range 需按实际录屏替换。"
+
+meta:
+  platform: douyin
+  landing_page: "https://medcomm.linscio.com.cn"
+  memory_sentence: >-
+    MedComm 先把外部文献检索进库，再用 AI 做结构化文献分析，
+    最后才把证据绑定到章节去生成——科普不是从空白文档开始的。
+  disclaimer: >-
+    本内容为软件功能演示；科普与医疗表述不构成诊疗建议；
+    发布内容请以人工审核为准，并遵守所在单位与平台规则。
+
+# --- 素材源 ---
+source:
+  video: "medcomm_demo_douyin.mp4"
+
+# --- 输出配置 ---
+output:
+  resolution: [1080, 1920]
+  fps: 30
+  codec: "h264"
+  bitrate: "8M"
+  layout: "split"
+  split_ratio: 0.6
+
+# --- 配音配置 ---
+voice:
+  engine: "edge_tts"
+  name: "zh-CN-YunxiNeural"
+  speed: "+5%"
+  volume: "+0%"
+
+# --- 字幕全局配置 ---
+subtitle:
+  default_style: "highlight"
+  font: "PingFang SC"
+  font_size: 48
+  position: "bottom_center"
+  color: "#FFFFFF"
+  outline_color: "#000000"
+  outline_width: 2
+  highlight_color: "#FFD700"
+
+# --- BGM ---
+bgm:
+  file: "bgm_soft.mp3"
+  volume: 0.15
+
+# --- 转场 ---
+transition:
+  type: "fade"
+  duration: 0.3
+
+# --- 智能分析全局配置 ---
+analysis:
+  weight_preset: "balanced"
+
+# ============================================================
+#  分场景定义
+# ============================================================
+scenes:
+
+  - id: 1
+    label: "痛点引入"
+    source_range: "0:00-0:15"
+    ocr_keywords: ["新建", "空白", "文档"]
+    keyword_match: "any"
+    duration: 4
+    speed: 1.0
+    narration: |
+      医学科普最怕没据可依。
+      MedComm 先把文献检索和分析做完，再动笔。
+    subtitle_style: "highlight"
+    overlays:
+      - type: "text_card"
+        content: "没文献不敢写？"
+        duration: 2
+        delay: 0
+        fade: 0.3
+        style:
+          bg_color: "#000000"
+          text_color: "#FF4444"
+          font_size: 72
+          position: "center"
+          border_radius: 12
+
+  - id: 2
+    label: "文献检索演示"
+    source_range: "0:15-2:30"
+    ocr_keywords: ["外部检索", "PubMed", "CrossRef", "Semantic Scholar"]
+    keyword_match: "any"
+    duration: 18
+    speed: 1.0
+    compress_mode: "hybrid"
+    max_speed: 3.0
+    anchor_keywords: ["外部检索", "PubMed", "勾选", "保存入库", "流式"]
+    anchor_padding: 2
+    importance_threshold: 0.4
+    narration: |
+      在文献库里直接连 PubMed、CrossRef、Semantic Scholar，
+      流式出结果，好用的顺手进本地库，以后都能复用。
+    overlays:
+      - type: "box_highlight"
+        match_text: "外部检索"
+        color: "#FF0000"
+        border_width: 3
+        padding: 8
+        border_radius: 6
+        duration: 3
+        delay: 1
+        fade: 0.2
+
+  - id: 3
+    label: "文献分析"
+    source_range: "2:30-5:30"
+    ocr_keywords: ["分析文献", "核心主题", "证据概览", "关键发现", "共识"]
+    keyword_match: "any"
+    duration: 26
+    speed: 1.5
+    compress_mode: "speed"
+    max_speed: 2.5
+    anchor_keywords: ["分析文献", "核心主题", "证据概览", "关键发现", "共识", "矛盾"]
+    anchor_padding: 1.5
+    narration: |
+      新建文章第一步不是瞎写：先选支撑文献；
+      第二步 AI 通读做结构化分析——证据强度、关键发现、
+      多篇之间共识还是矛盾，一眼看清。
+      这才是后面敢写、能核对的基础。
+    overlays:
+      - type: "text_label"
+        content: "Step 2: AI 文献分析"
+        position: "top_left"
+        duration: 5
+        delay: 2
+        fade: 0.3
+        style:
+          bg_color: "#1A73E8"
+          text_color: "#FFFFFF"
+          font_size: 28
+          padding: [6, 16]
+          border_radius: 4
+
+  - id: 4
+    label: "写作与生成"
+    source_range: "5:30-7:30"
+    ocr_keywords: ["AI 生成", "检索支撑文献", "参考文献", "绑定"]
+    keyword_match: "any"
+    duration: 14
+    speed: 1.2
+    narration: |
+      写的过程中还能再检索补文献、绑定到章节或全文；
+      生成时把刚才的分析和绑定一起喂给模型，不是空口科普。
+
+  - id: 5
+    label: "去 AI 化与检测"
+    source_range: "7:30-8:30"
+    ocr_keywords: ["AIGC", "检测", "改写"]
+    keyword_match: "any"
+    duration: 10
+    speed: 1.0
+    narration: "成稿再过改写和段落检测，减少 AI 腔。"
+
+  - id: 6
+    label: "导出与引流"
+    source_range: "8:30-9:30"
+    ocr_keywords: ["导出", "Word", "HTML"]
+    keyword_match: "any"
+    duration: 16
+    speed: 1.0
+    narration: "文献驱动写作，MedComm 官网了解。"
+    overlays:
+      - type: "text_card"
+        content: "MedComm\n文献驱动写作\nmedcomm.linscio.com.cn"
+        duration: 5
+        delay: 8
+        fade: 0.5
+        style:
+          bg_color: "#1A73E8"
+          text_color: "#FFFFFF"
+          font_size: 52
+          position: "center"
+          border_radius: 16
+
+# ------------------------------------------------------------
+#  可选：15s 引流版 — 可另存 project.name / output_file 后仅保留 id 7～9
+# ------------------------------------------------------------
+# scenes_teaser:
+#   - id: 7
+#     label: "引流-检索"
+#     source_range: "0:15-0:35"
+#     duration: 5
+#     narration: "（外部检索片段）"
+#   - id: 8
+#     label: "引流-分析"
+#     source_range: "2:30-3:00"
+#     duration: 5
+#     narration: "（分析文献进入报告）"
+#   - id: 9
+#     label: "引流-收尾"
+#     duration: 5
+#     narration: "先检索、再通读分析，再写科普。"
