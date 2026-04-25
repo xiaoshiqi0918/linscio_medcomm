@@ -8,11 +8,14 @@
 
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
+import { useAuthGuard } from '@/composables/useAuthGuard'
 
 const router = useRouter()
 const route = useRoute()
+const { requireAuth } = useAuthGuard()
 
 async function goNew() {
+  if (!await requireAuth('新建文章')) return
   if (route.name === 'medcomm-new') {
     await router.replace({ path: '/medcomm/new', query: { t: String(Date.now()) } })
     return

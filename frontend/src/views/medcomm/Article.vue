@@ -554,6 +554,7 @@ import { ArrowDown, ArrowLeft, Loading } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api, axiosErrorDetail, API_BASE, getAuthToken, getLocalApiKeyHeaderForFetch } from '@/api'
 import { useStreamGenerate } from '@/composables/useStreamGenerate'
+import { useAuthGuard } from '@/composables/useAuthGuard'
 import { useArticleStore } from '@/stores/article'
 import { useSettingsStore } from '@/stores/settings'
 import { buildImageGenBackendOptions } from '@/composables/useImageGenerate'
@@ -564,6 +565,7 @@ const route = useRoute()
 const router = useRouter()
 const articleStore = useArticleStore()
 const settingsStore = useSettingsStore()
+const { requireAuth } = useAuthGuard()
 const article = ref<any>(null)
 const articleTitleDraft = ref('')
 const titleGenerating = ref(false)
@@ -2011,6 +2013,7 @@ function openPaperFromClaimEvidence() {
 }
 
 async function handleGenerate() {
+  if (!await requireAuth('生成内容')) return
   if (!currentSectionId.value) return
   articleStore.setOllamaWarning(null)
   articleStore.setVerificationReport(null)
@@ -2044,6 +2047,7 @@ async function handleGenerate() {
 }
 
 async function handleGenerateAll() {
+  if (!await requireAuth('生成全文')) return
   if (!articleId.value || !article.value?.sections?.length) return
   const confirmed = await ElMessageBox.confirm(
     '将按顺序生成全部章节（正文→案例→Q&A→小结等，已跳过的章节会跳过），每个章节会基于前序内容进行写作。已有内容的章节将被覆盖。',
@@ -2305,6 +2309,7 @@ async function saveArticleTitle() {
 }
 
 async function handleGenerateTitle() {
+  if (!await requireAuth('生成标题')) return
   if (!articleId.value) return
   titleGenerating.value = true
   try {

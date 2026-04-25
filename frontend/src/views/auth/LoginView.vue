@@ -22,12 +22,13 @@
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { http, setAuthToken } from '@/api'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 
 const router = useRouter()
+const route = useRoute()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
 
@@ -58,7 +59,8 @@ async function handleLogin() {
       try { localStorage.setItem('linscio_refresh_token', refresh_token) } catch {}
     }
     ElMessage.success('登录成功')
-    router.push('/').catch(() => {})
+    const redirect = (route.query.redirect as string) || '/'
+    router.push(redirect).catch(() => {})
   } catch (e: any) {
     const detail = e?.response?.data?.detail || '登录失败'
     ElMessage.error(detail)

@@ -436,11 +436,13 @@ import { Close, Loading, DataAnalysis, CircleCheckFilled, Promotion, Document, T
 import { ElMessage } from 'element-plus'
 import FormatPicker from '@/components/common/FormatPicker.vue'
 import { api, API_BASE, getLocalApiKeyHeaderForFetch } from '@/api'
+import { useAuthGuard } from '@/composables/useAuthGuard'
 import { useSettingsStore } from '@/stores/settings'
 import { SPECIALTY_OPTIONS } from '@/constants/specialties'
 
 const router = useRouter()
 const settingsStore = useSettingsStore()
+const { requireAuth } = useAuthGuard()
 
 // ── Wizard state ──
 const currentStep = ref(0)
@@ -1053,6 +1055,7 @@ function audienceLabel(key: string) {
 }
 
 async function handleCreate() {
+  if (!await requireAuth('创建文章')) return
   if (!form.topic?.trim()) {
     ElMessage.warning('请填写主题')
     return

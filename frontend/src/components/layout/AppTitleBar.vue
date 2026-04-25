@@ -8,21 +8,28 @@
     <div class="right no-drag">
       <!-- SaaS 模式 -->
       <template v-if="!isElectron">
-        <el-dropdown trigger="click" @command="onCommand">
-          <span class="user-chip">
-            {{ saasDisplayName || '未登录' }}
-          </span>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item disabled class="key-status-item">
-                <span class="key-label">积分余额</span>
-                <span class="key-badge configured">{{ saasCredits }}</span>
-              </el-dropdown-item>
-              <el-dropdown-item command="settings" divided>设置</el-dropdown-item>
-              <el-dropdown-item command="saasLogout">退出登录</el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <template v-if="isLoggedIn">
+          <el-dropdown trigger="click" @command="onCommand">
+            <span class="user-chip">
+              {{ saasDisplayName || '用户' }}
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item disabled class="key-status-item">
+                  <span class="key-label">积分余额</span>
+                  <span class="key-badge configured">{{ saasCredits }}</span>
+                </el-dropdown-item>
+                <el-dropdown-item command="settings" divided>设置</el-dropdown-item>
+                <el-dropdown-item command="saasLogout">退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </template>
+        <template v-else>
+          <router-link to="/login" class="auth-link">登录</router-link>
+          <span class="auth-divider">/</span>
+          <router-link to="/register" class="auth-link">注册</router-link>
+        </template>
       </template>
       <!-- 桌面模式 -->
       <template v-else>
@@ -61,11 +68,11 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { AUTH_USER_CHANGED_EVENT, useAuthStore } from '@/stores/auth'
-import { api, http, setAuthToken } from '@/api'
+import { api, http, setAuthToken, getAuthToken } from '@/api'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -76,6 +83,8 @@ let lastUserChangedToastAt = 0
 
 const saasDisplayName = ref('')
 const saasCredits = ref(0)
+const _authTokenSnapshot = ref(getAuthToken())
+const isLoggedIn = computed(() => !!_authTokenSnapshot.value)
 
 async function loadSaasInfo() {
   if (isElectron) return
@@ -104,7 +113,7 @@ onMounted(async () => {
   if (isElectron) {
     await authStore.refreshMe()
     await refreshSummary()
-  } else {
+  } else if (isLoggedIn.value) {
     await loadSaasInfo()
   }
   window.addEventListener(AUTH_USER_CHANGED_EVENT, onAuthUserChanged as EventListener)
@@ -140,6 +149,7 @@ async function onCommand(cmd: string) {
       })
       try { await http.post('/api/v1/auth/logout') } catch { /* ignore */ }
       setAuthToken(null)
+      _authTokenSnapshot.value = null
       router.push('/login').catch(() => {})
       ElMessage.success('已退出')
     } catch { /* user cancel */ }
@@ -250,6 +260,23 @@ async function onCommand(cmd: string) {
   color: rgba(255,255,255,0.9);
   font-size: 12px;
   line-height: 1;
+}
+.auth-link {
+  color: rgba(255,255,255,0.9);
+  text-decoration: none;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.auth-link:hover {
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+}
+.auth-divider {
+  color: rgba(255,255,255,0.4);
+  font-size: 13px;
+  margin: 0 2px;
 }
 </style>
 

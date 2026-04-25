@@ -45,13 +45,22 @@
       </div>
     </nav>
     <div class="sidebar-footer">
-      <div class="footer-row">
-        <span class="avatar">👤</span>
-        <span class="user-info">{{ sidebarDisplayName }}</span>
-      </div>
-      <span v-if="isElectron && licenseStore.expiresAt" class="expiry-info">
-        授权到期 {{ formatExpiry(licenseStore.expiresAt) }}
-      </span>
+      <template v-if="isLoggedIn || isElectron">
+        <div class="footer-row">
+          <span class="avatar">👤</span>
+          <span class="user-info">{{ sidebarDisplayName }}</span>
+        </div>
+        <span v-if="isElectron && licenseStore.expiresAt" class="expiry-info">
+          授权到期 {{ formatExpiry(licenseStore.expiresAt) }}
+        </span>
+      </template>
+      <template v-else>
+        <div class="footer-row guest-row">
+          <span class="avatar">👤</span>
+          <span class="user-info">游客模式</span>
+        </div>
+        <router-link to="/login" class="guest-login-btn">登录 / 注册</router-link>
+      </template>
     </div>
   </aside>
 </template>
@@ -61,13 +70,14 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useUserStore } from '@/stores/user'
 import { useAuthStore, AUTH_USER_CHANGED_EVENT } from '@/stores/auth'
 import { useMedcommLicenseStore } from '@/stores/medcommLicense'
-import { http } from '@/api'
+import { http, getAuthToken } from '@/api'
 
 const userStore = useUserStore()
 const authStore = useAuthStore()
 const licenseStore = useMedcommLicenseStore()
 const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
 
+const isLoggedIn = computed(() => !!getAuthToken())
 const saasDisplayName = ref('')
 
 const sidebarDisplayName = computed(() => {
@@ -91,7 +101,7 @@ async function onAuthUserChanged() {
 
 onMounted(async () => {
   window.addEventListener(AUTH_USER_CHANGED_EVENT, onAuthUserChanged as EventListener)
-  if (!isElectron) {
+  if (!isElectron && isLoggedIn.value) {
     try {
       const res = await http.get('/api/v1/auth/me')
       saasDisplayName.value = res.data?.display_name || ''
@@ -182,5 +192,24 @@ onUnmounted(() => {
   margin-top: 0.25rem;
   font-size: 0.75rem;
   opacity: 0.8;
+}
+.guest-row .user-info {
+  opacity: 0.6;
+}
+.guest-login-btn {
+  display: block;
+  margin-top: 0.5rem;
+  padding: 6px 0;
+  text-align: center;
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border-radius: 6px;
+  text-decoration: none;
+  font-size: 0.8rem;
+  transition: background 0.15s;
+}
+.guest-login-btn:hover {
+  background: rgba(59, 130, 246, 0.35);
+  color: #93bbfd;
 }
 </style>

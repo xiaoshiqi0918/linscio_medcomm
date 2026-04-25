@@ -113,10 +113,25 @@ const router = createRouter({
 ],
 })
 
-// 导航守卫：未登录时跳转到登录页（桌面端与 SaaS 统一）
+const _isElectronEnv = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
+
 router.beforeEach((to, _from, next) => {
   const token = getAuthToken()
-  if (!token && !to.meta.guest) {
+
+  if (_isElectronEnv) {
+    // 桌面端：未登录强制跳转登录页
+    if (!token && !to.meta.guest) {
+      next({ name: 'login', query: { redirect: to.fullPath } })
+    } else if (token && to.meta.guest) {
+      next('/')
+    } else {
+      next()
+    }
+    return
+  }
+
+  // SaaS：未登录可浏览，但 admin 页面仍需登录
+  if (!token && to.meta.admin) {
     next({ name: 'login', query: { redirect: to.fullPath } })
   } else if (token && to.meta.guest) {
     next('/')

@@ -84,13 +84,10 @@ http.interceptors.response.use(
       cfg.__retried = true
       setAuthToken(null)
       _authToken = null
-      if (typeof window !== 'undefined') {
-        if (_isElectron) {
-          window.location.hash = '#/login'
-        } else {
-          window.location.href = '/login'
-        }
+      if (typeof window !== 'undefined' && _isElectron) {
+        window.location.hash = '#/login'
       }
+      // SaaS: don't force redirect — let components handle via useAuthGuard
     }
     return Promise.reject(error)
   }

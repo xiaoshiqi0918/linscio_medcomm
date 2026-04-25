@@ -559,6 +559,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
 import { api, API_BASE, getAuthToken, getLocalApiKeyHeaderForFetch } from '@/api'
 import { AUTH_USER_CHANGED_EVENT } from '@/stores/auth'
+import { useAuthGuard } from '@/composables/useAuthGuard'
 
 function parseAuthors(v: any): any[] {
   if (Array.isArray(v)) return v
@@ -570,6 +571,7 @@ function parseAuthors(v: any): any[] {
 
 const papers = ref<any[]>([])
 const router = useRouter()
+const { requireAuth } = useAuthGuard()
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
@@ -1145,6 +1147,7 @@ async function handleImport(file: any) {
 }
 
 async function importFromDialog(file: File) {
+  if (!await requireAuth('导入文献')) return
   const form = new FormData()
   form.append('file', file)
   try {
@@ -1205,6 +1208,7 @@ async function pollImportTask(taskId: string) {
 }
 
 async function handleFileChange(file: any) {
+  if (!await requireAuth('上传文献')) return
   const form = new FormData()
   form.append('file', file.raw)
   try {
@@ -1687,6 +1691,7 @@ async function onExternalRowClick(row: any) {
 }
 
 async function saveExternalSelected() {
+  if (!await requireAuth('保存文献')) return
   if (!externalSelected.value.length) return
   externalSaving.value = true
   try {
@@ -1727,6 +1732,7 @@ async function saveExternalSelected() {
 }
 
 async function saveExternalOne(row: any) {
+  if (!await requireAuth('保存文献')) return
   if (!row) return
   externalSavingSingle.value = true
   try {
