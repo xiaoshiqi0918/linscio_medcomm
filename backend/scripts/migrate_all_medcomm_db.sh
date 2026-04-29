@@ -13,8 +13,9 @@ run_one() {
     return 0
   fi
   echo "==> LINSCIO_APP_DATA=$data_root  ($db)"
-  LINSCIO_APP_DATA="$data_root" alembic upgrade head
-  echo "    current: $(LINSCIO_APP_DATA="$data_root" alembic current 2>/dev/null | tail -1)"
+  # 本脚本只处理本地 medcomm.db；必须 desktop，否则 backend/.env 若为 saas 会误连 PostgreSQL
+  LINSCIO_APP_DATA="$data_root" DEPLOYMENT_MODE=desktop alembic upgrade head
+  echo "    current: $(LINSCIO_APP_DATA="$data_root" DEPLOYMENT_MODE=desktop alembic current 2>/dev/null | tail -1)"
 }
 
 # 默认：本仓库开发用 .data；若 db 误放在 backend 根目录也处理一次

@@ -13,7 +13,23 @@ echo "  CI 打包请依赖 workflow 里的 scripts/ci-alembic-check.sh（单 hea
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-bash backend/scripts/migrate_all_medcomm_db.sh
+if [[ "${MEDCOMM_SKIP_ELECTRON_PREBUILD_MIGRATE:-}" == "1" ]]; then
+  echo "已跳过 migrate（MEDCOMM_SKIP_ELECTRON_PREBUILD_MIGRATE=1）；发版请以 CI alembic 校验为准。"
+  echo ""
+else
+bash backend/scripts/migrate_all_medcomm_db.sh || {
+  cat <<'MSG'
+
+migrate 失败（常见原因：本机 medcomm.db 与迁移在 SQLite 上不完全兼容；CI 使用 PostgreSQL 校验）。
+
+可选方案：
+  1) MEDCOMM_SKIP_ELECTRON_PREBUILD_MIGRATE=1 npm run electron:build   # 跳过本步迁移
+  2) 备份后删除 backend/.data/medcomm.db（或新建干净克隆仅用于打包）
+
+MSG
+  exit 1
+}
+fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
