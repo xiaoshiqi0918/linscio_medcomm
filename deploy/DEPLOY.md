@@ -254,8 +254,8 @@ async def create_admin():
     await init_db()
     async for db in get_session():
         user = User(
-            phone='你的手机号',
-            password_hash=hash_password('你的密码'),
+            phone='17317507227',
+            password_hash=hash_password('Yeahchy@07102'),
             display_name='管理员',
             is_admin=True,
         )

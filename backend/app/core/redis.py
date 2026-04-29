@@ -90,7 +90,8 @@ else:
     from urllib.parse import urlparse
 
     _parsed = urlparse(settings.redis_url)
-    _base_url = f"{_parsed.scheme}://{_parsed.hostname}:{_parsed.port or 6379}"
+    _password_part = f":{_parsed.password}@" if _parsed.password else "@"
+    _base_url = f"{_parsed.scheme}://{_password_part}{_parsed.hostname}:{_parsed.port or 6379}"
 
     _pool_cache_real: dict[int, aioredis.Redis] = {}
 
