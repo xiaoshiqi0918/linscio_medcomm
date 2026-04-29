@@ -16,8 +16,9 @@ from app.agents.polish.polish_agent import (
 from app.agents.prompts.loader import load_polish, load_writing_sop
 from app.agents.prompts.anti_hallucination import MEDCOMM_EVIDENCE_LANGUAGE
 from app.agents.prompts import MEDCOMM_ANTI_HALLUCINATION
-from app.services.llm.openai_client import chat_completion
+from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
 from app.services.llm.manager import TaskTier
+from app.core.config import is_saas
 
 _POLISH_JSON_SYSTEM_BASE = load_polish("json_output_system") or "你是一个医学科普编辑助手。请严格按照要求的 JSON 格式输出，不要添加任何解释或额外文字。"
 
@@ -139,7 +140,10 @@ async def run_polish(
     ]
 
     try:
-        resp = await chat_completion(messages, stream=False, task=TaskTier.BALANCED)
+        if is_saas():
+            resp = await call_llm_with_fallback("polish", messages, stream=False)
+        else:
+            resp = await chat_completion(messages, stream=False, task=TaskTier.BALANCED)
         raw = (resp or "").strip()
     except Exception as e:
         return {"changes_count": 0, "error": str(e)}
@@ -186,7 +190,7 @@ async def run_polish(
             db.add(pc)
         session.status = "done"
         await db.commit()
-        return {"changes_count": len(changes), "error": None}
+        return {"changes_count": len(changes), "output_chars": len(raw), "error": None}
 
     else:
         # platform adapt: 单条结果
@@ -214,6 +218,7 @@ async def run_polish(
                 "word_count": obj.get("word_count"),
                 "changes_summary": obj.get("changes_summary"),
                 "platform_tips": obj.get("platform_tips", []),
+                "output_chars": len(raw),
                 "error": None,
             }
-        return {"changes_count": 0, "error": "无法解析平台适配结果"}
+        return {"changes_count": 0, "output_chars": len(raw), "error": "无法解析平台适配结果"}

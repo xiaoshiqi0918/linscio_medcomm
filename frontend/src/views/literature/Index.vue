@@ -328,10 +328,51 @@
           <div v-else class="source-stat-line">进行中</div>
         </div>
       </div>
+      <div v-if="externalResults.length" class="ai-filter-bar">
+        <el-input
+          v-model="aiFilterTopic"
+          placeholder="输入研究主题，AI 自动筛选最相关文献"
+          style="flex: 1; min-width: 200px;"
+          :disabled="aiFilterLoading"
+          clearable
+          @clear="resetAiFilter"
+        />
+        <el-select v-model="aiFilterTopK" style="width: 120px;" :disabled="aiFilterLoading">
+          <el-option :label="`保留 5 篇`" :value="5" />
+          <el-option :label="`保留 10 篇`" :value="10" />
+          <el-option :label="`保留 15 篇`" :value="15" />
+          <el-option :label="`保留 20 篇`" :value="20" />
+          <el-option :label="`保留 30 篇`" :value="30" />
+        </el-select>
+        <el-button type="warning" :loading="aiFilterLoading" :disabled="!aiFilterTopic.trim() || !externalResults.length || (aiFilterCostHint?.sufficient === false)" @click="doAiFilter">
+          {{ aiFilterLoading ? 'AI 筛选中...' : 'AI 智能筛选' }}
+        </el-button>
+        <span v-if="aiFilterCostHint && aiFilterCostHint.cost > 0" class="ai-filter-cost-hint">
+          <el-tag v-if="aiFilterCostHint.sufficient" size="small" effect="plain">预计消耗 {{ aiFilterCostHint.cost }} 积分</el-tag>
+          <el-tag v-else size="small" type="danger" effect="plain">积分不足（需 {{ aiFilterCostHint.cost }} 积分）</el-tag>
+        </span>
+        <el-button v-if="aiFilterApplied" @click="resetAiFilter">重置</el-button>
+      </div>
+      <div v-if="aiFilterApplied && aiFilterStats" class="ai-filter-stats">
+        <el-tag type="success" effect="plain">
+          已从 {{ aiFilterStats.total }} 篇中筛选保留 {{ aiFilterStats.total - aiFilterStats.removed }} 篇
+        </el-tag>
+        <el-tag v-if="aiFilterStats.method === 'hybrid'" type="info" effect="plain" size="small">Embedding + LLM</el-tag>
+        <el-tag v-else type="info" effect="plain" size="small">LLM 评估</el-tag>
+      </div>
       <div class="external-search-body">
-        <el-table :data="externalResults" max-height="360" @selection-change="onExternalSelectionChange" @row-click="onExternalRowClick">
+        <el-table :data="filteredExternalResults" max-height="360" @selection-change="onExternalSelectionChange" @row-click="onExternalRowClick">
           <el-table-column type="selection" width="40" />
-          <el-table-column prop="title" label="标题" min-width="260" show-overflow-tooltip />
+          <el-table-column prop="title" label="标题" min-width="260" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span>{{ row.title }}</span>
+              <el-tooltip v-if="row._ai_reason" :content="row._ai_reason" placement="top">
+                <el-tag class="ai-score-tag" size="small" :type="row._ai_score >= 8 ? 'success' : row._ai_score >= 6 ? 'warning' : 'info'" effect="plain">
+                  {{ row._ai_score?.toFixed(1) }}
+                </el-tag>
+              </el-tooltip>
+            </template>
+          </el-table-column>
           <el-table-column prop="journal" label="期刊" min-width="160" show-overflow-tooltip />
           <el-table-column prop="year" label="年份" width="80" />
           <el-table-column label="来源" width="110">
@@ -625,6 +666,13 @@ const externalMetaText = ref('')
 const externalSourceStats = ref<Array<{ id: string; count: number; elapsed: number; error?: string; progress: number; status: 'running' | 'done' | 'error'; stageText?: string }>>([])
 let externalProgressTimer: number | null = null
 const externalPreview = ref<any | null>(null)
+const aiFilterTopic = ref('')
+const aiFilterTopK = ref(15)
+const aiFilterLoading = ref(false)
+const aiFilterApplied = ref(false)
+const aiFilterStats = ref<{ removed: number; total: number; method: string } | null>(null)
+const aiFilterScoreMap = ref<Map<string, { score: number; reason: string }>>(new Map())
+const aiFilterCostHint = ref<{ cost: number; sufficient: boolean } | null>(null)
 const translateInput = ref('')
 const translateOutput = ref('')
 const translateLoading = ref(false)
@@ -1432,6 +1480,92 @@ async function onDeleteNoFulltext() {
 function openExternalSearch() {
   showExternalSearchDialog.value = true
   if (!externalQuery.value) externalQuery.value = searchQuery.value || ''
+  if (!aiFilterTopic.value.trim()) aiFilterTopic.value = externalQuery.value || searchQuery.value || ''
+}
+
+const filteredExternalResults = computed(() => {
+  let rows = [...(externalResults.value || [])]
+  const scoreMap = aiFilterScoreMap.value
+  rows = rows.map((r: any) => {
+    const key = r.doi || r.pmid || r.title || ''
+    const info = scoreMap.get(key)
+    if (info) {
+      return { ...r, _ai_score: info.score, _ai_reason: info.reason }
+    }
+    return r
+  })
+  if (aiFilterApplied.value) {
+    rows.sort((a: any, b: any) => (b._ai_score || 0) - (a._ai_score || 0))
+  }
+  return rows
+})
+
+async function refreshAiFilterCost() {
+  if (!externalResults.value.length) { aiFilterCostHint.value = null; return }
+  try {
+    const res = await api.literature.estimateFilterCost(externalResults.value.length)
+    const d = res.data || res
+    if (d.cost > 0) {
+      aiFilterCostHint.value = { cost: d.cost, sufficient: d.sufficient }
+    } else {
+      aiFilterCostHint.value = null
+    }
+  } catch { aiFilterCostHint.value = null }
+}
+
+async function doAiFilter() {
+  const topic = aiFilterTopic.value.trim()
+  if (!topic || !externalResults.value.length) return
+  aiFilterLoading.value = true
+  try {
+    const res = await api.literature.filterSearchResults({
+      topic,
+      results: externalResults.value,
+      top_k: aiFilterTopK.value,
+      min_score: 5.0,
+    })
+    const data = res.data || res
+    const kept: any[] = data.kept || []
+    const scoreMap = new Map<string, { score: number; reason: string }>()
+    const keptKeys = new Set<string>()
+    for (const entry of kept) {
+      const item = entry.item || {}
+      const key = item.doi || item.pmid || item.title || ''
+      scoreMap.set(key, { score: entry.relevance_score || 0, reason: entry.reason || '' })
+      keptKeys.add(key)
+    }
+    externalResults.value = externalResults.value.filter((r: any) => {
+      const key = r.doi || r.pmid || r.title || ''
+      return keptKeys.has(key)
+    })
+    aiFilterScoreMap.value = scoreMap
+    aiFilterApplied.value = true
+    aiFilterStats.value = {
+      removed: data.removed_count || 0,
+      total: data.total_count || 0,
+      method: data.method || 'llm_only',
+    }
+    if (data.cost > 0) {
+      ElMessage.success(`筛选完成，消耗 ${data.cost} 积分`)
+    }
+    externalPreview.value = externalResults.value[0] || null
+  } catch (err: any) {
+    console.error('AI filter error:', err)
+    if (err?.response?.status === 402) {
+      ElMessage.warning('积分不足，请充值后重试')
+    } else {
+      ElMessage.error('AI 筛选失败：' + (err?.response?.data?.detail || err?.message || '未知错误'))
+    }
+  } finally {
+    aiFilterLoading.value = false
+  }
+}
+
+function resetAiFilter() {
+  aiFilterApplied.value = false
+  aiFilterStats.value = null
+  aiFilterScoreMap.value = new Map()
+  aiFilterCostHint.value = null
 }
 
 async function doDesignKeywords() {
@@ -1494,7 +1628,11 @@ async function doTranslateKeyword() {
       ElMessage.warning('翻译结果为空，请重试')
     }
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.detail || '翻译失败')
+    if (e?.response?.status === 402) {
+      ElMessage.warning('积分不足，请充值后重试')
+    } else {
+      ElMessage.error(e?.response?.data?.detail || '翻译失败')
+    }
   } finally {
     translateLoading.value = false
   }
@@ -1526,6 +1664,7 @@ async function doExternalSearch() {
     return
   }
   externalSearching.value = true
+  resetAiFilter()
   externalMetaText.value = ''
   externalSourceStats.value = externalSources.value.map((s) => ({
     id: s,
@@ -1556,7 +1695,8 @@ async function doExternalSearch() {
     let finalData: any = null
     try {
       const localApiHeader = await getLocalApiKeyHeaderForFetch()
-      if (!localApiHeader['X-Local-Api-Key']) throw new Error('NO_LOCAL_API_KEY_FOR_STREAM')
+      const hasAuth = !!localApiHeader['X-Local-Api-Key'] || !!token
+      if (!hasAuth) throw new Error('NO_AUTH_FOR_STREAM')
       const abortCtrl = new AbortController()
       let streamTimeout = window.setTimeout(() => abortCtrl.abort(), 20000)
       const refreshStreamTimeout = () => {
@@ -1640,6 +1780,7 @@ async function doExternalSearch() {
     }
     externalResults.value = finalData?.results || []
     externalPreview.value = externalResults.value[0] || null
+    refreshAiFilterCost()
     const src = finalData?.sources || {}
     if (!externalSourceStats.value.length) {
       externalSourceStats.value = Object.keys(src).map((k) => ({
@@ -1986,6 +2127,31 @@ h2 { margin-bottom: 1rem; }
 .source-stat-line { font-size: 12px; color: var(--el-text-color-secondary); }
 .source-stat-ok { font-size: 12px; color: var(--el-color-success); margin-top: 2px; }
 .source-stat-error { font-size: 12px; color: var(--el-color-danger); margin-top: 2px; }
+.ai-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  background: #fef9e7;
+  border: 1px solid #f0d878;
+  border-radius: 6px;
+}
+.ai-filter-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 6px;
+}
+.ai-score-tag {
+  margin-left: 6px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.ai-filter-cost-hint {
+  font-size: 12px;
+  white-space: nowrap;
+}
 .dup-box {
   margin: 8px 0;
   padding: 8px 10px;

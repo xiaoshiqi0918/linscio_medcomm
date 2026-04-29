@@ -243,7 +243,7 @@ build_client() {
 
   # 4. 构建前端
   info "[4/5] 构建前端 (vite)..."
-  npx vite build 2>&1 | tail -3
+  VITE_IS_ELECTRON=1 npx vite build 2>&1 | tail -3
 
   # 5. Electron 打包
   info "[5/5] electron-builder --mac --${ARCH}..."

@@ -11,8 +11,9 @@ import json
 import logging
 from typing import AsyncIterator
 
-from app.services.llm.openai_client import chat_completion
+from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
 from app.services.llm.manager import resolve_model_for_task, TaskTier
+from app.core.config import is_saas
 
 logger = logging.getLogger(__name__)
 
@@ -185,8 +186,11 @@ async def generate_prompt(
 ) -> dict:
     """Generate positive/negative prompts + recommended params from description."""
     messages = _build_messages(description, specialty, context_hint)
-    model = await resolve_model_for_task(task=TaskTier.BALANCED)
-    raw = await chat_completion(messages, model=model, stream=False)
+    if is_saas():
+        raw = await call_llm_with_fallback("keyword_generation", messages, stream=False)
+    else:
+        model = await resolve_model_for_task(task=TaskTier.BALANCED)
+        raw = await chat_completion(messages, model=model, stream=False)
     result = _parse_response(raw)
     return _normalize_result(result)
 
@@ -198,8 +202,11 @@ async def generate_prompt_stream(
 ) -> AsyncIterator[str]:
     """Stream the prompt generation for real-time display."""
     messages = _build_messages(description, specialty, context_hint)
-    model = await resolve_model_for_task(task=TaskTier.BALANCED)
-    stream = await chat_completion(messages, model=model, stream=True)
+    if is_saas():
+        stream = await call_llm_with_fallback("keyword_generation", messages, stream=True)
+    else:
+        model = await resolve_model_for_task(task=TaskTier.BALANCED)
+        stream = await chat_completion(messages, model=model, stream=True)
     async for chunk in stream:
         yield chunk
 
@@ -214,8 +221,11 @@ async def refine_prompt(
     messages = _build_refine_messages(
         current_positive, current_negative, current_params, instruction,
     )
-    model = await resolve_model_for_task(task=TaskTier.BALANCED)
-    raw = await chat_completion(messages, model=model, stream=False)
+    if is_saas():
+        raw = await call_llm_with_fallback("keyword_generation", messages, stream=False)
+    else:
+        model = await resolve_model_for_task(task=TaskTier.BALANCED)
+        raw = await chat_completion(messages, model=model, stream=False)
     result = _parse_response(raw)
     return _normalize_result(result)
 
@@ -230,7 +240,10 @@ async def refine_prompt_stream(
     messages = _build_refine_messages(
         current_positive, current_negative, current_params, instruction,
     )
-    model = await resolve_model_for_task(task=TaskTier.BALANCED)
-    stream = await chat_completion(messages, model=model, stream=True)
+    if is_saas():
+        stream = await call_llm_with_fallback("keyword_generation", messages, stream=True)
+    else:
+        model = await resolve_model_for_task(task=TaskTier.BALANCED)
+        stream = await chat_completion(messages, model=model, stream=True)
     async for chunk in stream:
         yield chunk

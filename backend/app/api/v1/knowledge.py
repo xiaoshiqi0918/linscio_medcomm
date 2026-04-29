@@ -1,5 +1,5 @@
 """知识库 API"""
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import os
@@ -54,8 +54,10 @@ async def list_docs(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/docs/upload")
-async def upload_doc(background_tasks: BackgroundTasks, file: UploadFile, db: AsyncSession = Depends(get_db)):
+async def upload_doc(request: Request, background_tasks: BackgroundTasks, file: UploadFile, db: AsyncSession = Depends(get_db)):
     """上传知识库文档（PDF/TXT/MD），后台解析并索引到 FTS5"""
+    from app.core.deps import get_current_user_or_default
+    current_user = await get_current_user_or_default(request, db)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     ext = Path(file.filename or "").suffix.lower()
     if ext not in (".pdf", ".txt", ".md", ".markdown"):
@@ -66,7 +68,7 @@ async def upload_doc(background_tasks: BackgroundTasks, file: UploadFile, db: As
     rel_path = str(path.relative_to(settings.app_data_root))
     lock = get_domain_lock("knowledge")
     async with lock:
-        doc = KnowledgeDoc(user_id=1, name=file.filename or "未命名", file_path=rel_path, status="indexing")
+        doc = KnowledgeDoc(user_id=current_user.id, name=file.filename or "未命名", file_path=rel_path, status="indexing")
         db.add(doc)
         await db.commit()
         await db.refresh(doc)

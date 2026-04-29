@@ -5,6 +5,8 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
+    "dev:backend:saas": "cd backend && DEPLOYMENT_MODE=saas DEBUG=1 SITE_URL=http://127.0.0.1:5173 DATABASE_URL=postgresql+asyncpg://medcomm:changeme@127.0.0.1:5432/medcomm REDIS_URL=redis://127.0.0.1:6379/0 python3 run.py",
+    "dev:saas": "concurrently -k -n backend,web -c green,blue \"npm run dev:backend:saas\" \"vite\"",
     "build": "vite build",
     "preview": "vite preview",
     "backend": "cd backend && python run.py",
@@ -16,7 +18,7 @@
     "electron:dev:dist:bypass": "npm run build && MEDCOMM_RENDERER=dist MEDCOMM_DEV_BYPASS_AUTH=1 NODE_ENV=development env -u ELECTRON_RUN_AS_NODE electron .",
     "prebuild:python": "node scripts/download-python-standalone.js",
     "prebuild:wheels": "node scripts/build-wheels.js",
-    "electron:build": "npm run prebuild:python && bash scripts/preelectron-build.sh && vite build && electron-builder",
+    "electron:build": "npm run prebuild:python && bash scripts/preelectron-build.sh && VITE_IS_ELECTRON=1 vite build && electron-builder",
     "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [

@@ -25,11 +25,11 @@ from app.services.payment.registry import get_channel
 logger = logging.getLogger(__name__)
 
 RECHARGE_PLANS: dict[int, dict] = {
-    10:  {"credits": 100,  "bonus": 0},
-    50:  {"credits": 500,  "bonus": 50},
-    100: {"credits": 1000, "bonus": 100},
-    300: {"credits": 3000, "bonus": 300},
-    500: {"credits": 5000, "bonus": 500},
+    10:  {"credits": 10,  "bonus": 0},
+    50:  {"credits": 50,  "bonus": 3},
+    100: {"credits": 100, "bonus": 8},
+    300: {"credits": 300, "bonus": 30},
+    500: {"credits": 500, "bonus": 60},
 }
 
 
@@ -420,89 +420,20 @@ class PaymentService:
     async def _grant_referral_recharge_reward(
         self, order: PaymentOrder, db: AsyncSession
     ) -> None:
-        """好友充值返推广积分：充值 ≥50 元时，基础积分 10% 奖励给推荐人"""
-        from app.models.user import User
-        user = await db.get(User, order.user_id)
-        if not user or not user.referred_by:
-            return
-
-        if order.amount_yuan < Decimal("50"):
-            return
-
-        reward = (order.credits_to_add * Decimal("0.10")).quantize(Decimal("0.0001"))
-        if reward <= 0:
-            return
-
-        referrer = await db.get(User, user.referred_by)
-        if not referrer:
-            return
-
-        referrer.promo_credits = (referrer.promo_credits or Decimal("0")) + reward
-        referrer.promo_credits_expire_at = self._promo_expire_at()
-
-        try:
-            from app.models.referral import ReferralLog
-            log = ReferralLog(
-                referrer_id=referrer.id,
-                referred_id=user.id,
-                trigger_type="recharge",
-                related_recharge_id=order.id,
-                reward_credits=reward,
-            )
-            db.add(log)
-        except ImportError:
-            pass
-
-        logger.info(
-            "推广返利: referrer=%d referred=%d order=%s reward=%s",
-            referrer.id, user.id, order.order_no, reward,
+        from app.services.credit.referral_rewards import grant_referral_recharge_reward
+        await grant_referral_recharge_reward(
+            order.user_id, order.amount_yuan, order.credits_to_add, db,
+            source_id=order.id, source_type="payment",
         )
 
     async def _grant_referred_first_recharge_bonus(
         self, order: PaymentOrder, db: AsyncSession
     ) -> None:
-        """被推广人首次充值（≥50元）→ 本人获得本次充值额 20% 推广积分"""
-        from app.models.user import User
-        user = await db.get(User, order.user_id)
-        if not user or not user.referred_by:
-            return
-
-        if order.amount_yuan < Decimal("50"):
-            return
-
-        prior_paid = await db.execute(
-            select(PaymentOrder).where(
-                PaymentOrder.user_id == order.user_id,
-                PaymentOrder.status == OrderStatus.PAID,
-                PaymentOrder.id != order.id,
-            ).limit(1)
-        )
-        if prior_paid.scalar_one_or_none() is not None:
-            return
-
-        bonus = (order.credits_to_add * Decimal("0.20")).quantize(Decimal("0.0001"))
-        if bonus <= 0:
-            return
-
-        user.promo_credits = (user.promo_credits or Decimal("0")) + bonus
-        user.promo_credits_expire_at = self._promo_expire_at()
-
-        try:
-            from app.models.referral import ReferralLog
-            log = ReferralLog(
-                referrer_id=user.referred_by,
-                referred_id=user.id,
-                trigger_type="first_recharge_bonus",
-                related_recharge_id=order.id,
-                reward_credits=bonus,
-            )
-            db.add(log)
-        except ImportError:
-            pass
-
-        logger.info(
-            "被推广人首充奖励: user=%d order=%s bonus=%s",
-            user.id, order.order_no, bonus,
+        from app.services.credit.referral_rewards import grant_referred_first_recharge_bonus
+        await grant_referred_first_recharge_bonus(
+            order.user_id, order.amount_yuan, order.credits_to_add, db,
+            source_id=order.id, source_type="payment",
+            exclude_order_id=order.id,
         )
 
     async def _get_order_by_no(self, order_no: str, db: AsyncSession) -> PaymentOrder | None:

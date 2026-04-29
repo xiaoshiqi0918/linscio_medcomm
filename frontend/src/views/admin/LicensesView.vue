@@ -41,15 +41,21 @@
           <span v-else style="color: #9ca3af;">无 (待分配)</span>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="80">
+      <el-table-column label="状态" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.is_used ? 'info' : 'success'" size="small">{{ row.is_used ? '已使用' : '未使用' }}</el-tag>
+          <el-tag :type="row.is_used ? 'info' : 'success'" size="small">{{ row.is_used ? '已激活' : '未激活' }}</el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="绑定设备" width="160">
+        <template #default="{ row }">
+          <span v-if="row.device_id" style="font-family: monospace; font-size: 0.75rem; color: #6b7280;">{{ row.device_id.slice(0, 20) }}...</span>
+          <span v-else style="color: #9ca3af;">-</span>
         </template>
       </el-table-column>
       <el-table-column label="使用者" width="120">
         <template #default="{ row }">{{ row.used_by || '-' }}</template>
       </el-table-column>
-      <el-table-column label="备注" width="140">
+      <el-table-column label="备注" width="120">
         <template #default="{ row }">{{ row.note || '-' }}</template>
       </el-table-column>
       <el-table-column label="生成时间" width="150">
@@ -57,9 +63,10 @@
           {{ new Date(row.created_at).toLocaleString('zh-CN') }}
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="80" fixed="right">
+      <el-table-column label="操作" width="140" fixed="right">
         <template #default="{ row }">
           <el-button v-if="!row.is_used" text type="danger" size="small" @click="revokeLicense(row)">作废</el-button>
+          <el-button v-if="row.device_id" text type="warning" size="small" @click="unbindDevice(row)">解绑设备</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -133,6 +140,18 @@ async function revokeLicense(row: any) {
   try {
     await http.post('/api/v1/admin/licenses/revoke', null, { params: { license_id: row.id } })
     ElMessage.success('已作废')
+    loadLicenses()
+  } catch (e: any) { ElMessage.error(e?.response?.data?.detail || '操作失败') }
+}
+
+async function unbindDevice(row: any) {
+  await ElMessageBox.confirm(
+    `确认解绑授权码 ${row.code} 的设备绑定？\n解绑后用户可在新设备上重新激活。`,
+    '解绑确认', { type: 'warning' }
+  )
+  try {
+    await http.post('/api/v1/admin/licenses/unbind-device', null, { params: { license_id: row.id } })
+    ElMessage.success('设备已解绑')
     loadLicenses()
   } catch (e: any) { ElMessage.error(e?.response?.data?.detail || '操作失败') }
 }

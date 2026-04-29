@@ -69,7 +69,9 @@ async def download_software(
     """
     from app.models.billing import LicenseCode, DownloadLog
     result = await db.execute(
-        select(LicenseCode).where(LicenseCode.owner_id == user.id).limit(1)
+        select(LicenseCode).where(
+            LicenseCode.owner_id == user.id,
+        ).order_by(LicenseCode.created_at).limit(1)
     )
     license_code = result.scalar_one_or_none()
     if not license_code:

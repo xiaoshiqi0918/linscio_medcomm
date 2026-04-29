@@ -26,7 +26,7 @@ from app.models.literature import (
     LiteratureAttachment, LiteratureAnnotation,
 )
 from app.models.article import Article, ArticleSection, ArticleLiteratureBinding, ArticleExternalReference
-from app.core.config import settings
+from app.core.config import settings, is_saas
 from app.services.literature.dedup import DuplicateChecker
 from app.services.literature.query_builder import PaperQueryBuilder
 from app.services.literature.citation_formatter import CitationFormatter
@@ -47,36 +47,63 @@ _search_cache_last_cleanup_ts = 0.0
 
 
 async def _ensure_search_tables(db: AsyncSession) -> None:
-    await db.execute(text("""
-        CREATE TABLE IF NOT EXISTS literature_search_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL DEFAULT 1,
-            query TEXT NOT NULL,
-            sources TEXT NOT NULL DEFAULT '[]',
-            filters TEXT NOT NULL DEFAULT '{}',
-            result_count INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """))
-    await db.execute(text("""
-        CREATE TABLE IF NOT EXISTS literature_search_cache (
-            cache_key TEXT PRIMARY KEY,
-            user_id INTEGER NOT NULL DEFAULT 1,
-            result_json TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            expires_at DATETIME NOT NULL
-        )
-    """))
-    # 向后兼容：老库补充 user_id 字段
-    hist_cols = (await db.execute(text("PRAGMA table_info(literature_search_history)"))).fetchall()
-    if not any((c[1] == "user_id") for c in hist_cols):
-        await db.execute(text("ALTER TABLE literature_search_history ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1"))
-    cache_cols = (await db.execute(text("PRAGMA table_info(literature_search_cache)"))).fetchall()
-    if not any((c[1] == "user_id") for c in cache_cols):
-        await db.execute(text("ALTER TABLE literature_search_cache ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1"))
+    from app.core.config import is_saas
+
+    if is_saas():
+        # PostgreSQL
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS literature_search_history (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                query TEXT NOT NULL,
+                sources TEXT NOT NULL DEFAULT '[]',
+                filters TEXT NOT NULL DEFAULT '{}',
+                result_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS literature_search_cache (
+                cache_key TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                result_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL
+            )
+        """))
+    else:
+        # SQLite
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS literature_search_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                query TEXT NOT NULL,
+                sources TEXT NOT NULL DEFAULT '[]',
+                filters TEXT NOT NULL DEFAULT '{}',
+                result_count INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        await db.execute(text("""
+            CREATE TABLE IF NOT EXISTS literature_search_cache (
+                cache_key TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL DEFAULT 1,
+                result_json TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                expires_at DATETIME NOT NULL
+            )
+        """))
+        # 向后兼容：老库补充 user_id 字段（仅 SQLite 需要 PRAGMA）
+        hist_cols = (await db.execute(text("PRAGMA table_info(literature_search_history)"))).fetchall()
+        if not any((c[1] == "user_id") for c in hist_cols):
+            await db.execute(text("ALTER TABLE literature_search_history ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1"))
+        cache_cols = (await db.execute(text("PRAGMA table_info(literature_search_cache)"))).fetchall()
+        if not any((c[1] == "user_id") for c in cache_cols):
+            await db.execute(text("ALTER TABLE literature_search_cache ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1"))
+
     await db.execute(text("CREATE INDEX IF NOT EXISTS idx_search_cache_expires ON literature_search_cache(expires_at)"))
     await db.execute(text("CREATE INDEX IF NOT EXISTS idx_search_cache_user_expires ON literature_search_cache(user_id, expires_at)"))
-    await db.execute(text("CREATE INDEX IF NOT EXISTS idx_search_history_user_id ON literature_search_history(user_id, id DESC)"))
+    await db.execute(text("CREATE INDEX IF NOT EXISTS idx_search_history_user_id ON literature_search_history(user_id)"))
     await db.commit()
 
 
@@ -513,6 +540,7 @@ async def _index_attachment_task(att_id: int):
 async def _bulk_import_records(
     papers_data: list[dict],
     source: str,
+    user_id: int = 1,
 ) -> dict:
     """批量入库，返回统计及失败明细。"""
     success, skipped, failed = 0, 0, 0
@@ -543,6 +571,7 @@ async def _bulk_import_records(
                 _doi = str(pd.get("doi") or "").strip()
                 _ft = "pending" if (_pm or _doi) else "no_fulltext"
                 paper = LiteraturePaper(
+                    user_id=user_id,
                     title=title,
                     authors=__json_authors(authors),
                     journal=pd.get("journal", ""),
@@ -580,14 +609,14 @@ async def _bulk_import_records(
     }
 
 
-async def _run_import_task(task_id: str, papers_data: list[dict], source: str):
+async def _run_import_task(task_id: str, papers_data: list[dict], source: str, user_id: int = 1):
     task = _import_tasks.get(task_id)
     if not task:
         return
     task["status"] = "running"
     task["started_at"] = datetime.utcnow().isoformat()
     try:
-        result = await _bulk_import_records(papers_data, source=source)
+        result = await _bulk_import_records(papers_data, source=source, user_id=user_id)
         task["status"] = "done"
         task["result"] = result
         pids = result.get("paper_ids") or []
@@ -662,10 +691,11 @@ async def external_search(req: ExternalSearchRequest, user: User = Depends(get_c
         )
         # 仅缓存“非空结果”，保证结果准确性优先
         if int(data.get("total") or 0) > 0:
+            _expires_expr = "NOW() + INTERVAL '1 hour'" if is_saas() else "datetime('now', '+1 hour')"
             await db.execute(
-                text("""
+                text(f"""
                     INSERT INTO literature_search_cache(cache_key, user_id, result_json, expires_at)
-                    VALUES(:k, :uid, :j, datetime('now', '+1 hour'))
+                    VALUES(:k, :uid, :j, {_expires_expr})
                     ON CONFLICT(cache_key) DO UPDATE SET
                         user_id=excluded.user_id,
                         result_json=excluded.result_json,
@@ -873,10 +903,11 @@ async def external_search_stream(req: ExternalSearchRequest, user: User = Depend
 
             # 仅缓存“非空结果”，保证结果准确性优先
             if int(data.get("total") or 0) > 0:
+                _exp = "NOW() + INTERVAL '1 hour'" if is_saas() else "datetime('now', '+1 hour')"
                 await db.execute(
-                    text("""
+                    text(f"""
                         INSERT INTO literature_search_cache(cache_key, user_id, result_json, expires_at)
-                        VALUES(:k, :uid, :j, datetime('now', '+1 hour'))
+                        VALUES(:k, :uid, :j, {_exp})
                         ON CONFLICT(cache_key) DO UPDATE SET
                             user_id=excluded.user_id,
                             result_json=excluded.result_json,
@@ -907,7 +938,101 @@ async def external_search_stream(req: ExternalSearchRequest, user: User = Depend
             print("[search/stream] exception during stream generation", flush=True)
             raise
 
-    return StreamingResponse(_gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+class FilterSearchRequest(BaseModel):
+    topic: str = Field(..., min_length=1, max_length=500)
+    results: list[dict] = Field(default_factory=list)
+    top_k: int = Field(default=15, ge=1, le=100)
+    min_score: float = Field(default=5.0, ge=0, le=10)
+
+
+@router.post("/search/filter")
+async def filter_search_results(
+    req: FilterSearchRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI 智能筛选检索结果：Embedding 粗筛 + LLM 精排。SaaS 模式扣除积分。"""
+    from app.services.literature.relevance_filter import filter_papers
+    from app.core.config import is_saas
+
+    if not req.results:
+        return {"kept": [], "removed_count": 0, "total_count": 0, "method": "none", "cost": 0}
+
+    paper_count = len(req.results)
+    billing_sid: str | None = None
+    cost = None
+
+    if is_saas():
+        from app.services.billing.dependency import open_billing_session, close_billing_session
+        from app.services.billing.service import estimate_cost_for_task
+        from app.services.credit.service import InsufficientCreditsError
+
+        cost = await estimate_cost_for_task("literature_filter", input_chars=paper_count)
+        try:
+            billing_sid = await open_billing_session(
+                user.id, "literature_filter", cost, db,
+                business_ref={"paper_count": paper_count, "topic": req.topic[:100]},
+            )
+            await db.commit()
+        except InsufficientCreditsError as e:
+            raise HTTPException(status_code=402, detail=str(e))
+
+    try:
+        result = await filter_papers(
+            topic=req.topic,
+            papers=req.results,
+            top_k=req.top_k,
+            min_score=req.min_score,
+            user_id=user.id,
+            user=user,
+        )
+        success = True
+    except Exception:
+        success = False
+        raise
+    finally:
+        if billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, db, success=success)
+            await db.commit()
+
+    return {
+        "kept": [
+            {"item": fp.item, "relevance_score": fp.relevance_score, "reason": fp.reason}
+            for fp in result.kept
+        ],
+        "removed_count": result.removed_count,
+        "total_count": result.total_count,
+        "method": result.method,
+        "cost": float(cost) if cost else 0,
+    }
+
+
+@router.get("/search/filter/cost")
+async def estimate_filter_cost(
+    paper_count: int = Query(..., ge=1),
+    user: User = Depends(get_current_user),
+):
+    """预估 AI 筛选费用（供前端展示）。"""
+    from app.core.config import is_saas
+    if not is_saas():
+        return {"cost": 0, "available_credits": None}
+
+    from app.services.credit.pricing import calc_literature_filter_cost
+    cost = calc_literature_filter_cost(paper_count)
+    available = float(user.total_available_credits)
+    return {
+        "cost": float(cost),
+        "available_credits": available,
+        "sufficient": available >= float(cost),
+    }
 
 
 @router.get("/search/sources")
@@ -1025,16 +1150,33 @@ class KeywordDesignRequest(BaseModel):
 async def design_search_keywords(
     req: KeywordDesignRequest,
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """根据用户的自然语言描述，由 LLM 生成结构化的中文文献检索关键词。"""
-    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
     from app.services.llm.manager import TaskTier
+    from app.core.config import is_saas
 
     description = req.description.strip()
     if not description:
         raise HTTPException(status_code=400, detail="描述不能为空")
     if len(description) > 2000:
         raise HTTPException(status_code=400, detail="描述过长（上限 2000 字符）")
+
+    billing_sid: str | None = None
+    if is_saas():
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.pricing import calc_keyword_design_cost
+        from app.services.credit.service import InsufficientCreditsError
+        cost = calc_keyword_design_cost()
+        try:
+            billing_sid = await open_billing_session(
+                user.id, "keyword_design", cost, db,
+                business_ref={"input_chars": len(description)},
+            )
+            await db.commit()
+        except InsufficientCreditsError as e:
+            raise HTTPException(status_code=402, detail=f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分")
 
     messages = [
         {
@@ -1060,7 +1202,12 @@ async def design_search_keywords(
         {"role": "user", "content": description},
     ]
     try:
-        result = await chat_completion(messages, task=TaskTier.FAST)
+        if is_saas():
+            result = await call_llm_with_fallback(
+                "keyword_generation", messages, stream=False, user_id=user.id,
+            )
+        else:
+            result = await chat_completion(messages, task=TaskTier.FAST)
         result = (result or "").strip()
         if not result:
             raise HTTPException(status_code=502, detail="LLM 返回为空，请重试")
@@ -1069,10 +1216,18 @@ async def design_search_keywords(
             line = line.strip().lstrip("0123456789.、)-） ")
             if line:
                 groups.append(line)
+        if billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, db, success=True, override_cost=cost)
+            await db.commit()
         return {"groups": groups, "raw": "\n".join(groups)}
     except HTTPException:
         raise
     except Exception as e:
+        if billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, db, success=False)
+            await db.commit()
         raise HTTPException(status_code=502, detail=f"关键词生成失败: {e}")
 
 
@@ -1443,10 +1598,13 @@ async def batch_operation(req: BatchOperationRequest, db: AsyncSession = Depends
 @router.post("/papers", status_code=201)
 async def create_paper(
     req: PaperCreateRequest,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """手动录入文献，录入前执行去重检查"""
+    from app.core.deps import get_current_user_or_default
+    current_user = await get_current_user_or_default(request, db)
     authors = [{"name": a.name, "affil": a.affil} for a in req.authors]
     await _validate_collection_exists(db, req.collection_id)
     await _validate_tag_ids_exist(db, req.tag_ids)
@@ -1465,6 +1623,7 @@ async def create_paper(
 
     _ft = "pending" if (req.pmid or req.doi) else "no_fulltext"
     paper = LiteraturePaper(
+        user_id=current_user.id,
         title=req.title,
         authors=__json_authors(authors),
         journal=req.journal or "",
@@ -1550,6 +1709,7 @@ def _rect_for_storage(rect_value: RectPayload | str | None) -> str | None:
 
 @router.get("/papers", response_model=PaperListResponse)
 async def list_papers(
+    request: Request,
     q: str | None = None,
     author: str | None = None,
     journal: str | None = None,
@@ -1567,7 +1727,9 @@ async def list_papers(
     db: AsyncSession = Depends(get_db),
 ):
     """多条件列表查询（FTS5 + 结构化过滤）"""
-    builder = PaperQueryBuilder(db)
+    from app.core.deps import get_current_user_or_default
+    current_user = await get_current_user_or_default(request, db)
+    builder = PaperQueryBuilder(db, user_id=current_user.id)
     if trashed:
         builder.filter_trashed()
     else:
@@ -2282,8 +2444,15 @@ async def permanent_delete_paper(paper_id: int, db: AsyncSession = Depends(get_d
 
 
 @router.post("/papers/upload")
-async def upload_paper(background_tasks: BackgroundTasks, file: UploadFile, db: AsyncSession = Depends(get_db)):
+async def upload_paper(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+):
     """上传文献 PDF，后台解析并索引到 paper_chunks + paper_fts"""
+    from app.core.deps import get_current_user_or_default
+    current_user = await get_current_user_or_default(request, db)
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     ext = Path(file.filename or "").suffix or ".pdf"
     if ext.lower() != ".pdf":
@@ -2295,7 +2464,7 @@ async def upload_paper(background_tasks: BackgroundTasks, file: UploadFile, db: 
     lock = get_domain_lock("literature")
     async with lock:
         paper = LiteraturePaper(
-            user_id=1,
+            user_id=current_user.id,
             title=file.filename or "未命名",
             pdf_path=rel_path,
             pdf_indexed=0,
@@ -2313,12 +2482,15 @@ async def upload_paper(background_tasks: BackgroundTasks, file: UploadFile, db: 
 
 @router.post("/papers/import")
 async def import_papers(
+    request: Request,
     file: UploadFile,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     """文件导入（RIS/BibTeX/PDF）"""
     from app.services.literature.importers import RISImporter, BibTeXImporter, PDFMetadataImporter
+    from app.core.deps import get_current_user_or_default
+    current_user = await get_current_user_or_default(request, db)
 
     content = await file.read()
     filename = (file.filename or "").lower()
@@ -2331,7 +2503,7 @@ async def import_papers(
         rel_path = str(path.relative_to(settings.app_data_root))
         meta = PDFMetadataImporter().extract(path)
         paper = LiteraturePaper(
-            user_id=1,
+            user_id=current_user.id,
             title=meta.get("title") or file.filename or "未命名",
             authors=__json_authors(meta.get("authors", [])),
             pdf_path=rel_path,
@@ -2364,10 +2536,10 @@ async def import_papers(
             "source": source,
             "created_at": datetime.utcnow().isoformat(),
         }
-        background_tasks.add_task(_run_import_task, task_id, papers_data, source)
+        background_tasks.add_task(_run_import_task, task_id, papers_data, source, user_id=current_user.id)
         return {"task_id": task_id, "total": len(papers_data), "status": "queued"}
 
-    result = await _bulk_import_records(papers_data, source=source)
+    result = await _bulk_import_records(papers_data, source=source, user_id=current_user.id)
     pids = result.get("paper_ids") or []
     if pids:
         background_tasks.add_task(resolve_fulltext_batch, pids)
@@ -2874,9 +3046,12 @@ async def analyze_literature(
     from app.core.config import is_saas
 
     saas_user_id: int | None = None
-    estimated_cost = Decimal("0")
+    billing_sid: str | None = None
     if is_saas():
         from app.core.deps import get_current_user
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.service import InsufficientCreditsError
+
         user = await get_current_user(request, db)
         saas_user_id = user.id
 
@@ -2890,10 +3065,11 @@ async def analyze_literature(
         from app.services.credit.pricing import calc_literature_cost, LiteratureAnalysisMode
         estimated_cost = calc_literature_cost(total_chars, LiteratureAnalysisMode.ABSTRACT)
 
-        from app.services.credit.service import check_balance, freeze_credits, InsufficientCreditsError
         try:
-            await check_balance(user.id, estimated_cost, db)
-            await freeze_credits(user.id, estimated_cost, db)
+            billing_sid = await open_billing_session(
+                user.id, "literature_analyze", estimated_cost, db,
+                business_ref={"paper_ids": req.paper_ids, "input_chars": total_chars},
+            )
             await db.commit()
         except InsufficientCreditsError as e:
             raise HTTPException(
@@ -2901,24 +3077,35 @@ async def analyze_literature(
                 detail=f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分",
             )
 
+    _captured_analyze_billing_sid = billing_sid
+
     async def _gen():
-        async for evt in analyze_literature_stream(req.paper_ids, req.topic_hint):
-            yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+        if _captured_analyze_billing_sid:
+            from app.services.billing.dependency import current_billing_session_id
+            current_billing_session_id.set(_captured_analyze_billing_sid)
 
-        if saas_user_id and is_saas():
-            try:
-                from app.core.database import AsyncSessionLocal
-                from app.services.credit.service import unfreeze_credits, deduct_credits
-                async with AsyncSessionLocal() as settle_db:
-                    await unfreeze_credits(saas_user_id, estimated_cost, settle_db)
-                    await deduct_credits(
-                        saas_user_id, estimated_cost, settle_db,
-                        operation="literature_analyze",
-                        meta={"paper_ids": req.paper_ids, "char_count": total_chars},
-                    )
-                    await settle_db.commit()
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error("文献分析积分结算异常: %s", e)
+        stream_completed = False
+        try:
+            async for evt in analyze_literature_stream(req.paper_ids, req.topic_hint):
+                yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+            stream_completed = True
+        finally:
+            if _captured_analyze_billing_sid and is_saas():
+                try:
+                    from app.core.database import AsyncSessionLocal
+                    from app.services.billing.dependency import close_billing_session
+                    async with AsyncSessionLocal() as settle_db:
+                        await close_billing_session(
+                            _captured_analyze_billing_sid, settle_db,
+                            success=stream_completed,
+                        )
+                        await settle_db.commit()
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error("文献分析积分结算异常: %s", e)
 
-    return StreamingResponse(_gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

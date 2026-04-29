@@ -29,6 +29,7 @@ try:
         PaymentOrder, RefundRecord, ReconciliationLog, LicenseCode, DownloadLog,
         TaskRecord, StreamingSession,
         AdminAuditLog, LlmCallLog, ContentModerationLog,
+        ModelPrice, BillingSession,
     )
     from app.models.referral import ReferralLog, WithdrawalLog
 except ImportError:

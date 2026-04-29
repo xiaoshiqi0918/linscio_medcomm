@@ -32,10 +32,15 @@ async def polish_run(req: RunPolishRequest, request: Request = None, db=Depends(
     from app.services.polish import run_polish
 
     saas_user_id: int | None = None
+    billing_sid: str | None = None
     cost = Decimal("0")
+    char_count = 0
     if is_saas() and request:
         from app.core.deps import get_current_user
         from app.models.user import User
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.service import InsufficientCreditsError
+
         user: User = await get_current_user(request, db)
         saas_user_id = user.id
 
@@ -64,9 +69,16 @@ async def polish_run(req: RunPolishRequest, request: Request = None, db=Depends(
                 from app.services.credit.pricing import calc_optimization_cost
                 cost = calc_optimization_cost(char_count)
 
-                from app.services.credit.service import check_balance, InsufficientCreditsError
                 try:
-                    await check_balance(user.id, cost, db)
+                    billing_sid = await open_billing_session(
+                        user.id, "polish", cost, db,
+                        business_ref={
+                            "section_id": sec.id,
+                            "polish_type": session_obj.polish_type,
+                            "input_chars": char_count,
+                        },
+                    )
+                    await db.commit()
                 except InsufficientCreditsError as e:
                     raise HTTPException(
                         status_code=402,
@@ -75,17 +87,17 @@ async def polish_run(req: RunPolishRequest, request: Request = None, db=Depends(
 
     result = await run_polish(req.session_id, db)
     if result.get("error"):
+        if billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, db, success=False)
+            await db.commit()
         raise HTTPException(status_code=400, detail=result["error"])
 
-    if saas_user_id and cost > 0 and is_saas():
+    final_cost = cost
+    if billing_sid and is_saas():
         try:
-            from app.services.credit.service import deduct_credits
-            await deduct_credits(
-                saas_user_id, cost, db,
-                operation="polish",
-                section_id=result.get("section_id"),
-                meta={"polish_type": result.get("polish_type", ""), "word_count": result.get("word_count", 0)},
-            )
+            from app.services.billing.dependency import close_billing_session
+            final_cost = await close_billing_session(billing_sid, db, success=True)
             await db.commit()
         except Exception as e:
             import logging
@@ -96,7 +108,7 @@ async def polish_run(req: RunPolishRequest, request: Request = None, db=Depends(
         "word_count": result.get("word_count"),
         "changes_summary": result.get("changes_summary"),
         "platform_tips": result.get("platform_tips", []),
-        "cost": float(cost),
+        "cost": float(final_cost),
     }
 
 

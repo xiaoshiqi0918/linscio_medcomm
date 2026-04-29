@@ -4,7 +4,7 @@
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
 
-import { API_BASE } from '@/api'
+import { API_BASE, getAuthToken, getLocalApiKeyHeaderForFetch } from '@/api'
 
 const BASE_URL = API_BASE
 
@@ -41,11 +41,11 @@ export function useStreamGenerate() {
     ollamaWarning.value = null
 
     try {
-      const headers: Record<string, string> = {}
-      const electron = typeof window !== 'undefined' && (window as any).electronAPI
-      if (electron?.getLocalApiKey) {
-        const key = await electron.getLocalApiKey()
-        if (key) headers['X-Local-Api-Key'] = key
+      const localApiHeader = await getLocalApiKeyHeaderForFetch()
+      const token = getAuthToken()
+      const headers: Record<string, string> = {
+        ...localApiHeader,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       }
       const res = await fetch(`${BASE_URL}/api/v1/medcomm/sections/${sectionId}/generate`, {
         method: 'POST',

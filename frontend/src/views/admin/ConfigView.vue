@@ -26,7 +26,7 @@
         <el-table-column prop="bonus" label="赠送" width="100" />
         <el-table-column label="单价" width="140">
           <template #default="{ row }">
-            {{ (row.amount / (row.credits + row.bonus) * 10).toFixed(2) }} 元/10积分
+            {{ (row.amount / (row.credits + row.bonus)).toFixed(2) }} 元/积分
           </template>
         </el-table-column>
       </el-table>

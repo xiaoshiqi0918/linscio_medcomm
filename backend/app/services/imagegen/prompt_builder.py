@@ -226,17 +226,18 @@ def _has_chinese(text: str) -> bool:
 async def _translate_to_english(text: str) -> str:
     """调用 LLM 将中文描述翻译为英文"""
     try:
-        from app.services.llm.openai_client import chat_completion
+        from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
         from app.services.llm.manager import TaskTier
+        from app.core.config import is_saas
 
-        resp = await chat_completion(
-            messages=[
-                {"role": "system", "content": TRANSLATE_SYSTEM},
-                {"role": "user", "content": text},
-            ],
-            stream=False,
-            task=TaskTier.FAST,
-        )
+        msgs = [
+            {"role": "system", "content": TRANSLATE_SYSTEM},
+            {"role": "user", "content": text},
+        ]
+        if is_saas():
+            resp = await call_llm_with_fallback("translation", msgs, stream=False)
+        else:
+            resp = await chat_completion(messages=msgs, stream=False, task=TaskTier.FAST)
         return (resp or "").strip() or text
     except Exception:
         return text
@@ -453,16 +454,18 @@ async def rewrite_prompt_for_sd(prompt: str, image_type: str) -> str:
     if not is_structured_type(image_type):
         return prompt
     try:
-        from app.services.llm.openai_client import chat_completion
+        from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
         from app.services.llm.manager import TaskTier
-        resp = await chat_completion(
-            messages=[
-                {"role": "system", "content": SD_REWRITE_SYSTEM},
-                {"role": "user", "content": f"Image type: {image_type}\nOriginal prompt: {prompt}"},
-            ],
-            stream=False,
-            task=TaskTier.FAST,
-        )
+        from app.core.config import is_saas
+
+        msgs = [
+            {"role": "system", "content": SD_REWRITE_SYSTEM},
+            {"role": "user", "content": f"Image type: {image_type}\nOriginal prompt: {prompt}"},
+        ]
+        if is_saas():
+            resp = await call_llm_with_fallback("keyword_generation", msgs, stream=False)
+        else:
+            resp = await chat_completion(messages=msgs, stream=False, task=TaskTier.FAST)
         rewritten = (resp or "").strip()
         if rewritten and len(rewritten) > 20:
             return rewritten
@@ -688,22 +691,23 @@ async def ai_generate_image_prompts(
     system_prompt = get_ai_prompt_system(provider)
 
     try:
-        from app.services.llm.openai_client import chat_completion
+        from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
         from app.services.llm.manager import TaskTier
+        from app.core.config import is_saas
 
         user = (
             f"Style id: {style}\nImage type id: {image_type}\n"
             f"Content format: {content_format}\nAudience: {target_audience}\n\n"
             f"User idea (may be Chinese):\n{idea}"
         )
-        raw = await chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user},
-            ],
-            stream=False,
-            task=TaskTier.FAST,
-        )
+        msgs = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user},
+        ]
+        if is_saas():
+            raw = await call_llm_with_fallback("keyword_generation", msgs, stream=False)
+        else:
+            raw = await chat_completion(messages=msgs, stream=False, task=TaskTier.FAST)
         data = _parse_ai_prompt_llm_json(raw or "")
         if data:
             pos = (data.get("positive") or "").strip()

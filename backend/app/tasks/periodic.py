@@ -72,12 +72,12 @@ async def _cleanup_stale_streaming_sessions_loop(interval_seconds: int = 60):
         try:
             await asyncio.sleep(interval_seconds)
             from app.core.database import AsyncSessionLocal
-            from app.services.streaming_session import cleanup_stale_sessions
+            from app.services.billing.service import cleanup_stale_billing_sessions
 
             async with AsyncSessionLocal() as db:
-                count = await cleanup_stale_sessions(db)
+                count = await cleanup_stale_billing_sessions(db)
                 if count > 0:
-                    logger.info("定时清理: 处理了 %d 个超时 SSE 会话", count)
+                    logger.info("定时清理: 处理了 %d 个超时计费会话", count)
         except asyncio.CancelledError:
             break
         except Exception:

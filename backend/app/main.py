@@ -143,7 +143,7 @@ if is_desktop():
 if is_desktop() and LOCAL_API_KEY:
     _cors_origins = ["*"]
 elif is_saas() and not settings.debug:
-    _cors_origins = ["https://www.linscio.com"]
+    _cors_origins = ["https://www.linscio.com", "https://linscio.com"]
 else:
     _cors_origins = [
         "http://localhost:5173",

@@ -191,17 +191,18 @@ def _format_rag_context(rag_context: list[dict]) -> str:
 async def _verify_claims_llm(content: str, rag_context: list[dict]) -> tuple[str, dict]:
     """医学声明核实（LLM）"""
     from app.agents.prompts.verification import CLAIM_VERIFY_PROMPT
-    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
     from app.services.llm.manager import TaskTier
+    from app.core.config import is_saas
 
     rag_str = _format_rag_context(rag_context)
     prompt = CLAIM_VERIFY_PROMPT.format(content=content[:4000], rag_context=rag_str)
     try:
-        resp = await chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-            task=TaskTier.BALANCED,
-        )
+        msgs = [{"role": "user", "content": prompt}]
+        if is_saas():
+            resp = await call_llm_with_fallback("verification", msgs, stream=False)
+        else:
+            resp = await chat_completion(messages=msgs, stream=False, task=TaskTier.BALANCED)
         raw = (resp or "").strip()
         m = re.search(r"\{[\s\S]*\}", raw)
         if m:
@@ -251,19 +252,20 @@ async def _verify_fact_llm(
 ) -> tuple[str, list, list]:
     """数据占位符 + 绝对化表述检测（LLM）"""
     from app.agents.prompts.verification import FACT_VERIFY_PROMPT
-    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
     from app.services.llm.manager import TaskTier
+    from app.core.config import is_saas
 
     prompt = FACT_VERIFY_PROMPT.format(
         content=content[:4000],
         verified_data_list=verified_data_list or "（无，本次未传入已核实数据）",
     )
     try:
-        resp = await chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-            task=TaskTier.BALANCED,
-        )
+        msgs = [{"role": "user", "content": prompt}]
+        if is_saas():
+            resp = await call_llm_with_fallback("verification", msgs, stream=False)
+        else:
+            resp = await chat_completion(messages=msgs, stream=False, task=TaskTier.BALANCED)
         raw = (resp or "").strip()
         m = re.search(r"\{[\s\S]*\}", raw)
         if m:
@@ -288,8 +290,9 @@ async def _check_reading_level_llm(content: str, target_audience: str) -> dict:
         DEFAULT_LEVEL_SPEC,
     )
     from app.agents.prompts.audiences import AUDIENCE_PROFILES
-    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
     from app.services.llm.manager import TaskTier
+    from app.core.config import is_saas
 
     audience = AUDIENCE_PROFILES.get(target_audience, AUDIENCE_PROFILES["public"])
     spec = AUDIENCE_LEVEL_SPECS.get(target_audience, DEFAULT_LEVEL_SPEC)
@@ -302,11 +305,11 @@ async def _check_reading_level_llm(content: str, target_audience: str) -> dict:
         max_sentence_len=spec["max_sentence_len"],
     )
     try:
-        resp = await chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-            task=TaskTier.BALANCED,
-        )
+        msgs = [{"role": "user", "content": prompt}]
+        if is_saas():
+            resp = await call_llm_with_fallback("verification", msgs, stream=False)
+        else:
+            resp = await chat_completion(messages=msgs, stream=False, task=TaskTier.BALANCED)
         raw = (resp or "").strip()
         m = re.search(r"\{[\s\S]*\}", raw)
         if m:

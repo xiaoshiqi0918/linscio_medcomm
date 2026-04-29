@@ -1,6 +1,6 @@
 import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import { getAuthToken } from '@/api'
+import { getAuthToken, setAuthToken } from '@/api'
 
 const isElectron = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
 
@@ -42,6 +42,18 @@ const router = createRouter({
           name: 'settings',
           component: () => import('@/views/Settings.vue'),
           meta: { title: '设置' },
+        },
+        {
+          path: 'help',
+          name: 'help',
+          component: () => import('@/views/HelpView.vue'),
+          meta: { title: '帮助中心' },
+        },
+        {
+          path: 'contact',
+          name: 'contact',
+          component: () => import('@/views/ContactView.vue'),
+          meta: { title: '联系我们' },
         },
         {
           path: 'drawing',
@@ -107,6 +119,8 @@ const router = createRouter({
       { path: 'orders', name: 'admin-orders', component: () => import('@/views/admin/OrdersView.vue'), meta: { title: '订单管理' } },
       { path: 'reconciliation', name: 'admin-recon', component: () => import('@/views/admin/ReconciliationView.vue'), meta: { title: '对账记录' } },
       { path: 'licenses', name: 'admin-licenses', component: () => import('@/views/admin/LicensesView.vue'), meta: { title: '授权码管理' } },
+      { path: 'redeem-codes', name: 'admin-redeem-codes', component: () => import('@/views/admin/RedeemCodesView.vue'), meta: { title: '兑换码管理' } },
+      { path: 'withdrawals', name: 'admin-withdrawals', component: () => import('@/views/admin/WithdrawalsView.vue'), meta: { title: '兑现审批' } },
       { path: 'config', name: 'admin-config', component: () => import('@/views/admin/ConfigView.vue'), meta: { title: '系统配置' } },
     ],
   },
@@ -134,7 +148,13 @@ router.beforeEach((to, _from, next) => {
   if (!token && to.meta.admin) {
     next({ name: 'login', query: { redirect: to.fullPath } })
   } else if (token && to.meta.guest) {
-    next('/')
+    if (to.name === 'register' && to.query.ref) {
+      setAuthToken(null)
+      try { localStorage.removeItem('linscio_refresh_token') } catch {}
+      next()
+    } else {
+      next('/')
+    }
   } else {
     next()
   }

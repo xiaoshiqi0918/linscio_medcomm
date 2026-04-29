@@ -6,13 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 class PaperQueryBuilder:
     """FTS5 全文检索 + 结构化条件组合"""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, user_id: int | None = None):
         self.db = db
         self._conditions: list[str] = []
         self._params: dict = {}
         self._fts_query: str | None = None
         self._sort_col = "created_at"
         self._sort_dir = "DESC"
+        if user_id is not None:
+            self._conditions.append("p.user_id = :_uid")
+            self._params["_uid"] = user_id
 
     def filter_active(self) -> "PaperQueryBuilder":
         self._conditions.append("p.deleted_at IS NULL")

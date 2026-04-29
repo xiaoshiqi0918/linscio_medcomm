@@ -327,12 +327,15 @@ class PatchArticleTitleRequest(BaseModel):
 
 @router.get("/articles")
 async def list_articles(
+    request: Request,
     content_format: str | None = None,
     platform: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
     """作品列表，支持形式/平台过滤"""
-    q = select(Article).where(Article.deleted_at.is_(None))
+    from app.core.deps import get_current_user_or_default
+    current_user = await get_current_user_or_default(request, db)
+    q = select(Article).where(Article.deleted_at.is_(None), Article.user_id == current_user.id)
     if content_format:
         q = q.where(Article.content_format == content_format)
     if platform:
@@ -350,17 +353,18 @@ async def create_article(
     db: AsyncSession = Depends(get_db),
 ):
     """新建文章"""
+    from app.core.deps import get_current_user_or_default
+    current_user = await get_current_user_or_default(request, db)
+
     # ── 入口审核：敏感词扫描 ──────────────────────────────────
     if is_saas():
         from app.services.moderation import scan_input
-        from app.core.deps import get_current_user as _get_mod_user
-        mod_user = await _get_mod_user(request, db)
         input_text = " ".join(filter(None, [
             req.topic,
             req.target_audience,
             req.specialty,
         ]))
-        scan_result = await scan_input(input_text, mod_user.id, db)
+        scan_result = await scan_input(input_text, current_user.id, db)
         if scan_result.has_block:
             raise HTTPException(status_code=403, detail=scan_result.message)
 
@@ -368,7 +372,7 @@ async def create_article(
     async with lock:
         twc = req.target_word_count or _PLATFORM_DEFAULT_WORD_COUNT.get(req.platform, 1500)
         article = Article(
-            user_id=1,
+            user_id=current_user.id,
             topic=req.topic or "未命名",
             title=req.topic or "未命名",
             content_format=req.content_format,
@@ -500,38 +504,26 @@ async def export_article_route(
     if is_saas() and not watermark and request:
         from app.core.deps import get_current_user as _get_exp_user
         from app.services.credit.pricing import calc_export_cost
+        from app.services.billing.dependency import open_billing_session, close_billing_session
         from app.services.credit.service import InsufficientCreditsError
+
         exp_user = await _get_exp_user(request, db)
         export_cost = calc_export_cost(with_watermark=False)
 
-        paid = Decimal(str(exp_user.credits or 0))
-        promo = Decimal(str(exp_user.promo_credits or 0))
-        usable = paid + promo
-        if usable < export_cost:
+        try:
+            export_billing_sid = await open_billing_session(
+                exp_user.id, "export", export_cost, db,
+                business_ref={"article_id": article_id, "format": fmt},
+            )
+            await close_billing_session(
+                export_billing_sid, db, success=True, override_cost=export_cost,
+            )
+            await db.commit()
+        except InsufficientCreditsError as e:
             raise HTTPException(
                 status_code=402,
-                detail=f"无水印导出需要 {export_cost} 积分（赠送积分不可用于导出），当前可用 {usable} 积分",
+                detail=f"无水印导出需要 {export_cost} 积分，当前可用积分不足",
             )
-
-        remaining = export_cost
-        promo_deduct = min(promo, remaining)
-        remaining -= promo_deduct
-        if promo_deduct > 0:
-            exp_user.promo_credits -= promo_deduct
-        if remaining > 0:
-            exp_user.credits -= remaining
-        exp_user.total_consumed += export_cost
-
-        from app.models.billing import UsageLog
-        db.add(UsageLog(
-            user_id=exp_user.id,
-            article_id=article_id,
-            operation="export_clean",
-            cost=export_cost,
-            breakdown={"promo": float(promo_deduct), "credits": float(remaining)},
-            meta={"format": fmt, "watermark": False},
-        ))
-        await db.commit()
     from app.services.export.router import export_article as do_export
     from app.services.export.utils import (
         load_article_sections,
@@ -1547,16 +1539,17 @@ async def generate_section(
     if article.deleted_at:
         raise HTTPException(status_code=404, detail="Article not found")
 
-    # ── SaaS 积分预检 + 会话追踪（单章）───────────────────────
+    # ── SaaS 积分预检 + 计费会话 ───────────────────────
     sec_saas_user_id: int | None = None
-    sec_estimated_cost = Decimal("0")
-    sec_session_id: str | None = None
+    sec_saas_user = None
+    sec_billing_sid: str | None = None
     sec_is_free_gen = False
     if is_saas():
         from app.core.deps import get_current_user as _get_user
         from app.models.user import User as _User
         user: _User = await _get_user(request, db)
         sec_saas_user_id = user.id
+        sec_saas_user = user
 
         from app.core.rate_limit import check_generate_rate
         await check_generate_rate(user.id)
@@ -1567,20 +1560,25 @@ async def generate_section(
         )
         num_sections = max(total_sections.scalar() or 1, 1)
         from app.services.credit.pricing import calc_generation_cost
-        sec_estimated_cost = (calc_generation_cost(sec_target_wc) / Decimal(num_sections)).quantize(Decimal("0.01"))
+        from app.services.llm.manager import get_primary_model_for_task, get_model_tier
+        from app.models.article import ArticleLiteratureBinding as _ALB
+        _has_lit = (await db.execute(
+            select(func.count(_ALB.id)).where(_ALB.article_id == article.id)
+        )).scalar() or 0
+        _pri_model = get_primary_model_for_task("generation_round1") or "gpt-4o"
+        _pri_tier = get_model_tier(_pri_model)
+        sec_estimated_cost = (calc_generation_cost(sec_target_wc, model_tier=_pri_tier, include_embedding=_has_lit > 0) / Decimal(num_sections)).quantize(Decimal("0.01"))
         sec_estimated_cost = max(sec_estimated_cost, Decimal("1"))
 
         if not user.free_generation_used:
             sec_is_free_gen = True
         else:
-            from app.services.streaming_session import (
-                start_streaming_session, TooManyConcurrentStreamsError,
-            )
+            from app.services.billing.dependency import open_billing_session
             from app.services.credit.service import InsufficientCreditsError
             try:
-                sec_session_id = await start_streaming_session(
-                    user.id, "generate_section", sec_estimated_cost, db,
-                    article_id=article.id, section_id=section.id,
+                sec_billing_sid = await open_billing_session(
+                    user.id, "generation", sec_estimated_cost, db,
+                    business_ref={"article_id": article.id, "section_id": section.id},
                 )
                 await db.commit()
             except InsufficientCreditsError as e:
@@ -1588,8 +1586,6 @@ async def generate_section(
                     status_code=402,
                     detail=f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分",
                 )
-            except TooManyConcurrentStreamsError as e:
-                raise HTTPException(status_code=429, detail=str(e))
 
     a_id, s_id = article.id, section.id
     cf = article.content_format or "article"
@@ -1624,11 +1620,17 @@ async def generate_section(
                                or planner_data.get("sections") or planner_data.get("cards") or [])
             format_meta.setdefault("planner_items", panels_or_pages)
 
+    _captured_sec_billing_sid = sec_billing_sid
+
     async def event_stream():
-        from app.services.streaming_session import StreamingTokenCounter
-        token_counter = StreamingTokenCounter(sec_session_id or "")
+        if _captured_sec_billing_sid:
+            from app.services.billing.dependency import current_billing_session_id
+            current_billing_session_id.set(_captured_sec_billing_sid)
+
         stream_completed = False
         last_verify_report = None
+        _gen_content = ""
+        _sec_actual_model: str | None = None
 
         try:
             async for evt in generate_section_stream(
@@ -1645,14 +1647,13 @@ async def generate_section(
                 scene_setup_context=scene_setup_context,
                 target_word_count=getattr(article, "target_word_count", None),
                 skip_sections=getattr(article, "skip_sections", None),
+                saas_user=sec_saas_user,
             ):
                 if evt.get("type") == "verify_report" and evt.get("report") is not None:
                     last_verify_report = evt["report"]
-                if evt.get("type") == "delta" and evt.get("text"):
-                    await token_counter.add_output_tokens(evt["text"])
                 if evt.get("type") == "done" and evt.get("content"):
                     stream_completed = True
-                    # SaaS: 零宽字符隐写水印
+                    _sec_actual_model = evt.get("actual_model")
                     _gen_content = evt["content"]
                     if is_saas() and sec_saas_user_id:
                         try:
@@ -1677,12 +1678,18 @@ async def generate_section(
                                 platform=article.platform or "wechat",
                                 verify_report=last_verify_report,
                             )
+                            _s_update: dict = {}
                             sug_list = evt.get("image_suggestions")
                             if sug_list:
+                                _s_update["image_suggestions"] = sug_list
+                            _s_meta = evt.get("section_metadata")
+                            if _s_meta:
+                                _s_update["section_metadata"] = _s_meta
+                            if _s_update:
                                 await sess.execute(
                                     update(ArticleSection)
                                     .where(ArticleSection.id == s_id)
-                                    .values(image_suggestions=sug_list)
+                                    .values(**_s_update)
                                 )
                             await sess.commit()
                 yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
@@ -1729,22 +1736,12 @@ async def generate_section(
                         if _u:
                             _u.free_generation_used = True
                             await settle_db.commit()
-                    elif sec_session_id:
-                        from app.services.streaming_session import (
-                            complete_streaming_session, abort_streaming_session,
+                    elif sec_billing_sid:
+                        from app.services.billing.dependency import close_billing_session
+                        await close_billing_session(
+                            sec_billing_sid, settle_db,
+                            success=stream_completed,
                         )
-                        if stream_completed:
-                            await complete_streaming_session(
-                                sec_session_id,
-                                token_counter.tokens_in,
-                                token_counter.tokens_out,
-                                settle_db,
-                            )
-                        else:
-                            await abort_streaming_session(
-                                sec_session_id, settle_db,
-                                reason="client_disconnect",
-                            )
                         await settle_db.commit()
             except Exception as _ce:
                 import logging
@@ -1773,35 +1770,42 @@ async def generate_all_sections(
     if not article or article.deleted_at:
         raise HTTPException(status_code=404, detail="Article not found")
 
-    # ── SaaS 积分预检 + 会话追踪 ────────────────────────────────
+    # ── SaaS 积分预检 + 计费会话 ────────────────────────────────
     saas_user_id: int | None = None
+    saas_user_obj = None
     estimated_cost = Decimal("0")
     is_free_gen = False
-    all_session_id: str | None = None
+    all_billing_sid: str | None = None
     if is_saas():
         from app.core.deps import get_current_user
         from app.models.user import User
         user: User = await get_current_user(request, db)
         saas_user_id = user.id
+        saas_user_obj = user
 
         from app.core.rate_limit import check_generate_rate as _check_gen_rate
         await _check_gen_rate(user.id)
 
         target_wc = getattr(article, "target_word_count", None) or 2000
         from app.services.credit.pricing import calc_generation_cost
-        estimated_cost = calc_generation_cost(target_wc)
+        from app.services.llm.manager import get_primary_model_for_task, get_model_tier
+        from app.models.article import ArticleLiteratureBinding as _ALB2
+        _has_lit_all = (await db.execute(
+            select(func.count(_ALB2.id)).where(_ALB2.article_id == article.id)
+        )).scalar() or 0
+        _pri_model_all = get_primary_model_for_task("generation_round1") or "gpt-4o"
+        _pri_tier_all = get_model_tier(_pri_model_all)
+        estimated_cost = calc_generation_cost(target_wc, model_tier=_pri_tier_all, include_embedding=_has_lit_all > 0)
         if not user.free_generation_used:
             is_free_gen = True
             _log.info("[generate-all] 用户 %d 首次免费生成，跳过扣费", user.id)
         else:
-            from app.services.streaming_session import (
-                start_streaming_session, TooManyConcurrentStreamsError,
-            )
+            from app.services.billing.dependency import open_billing_session
             from app.services.credit.service import InsufficientCreditsError
             try:
-                all_session_id = await start_streaming_session(
-                    user.id, "generate_all", estimated_cost, db,
-                    article_id=article.id,
+                all_billing_sid = await open_billing_session(
+                    user.id, "generation", estimated_cost, db,
+                    business_ref={"article_id": article.id, "type": "generate_all"},
                 )
                 await db.commit()
             except InsufficientCreditsError as e:
@@ -1809,8 +1813,6 @@ async def generate_all_sections(
                     status_code=402,
                     detail=f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分",
                 )
-            except TooManyConcurrentStreamsError as e:
-                raise HTTPException(status_code=429, detail=str(e))
 
     cf = article.content_format or "article"
     pf = article.platform or "wechat"
@@ -1834,19 +1836,24 @@ async def generate_all_sections(
         for s in all_sections
     ]
 
+    _captured_billing_sid = all_billing_sid
+
     async def event_stream():
         from app.services.content_version import save_node
         from app.services.markdown_to_tiptap import markdown_to_tiptap
         from app.services.med_claim_marks import apply_med_claim_marks_to_doc
-        from app.services.streaming_session import StreamingTokenCounter
 
-        token_counter = StreamingTokenCounter(all_session_id or "")
+        if _captured_billing_sid:
+            from app.services.billing.dependency import current_billing_session_id
+            current_billing_session_id.set(_captured_billing_sid)
 
         total = len([
             si for si in section_infos
             if si["section_type"] not in skip_list and not _skip_article_legacy_intro(cf, si["section_type"])
         ])
         completed = 0
+        actual_total_chars = 0
+        _all_actual_models: list[str] = []
 
         yield f"data: {json.dumps({'type': 'batch_start', 'total_sections': total}, ensure_ascii=False)}\n\n"
 
@@ -1901,11 +1908,11 @@ async def generate_all_sections(
                     scene_setup_context=scene_setup_context,
                     target_word_count=art_word_count,
                     skip_sections=art_skip_sections,
+                    saas_user=saas_user_obj,
                 ):
                     if evt.get("type") == "verify_report" and evt.get("report") is not None:
                         last_verify_report = evt["report"]
                     if evt.get("type") == "delta":
-                        await token_counter.add_output_tokens(evt.get("text", ""))
                         yield f"data: {json.dumps({'type': 'delta', 'text': evt.get('text', ''), 'section_id': sec_id}, ensure_ascii=False)}\n\n"
                     if evt.get("type") == "rewriting":
                         yield f"data: {json.dumps({'type': 'rewriting', 'message': evt.get('message', ''), 'section_id': sec_id}, ensure_ascii=False)}\n\n"
@@ -1914,6 +1921,9 @@ async def generate_all_sections(
                     if evt.get("type") == "done" and evt.get("content"):
                         section_content = evt["content"]
                         image_suggestions = evt.get("image_suggestions")
+                        _section_meta = evt.get("section_metadata")
+                        if evt.get("actual_model"):
+                            _all_actual_models.append(evt["actual_model"])
 
                 if section_content:
                     lock = get_domain_lock("articles")
@@ -1930,15 +1940,22 @@ async def generate_all_sections(
                                 platform=pf,
                                 verify_report=last_verify_report,
                             )
+                            _update_vals: dict = {}
                             if image_suggestions:
+                                _update_vals["image_suggestions"] = image_suggestions
+                            if _section_meta:
+                                _update_vals["section_metadata"] = _section_meta
+                            if _update_vals:
                                 await sess.execute(
                                     update(ArticleSection)
                                     .where(ArticleSection.id == sec_id)
-                                    .values(image_suggestions=image_suggestions)
+                                    .values(**_update_vals)
                                 )
                             await sess.commit()
                     _log.info("[generate-all] section %s saved", st)
 
+                if section_content:
+                    actual_total_chars += len(section_content)
                 completed += 1
                 yield f"data: {json.dumps({'type': 'section_done', 'section_id': sec_id, 'section_type': st, 'index': completed, 'total': total}, ensure_ascii=False)}\n\n"
         except GeneratorExit:
@@ -1962,22 +1979,14 @@ async def generate_all_sections(
                             _u.free_generation_used = True
                             await settle_db.commit()
                         _log.info("[generate-all] 首次免费生成已标记 user=%d", saas_user_id)
-                    elif all_session_id:
-                        from app.services.streaming_session import (
-                            complete_streaming_session, abort_streaming_session,
+                    elif all_billing_sid:
+                        from app.services.billing.dependency import close_billing_session
+                        _all_success = completed >= total and total > 0
+                        await close_billing_session(
+                            all_billing_sid, settle_db,
+                            success=_all_success,
+                            reason="incomplete" if completed > 0 else "client_disconnect",
                         )
-                        if completed >= total and total > 0:
-                            await complete_streaming_session(
-                                all_session_id,
-                                token_counter.tokens_in,
-                                token_counter.tokens_out,
-                                settle_db,
-                            )
-                        else:
-                            await abort_streaming_session(
-                                all_session_id, settle_db,
-                                reason="incomplete" if completed > 0 else "client_disconnect",
-                            )
                         await settle_db.commit()
             except Exception as credit_err:
                 _log.error("[generate-all] 积分结算异常: %s", credit_err)
@@ -2401,7 +2410,7 @@ _AI_ASSIST_PROMPTS: dict[str, str] = {
 
 
 @router.post("/ai-assist")
-async def ai_assist_stream(req: AiAssistRequest):
+async def ai_assist_stream(req: AiAssistRequest, request: Request, db: AsyncSession = Depends(get_db)):
     """AI 辅助写作：续写 / 润色 / 改写 / 精简 / 扩展，SSE 流式返回"""
     import logging
     _log = logging.getLogger(__name__)
@@ -2409,7 +2418,7 @@ async def ai_assist_stream(req: AiAssistRequest):
     if not req.selected_text.strip():
         raise HTTPException(status_code=400, detail="未提供选中文本")
 
-    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
     from app.services.llm.manager import TaskTier
 
     if req.action == "custom":
@@ -2429,19 +2438,70 @@ async def ai_assist_stream(req: AiAssistRequest):
             context_after=(req.context_after or "")[:500],
         )
 
-    async def _stream():
+    saas_user_id: int | None = None
+    billing_sid: str | None = None
+    if is_saas():
+        from app.core.deps import get_current_user
+        from app.services.billing.dependency import open_billing_session
+        from app.services.billing.service import estimate_cost_for_task
+        from app.services.credit.service import InsufficientCreditsError
+
+        user = await get_current_user(request, db)
+        saas_user_id = user.id
+
+        estimated_cost = await estimate_cost_for_task("ai_assist", input_chars=len(req.selected_text))
         try:
-            gen = await chat_completion(
-                messages=[{"role": "user", "content": prompt}],
-                stream=True,
-                task=TaskTier.BALANCED,
+            billing_sid = await open_billing_session(
+                user.id, "ai_assist", estimated_cost, db,
+                business_ref={"action": req.action},
             )
+            await db.commit()
+        except InsufficientCreditsError as e:
+            raise HTTPException(
+                status_code=402,
+                detail=f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分",
+            )
+
+    _captured_assist_billing_sid = billing_sid
+
+    async def _stream():
+        if _captured_assist_billing_sid:
+            from app.services.billing.dependency import current_billing_session_id
+            current_billing_session_id.set(_captured_assist_billing_sid)
+
+        stream_completed = False
+        try:
+            if is_saas():
+                gen = await call_llm_with_fallback(
+                    "polish", [{"role": "user", "content": prompt}], stream=True,
+                    user_id=saas_user_id,
+                )
+            else:
+                gen = await chat_completion(
+                    messages=[{"role": "user", "content": prompt}],
+                    stream=True,
+                    task=TaskTier.BALANCED,
+                )
             async for chunk in gen:
                 yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            stream_completed = True
         except Exception as exc:
             _log.warning("ai-assist stream error: %s", exc)
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n"
+        finally:
+            if billing_sid and is_saas():
+                try:
+                    from app.core.database import AsyncSessionLocal
+                    from app.services.billing.dependency import close_billing_session
+                    async with AsyncSessionLocal() as settle_db:
+                        await close_billing_session(
+                            billing_sid, settle_db,
+                            success=stream_completed,
+                        )
+                        await settle_db.commit()
+                except Exception as e:
+                    _log.error("AI 辅助写作积分结算异常: %s", e)
 
     return StreamingResponse(
         _stream(),

@@ -42,6 +42,12 @@
         <router-link to="/settings" class="nav-item">
           <span class="icon">⚙️</span> 设置
         </router-link>
+        <router-link to="/help" class="nav-item">
+          <span class="icon">❓</span> 帮助
+        </router-link>
+        <router-link to="/contact" class="nav-item">
+          <span class="icon">📞</span> 联系我们
+        </router-link>
       </div>
     </nav>
     <div class="sidebar-footer">

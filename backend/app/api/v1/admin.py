@@ -576,6 +576,8 @@ class AdminLicenseItem(BaseModel):
     credits_cost: float
     source: str
     is_used: bool
+    device_id: str | None = None
+    activated_at: str | None = None
     used_by: str | None
     used_at: str | None
     note: str | None
@@ -623,6 +625,8 @@ async def list_licenses(
             owner_phone=phone_map.get(c.owner_id) if c.owner_id else None,
             credit_type=c.credit_type, credits_cost=float(c.credits_cost),
             source=c.source, is_used=c.is_used or False,
+            device_id=c.device_id,
+            activated_at=c.activated_at.isoformat() if c.activated_at else None,
             used_by=c.used_by, used_at=c.used_at.isoformat() if c.used_at else None,
             note=c.note, created_at=c.created_at.isoformat() if c.created_at else "",
         ) for c in codes],
@@ -688,6 +692,36 @@ async def revoke_license(
     return {"success": True}
 
 
+@router.post("/licenses/unbind-device")
+async def unbind_license_device(
+    license_id: int = Query(...),
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """管理员解绑授权码的设备绑定，允许用户在新设备上重新激活"""
+    from app.models.billing import LicenseCode
+    lc = await db.get(LicenseCode, license_id)
+    if not lc:
+        raise HTTPException(404, "授权码不存在")
+    if not lc.device_id:
+        raise HTTPException(400, "该授权码未绑定设备")
+
+    old_device = lc.device_id
+    lc.device_id = None
+    lc.device_info = None
+    lc.is_used = False
+    lc.activated_at = None
+
+    await _audit(
+        db, admin.id, "unbind_license_device",
+        target_user_id=lc.owner_id,
+        reason=f"解绑授权码设备: code={lc.code}, old_device={old_device}",
+        payload={"license_id": license_id, "old_device_id": old_device},
+    )
+    await db.commit()
+    return {"success": True, "message": f"已解绑设备 {old_device[:16]}..."}
+
+
 @router.get("/auth/me")
 async def admin_me(admin: User = Depends(get_admin_user)):
     """管理员身份确认"""
@@ -707,10 +741,12 @@ class WithdrawalListItem(BaseModel):
     id: int
     user_id: int
     display_name: str | None
+    phone: str | None
     credits_used: float
     amount_yuan: float
-    real_name: str | None
-    bank_account: str | None
+    platform_account: str | None
+    wechat_phone: str | None
+    promo_credits: float
     status: str
     created_at: str
     reviewed_at: str | None
@@ -739,10 +775,12 @@ async def list_withdrawals(
             id=w.id,
             user_id=w.user_id,
             display_name=u.display_name if u else None,
+            phone=u.phone if u else None,
             credits_used=float(w.credits_used),
             amount_yuan=float(w.amount_yuan),
-            real_name=w.real_name,
-            bank_account=w.bank_account,
+            platform_account=w.platform_account,
+            wechat_phone=w.wechat_phone,
+            promo_credits=float(u.promo_credits or 0) if u else 0,
             status=w.status,
             created_at=w.created_at.isoformat() if w.created_at else "",
             reviewed_at=w.reviewed_at.isoformat() if w.reviewed_at else None,
@@ -895,3 +933,190 @@ async def list_vouchers(
         }
         for v in rows
     ]
+
+
+# ══════════════════════════════════════════════════════════════
+#  兑换码管理
+# ══════════════════════════════════════════════════════════════
+
+import secrets
+import string
+import uuid as _uuid
+
+REDEEM_TIER_CONFIG: dict[int, dict] = {
+    10:  {"prefix": "LS0A", "credits": 10,  "bonus": 0},
+    50:  {"prefix": "LS3B", "credits": 50,  "bonus": 3},
+    100: {"prefix": "LS5C", "credits": 100, "bonus": 8},
+    300: {"prefix": "LS7D", "credits": 300, "bonus": 30},
+    500: {"prefix": "LS9E", "credits": 500, "bonus": 60},
+}
+
+_REDEEM_CHARSET = string.ascii_uppercase + string.digits
+
+
+def _generate_redeem_code(prefix: str) -> str:
+    rand_part = "".join(secrets.choice(_REDEEM_CHARSET) for _ in range(16))
+    return f"{prefix}-{rand_part[:4]}-{rand_part[4:8]}-{rand_part[8:12]}-{rand_part[12:]}"
+
+
+class GenerateRedeemCodesRequest(BaseModel):
+    tier: int = Field(..., description="价位档 10/50/100/300/500")
+    count: int = Field(1, ge=1, le=200)
+
+
+@router.post("/redeem-codes/generate")
+async def generate_redeem_codes(
+    req: GenerateRedeemCodesRequest,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    cfg = REDEEM_TIER_CONFIG.get(req.tier)
+    if not cfg:
+        raise HTTPException(400, f"不支持的档位: {req.tier}，可选: {list(REDEEM_TIER_CONFIG.keys())}")
+
+    from app.models.billing import RedeemCode
+
+    batch_id = _uuid.uuid4().hex[:16]
+    codes_created = []
+
+    for _ in range(req.count):
+        for _retry in range(10):
+            code = _generate_redeem_code(cfg["prefix"])
+            existing = await db.execute(
+                select(RedeemCode.id).where(RedeemCode.code == code).limit(1)
+            )
+            if existing.scalar_one_or_none() is None:
+                break
+        else:
+            raise HTTPException(500, "兑换码生成冲突，请重试")
+
+        rc = RedeemCode(
+            code=code,
+            tier=req.tier,
+            credits=Decimal(str(cfg["credits"])),
+            bonus_credits=Decimal(str(cfg["bonus"])),
+            batch_id=batch_id,
+            created_by=admin.id,
+        )
+        db.add(rc)
+        codes_created.append(code)
+
+    await db.commit()
+
+    await _audit(
+        db, admin.id, "generate_redeem_codes",
+        reason=f"批量生成兑换码 tier={req.tier} count={req.count}",
+        payload={"tier": req.tier, "count": req.count, "batch_id": batch_id},
+    )
+
+    return {"batch_id": batch_id, "count": len(codes_created), "codes": codes_created}
+
+
+class AdminRedeemCodeItem(BaseModel):
+    id: int
+    code: str
+    tier: int
+    credits: float
+    bonus_credits: float
+    status: str
+    batch_id: str | None
+    used_by: int | None
+    used_by_phone: str | None = None
+    used_at: str | None
+    created_at: str
+
+
+@router.get("/redeem-codes", response_model=dict)
+async def list_redeem_codes(
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    tier: int | None = Query(None),
+    status_filter: str | None = Query(None),
+    batch_id: str | None = Query(None),
+):
+    from app.models.billing import RedeemCode
+
+    query = select(RedeemCode).order_by(desc(RedeemCode.created_at))
+    count_q = select(func.count(RedeemCode.id))
+
+    if tier is not None:
+        query = query.where(RedeemCode.tier == tier)
+        count_q = count_q.where(RedeemCode.tier == tier)
+    if status_filter:
+        query = query.where(RedeemCode.status == status_filter)
+        count_q = count_q.where(RedeemCode.status == status_filter)
+    if batch_id:
+        query = query.where(RedeemCode.batch_id == batch_id)
+        count_q = count_q.where(RedeemCode.batch_id == batch_id)
+
+    total = (await db.execute(count_q)).scalar() or 0
+    result = await db.execute(query.offset((page - 1) * page_size).limit(page_size))
+    rows = result.scalars().all()
+
+    user_ids = {r.used_by for r in rows if r.used_by}
+    phone_map = {}
+    if user_ids:
+        users_r = await db.execute(select(User.id, User.phone).where(User.id.in_(user_ids)))
+        phone_map = {uid: phone for uid, phone in users_r.all()}
+
+    return {
+        "total": total, "page": page, "page_size": page_size,
+        "items": [AdminRedeemCodeItem(
+            id=r.id, code=r.code, tier=r.tier,
+            credits=float(r.credits), bonus_credits=float(r.bonus_credits),
+            status=r.status, batch_id=r.batch_id,
+            used_by=r.used_by,
+            used_by_phone=phone_map.get(r.used_by) if r.used_by else None,
+            used_at=r.used_at.isoformat() if r.used_at else None,
+            created_at=r.created_at.isoformat() if r.created_at else "",
+        ) for r in rows],
+    }
+
+
+@router.get("/redeem-codes/tiers")
+async def get_redeem_tiers(admin: User = Depends(get_admin_user)):
+    return [
+        {"tier": t, "prefix": c["prefix"], "credits": c["credits"], "bonus": c["bonus"]}
+        for t, c in sorted(REDEEM_TIER_CONFIG.items())
+    ]
+
+
+class RevokeRedeemCodesRequest(BaseModel):
+    code_ids: list[int] = Field(..., min_length=1, max_length=200)
+    reason: str = ""
+
+
+@router.post("/redeem-codes/revoke")
+async def revoke_redeem_codes(
+    req: RevokeRedeemCodesRequest,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.billing import RedeemCode
+
+    result = await db.execute(
+        select(RedeemCode).where(
+            RedeemCode.id.in_(req.code_ids),
+            RedeemCode.status == "unused",
+        )
+    )
+    codes = result.scalars().all()
+    if not codes:
+        raise HTTPException(404, "未找到可作废的兑换码")
+
+    revoked = 0
+    for c in codes:
+        c.status = "revoked"
+        revoked += 1
+
+    await db.commit()
+
+    await _audit(
+        db, admin.id, "revoke_redeem_codes",
+        reason=req.reason or f"批量作废 {revoked} 个兑换码",
+        payload={"code_ids": [c.id for c in codes], "count": revoked},
+    )
+
+    return {"revoked": revoked}

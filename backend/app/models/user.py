@@ -6,7 +6,7 @@ import secrets
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Numeric, ForeignKey, func
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, Numeric, ForeignKey, func
 from app.models import Base
 from app.core.config import settings
 

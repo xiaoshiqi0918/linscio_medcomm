@@ -103,11 +103,11 @@ class Settings:
     deepseek_base_url: str = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
     # ── 积分业务 ─────────────────────────────────────────────
-    new_user_gift_credits: int = 5
+    new_user_gift_credits: int = 3
     gift_credits_validity_days: int = 30
     promo_credits_validity_months: int = 6
-    promo_cash_rate: float = 0.08
-    promo_min_withdraw: int = 1000
+    promo_cash_rate: float = 0.10
+    promo_min_withdraw: int = 100
 
     # ── 易支付 ─────────────────────────────────────────────────
     yipay_pid: str = os.environ.get("YIPAY_PID", "")
@@ -146,6 +146,11 @@ class Settings:
 
     # ── SaaS 远程 API（桌面端登录验证用）──────────────────────
     saas_api_url: str = os.environ.get("SAAS_API_URL", "https://www.linscio.com")
+
+    # ── 前端站点 URL（推广链接等，开发时可指向 Vite 端口）─────
+    @property
+    def site_url(self) -> str:
+        return os.environ.get("SITE_URL", self.saas_api_url)
 
     # ── 门户 ─────────────────────────────────────────────────
     @property

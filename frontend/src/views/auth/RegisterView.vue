@@ -2,25 +2,29 @@
   <div class="auth-page">
     <div class="auth-card">
       <h2>注册</h2>
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="0" @submit.prevent="handleRegister">
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="0" autocomplete="off" @submit.prevent="handleRegister">
         <el-form-item prop="phone">
-          <el-input v-model="form.phone" placeholder="手机号" prefix-icon="Phone" maxlength="11" />
+          <el-input v-model="form.phone" placeholder="手机号" prefix-icon="Phone" maxlength="11" autocomplete="new-phone" />
         </el-form-item>
         <el-form-item prop="password">
-          <el-input v-model="form.password" type="password" placeholder="密码（至少6位）" prefix-icon="Lock" show-password />
+          <el-input v-model="form.password" type="password" placeholder="密码（至少6位）" prefix-icon="Lock" show-password autocomplete="new-password" />
         </el-form-item>
         <el-form-item prop="confirmPassword">
-          <el-input v-model="form.confirmPassword" type="password" placeholder="确认密码" prefix-icon="Lock" show-password />
+          <el-input v-model="form.confirmPassword" type="password" placeholder="确认密码" prefix-icon="Lock" show-password autocomplete="new-password" />
         </el-form-item>
         <el-form-item prop="displayName">
           <el-input v-model="form.displayName" placeholder="昵称（可选）" prefix-icon="User" />
         </el-form-item>
         <el-form-item prop="referralCode">
-          <el-input v-model="form.referralCode" placeholder="邀请码（可选）" maxlength="8" />
+          <el-input v-model="form.referralCode" placeholder="邀请码（可选）" maxlength="8" :disabled="refFromUrl" />
+          <div v-if="refFromUrl" class="ref-hint">已通过推广链接自动填入邀请码</div>
         </el-form-item>
         <el-form-item prop="agreedTerms">
           <el-checkbox v-model="form.agreedTerms">
-            我已阅读并同意《用户服务协议》《免责声明》《隐私政策》
+            <span class="agree-text">
+              我已阅读并同意
+              <a class="legal-link" @click.prevent.stop="showLegal('terms')">用户服务协议</a>、<a class="legal-link" @click.prevent.stop="showLegal('disclaimer')">免责声明</a>和<a class="legal-link" @click.prevent.stop="showLegal('privacy')">隐私政策</a>
+            </span>
           </el-checkbox>
         </el-form-item>
         <el-form-item>
@@ -31,19 +35,25 @@
         已有账号？<router-link to="/login">去登录</router-link>
       </div>
     </div>
+
+    <el-dialog v-model="legalVisible" :title="legalTitle" width="600px" top="6vh" :close-on-click-modal="true" destroy-on-close>
+      <div class="legal-content" v-html="legalHtml"></div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { http, setAuthToken } from '@/api'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 
 const router = useRouter()
+const route = useRoute()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+const refFromUrl = ref(false)
 
 const form = reactive({
   phone: '',
@@ -81,6 +91,14 @@ const rules: FormRules = {
   ],
 }
 
+onMounted(() => {
+  const ref = (route.query.ref as string || '').trim()
+  if (ref) {
+    form.referralCode = ref.slice(0, 8)
+    refFromUrl.value = true
+  }
+})
+
 async function handleRegister() {
   if (!formRef.value) return
   const valid = await formRef.value.validate().catch(() => false)
@@ -108,6 +126,21 @@ async function handleRegister() {
   } finally {
     loading.value = false
   }
+}
+
+// ── 协议弹窗 ──────────────────────────────────────────────
+const legalVisible = ref(false)
+const legalTitle = ref('')
+const legalHtml = ref('')
+
+import { LEGAL_DOCS } from './legal-docs'
+
+function showLegal(key: string) {
+  const doc = LEGAL_DOCS[key]
+  if (!doc) return
+  legalTitle.value = doc.title
+  legalHtml.value = doc.html
+  legalVisible.value = true
 }
 </script>
 
@@ -144,5 +177,50 @@ async function handleRegister() {
 }
 .auth-footer a:hover {
   text-decoration: underline;
+}
+.ref-hint {
+  font-size: 0.8rem;
+  color: #059669;
+  margin-top: 2px;
+}
+.agree-text {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: normal;
+  word-break: break-all;
+}
+.legal-link {
+  color: #2563eb;
+  cursor: pointer;
+  text-decoration: none;
+}
+.legal-link:hover {
+  text-decoration: underline;
+}
+</style>
+
+<style>
+.legal-content {
+  max-height: 60vh;
+  overflow-y: auto;
+  font-size: 0.9rem;
+  color: #374151;
+  line-height: 1.8;
+  padding: 0 4px;
+}
+.legal-content h4 {
+  margin: 18px 0 8px;
+  font-size: 1rem;
+  color: #1e293b;
+}
+.legal-content p {
+  margin: 6px 0;
+}
+.legal-content ol, .legal-content ul {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+.legal-content li {
+  margin-bottom: 4px;
 }
 </style>

@@ -5,8 +5,25 @@
     <!-- SaaS 模式：账户与积分 -->
     <el-card v-if="!isElectronEnv" class="settings-card">
       <template #header>账户信息</template>
+
+      <!-- 未登录状态 -->
+      <div v-if="!saasLoggedIn" class="about-section" style="text-align: center; padding: 32px 0;">
+        <div style="font-size: 2.5rem; margin-bottom: 12px;">👋</div>
+        <div style="font-size: 1.1rem; color: #374151; font-weight: 600; margin-bottom: 6px;">您还未登录</div>
+        <div style="font-size: 0.9rem; color: #6b7280; margin-bottom: 20px; line-height: 1.6;">
+          登录后即可使用 AI 写作、积分充值、推广返利等全部功能<br />
+          新用户注册即赠 <strong style="color: #1e40af;">3 积分</strong>，可免费体验
+        </div>
+        <div style="display: flex; justify-content: center; gap: 12px;">
+          <el-button type="primary" size="large" @click="router.push('/login?redirect=/settings')">登录</el-button>
+          <el-button size="large" @click="router.push('/register')">注册账号</el-button>
+        </div>
+      </div>
+
+      <!-- 已登录状态 -->
+      <div v-if="saasLoggedIn">
       <div class="about-section">
-        <div class="about-row"><span class="label">用户</span> {{ saasUser?.display_name || '未登录' }}</div>
+        <div class="about-row"><span class="label">用户</span> {{ saasUser?.display_name || '-' }}</div>
         <div class="about-row"><span class="label">手机号</span> {{ saasUser?.phone || '-' }}</div>
         <div class="about-row"><span class="label">注册时间</span> {{ saasUser?.created_at ? new Date(saasUser.created_at).toLocaleDateString('zh-CN') : '-' }}</div>
       </div>
@@ -22,8 +39,9 @@
         </div>
         <div class="about-row"><span class="label">累计充值</span> {{ saasCredits.total_recharged ?? 0 }} 积分</div>
         <div class="about-row"><span class="label">累计消耗</span> {{ saasCredits.total_consumed ?? 0 }} 积分</div>
-        <div class="about-row" style="margin-top: 8px;">
+        <div class="about-row" style="margin-top: 8px; gap: 8px;">
           <el-button type="primary" size="small" @click="showRechargeDialog = true">充值积分</el-button>
+          <router-link to="/help#credits" style="font-size: 0.82rem; color: #2563eb; text-decoration: none;">查看分档计费规则与模型策略 →</router-link>
         </div>
       </div>
       <div class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
@@ -39,23 +57,142 @@
         <div v-if="saasCredits.promo?.promo_credits_expire_at" class="about-row" style="font-size: 0.85rem; color: #6b7280;">
           推广积分到期：{{ new Date(saasCredits.promo.promo_credits_expire_at).toLocaleDateString('zh-CN') }}
         </div>
-        <div class="promo-rules" style="margin-top: 8px; font-size: 0.85rem; color: #6b7280; line-height: 1.8;">
-          <div style="font-weight: 600; color: #374151; margin-bottom: 4px;">获取方式：邀请好友注册</div>
-          <div>· 好友注册成功：+5 推广积分（一次性）</div>
-          <div>· 好友每次充值（≥50元）：返充值金额 10% 的推广积分（不含赠送部分）</div>
-          <div style="font-weight: 600; color: #374151; margin-top: 8px; margin-bottom: 4px;">使用方式</div>
-          <div>· 折现提取（最低 {{ saasCredits.promo?.min_withdraw_credits ?? 100 }} 积分）</div>
-          <div>· 兑换客户端下载授权码（10000 推广积分 / 个，独立计算）</div>
-          <div>· 也可直接用于抵扣生成消耗</div>
+      </div>
+
+      <!-- 推广中心 -->
+      <div class="about-section referral-center" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <span style="font-weight: 600; color: #374151;">推广中心</span>
+          <el-button text size="small" @click="loadReferralInfo" :loading="loadingReferral">刷新</el-button>
+        </div>
+
+        <!-- 推广码 & 链接 -->
+        <div v-if="referralInfo" class="referral-code-block">
+          <div class="about-row" style="align-items: center; gap: 10px;">
+            <span class="label">我的推广码</span>
+            <span style="font-family: monospace; font-size: 1.1rem; font-weight: 700; color: #1e40af; user-select: all; letter-spacing: 1px;">{{ referralInfo.referral_code }}</span>
+            <el-button text size="small" type="primary" @click="copyReferralLink">复制推广链接</el-button>
+            <el-button text size="small" @click="resetReferralCode">重置推广码</el-button>
+          </div>
+          <div class="about-row" style="margin-top: 6px; font-size: 0.82rem; color: #6b7280; word-break: break-all;">
+            {{ referralInfo.referral_link }}
+          </div>
+        </div>
+
+        <!-- 推广统计 -->
+        <div v-if="referralInfo" style="display: flex; gap: 24px; margin-top: 12px;">
+          <div class="referral-stat">
+            <div class="referral-stat-value">{{ referralInfo.total_referred }}</div>
+            <div class="referral-stat-label">邀请人数</div>
+          </div>
+          <div class="referral-stat">
+            <div class="referral-stat-value" style="color: #059669;">{{ referralInfo.total_reward_credits }}</div>
+            <div class="referral-stat-label">累计推广积分</div>
+          </div>
+        </div>
+
+        <!-- 推广规则 -->
+        <div style="margin-top: 12px; padding: 10px 14px; background: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; font-size: 0.82rem; color: #166534; line-height: 1.7;">
+          好友通过您的推广链接注册 → 您获得 <strong>5 推广积分</strong><br />
+          好友充值 ≥50 元 → 您获得其充值积分 <strong>10%</strong> 的推广积分<br />
+          好友首次充值 ≥50 元 → 好友本人获得充值积分 <strong>20%</strong> 的推广积分奖励
+        </div>
+
+        <!-- 推广明细 -->
+        <div style="margin-top: 14px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-size: 0.9rem; font-weight: 600; color: #374151;">推广明细</span>
+            <el-button text size="small" @click="loadReferralDetails" :loading="loadingReferralDetails">刷新</el-button>
+          </div>
+          <el-table v-if="referralDetails.length > 0" :data="referralDetails" size="small" stripe style="width: 100%;" max-height="240">
+            <el-table-column prop="referred_display_name" label="用户" width="120" />
+            <el-table-column label="类型" width="120">
+              <template #default="{ row }">
+                <el-tag :type="referralTriggerTag(row.trigger_type)" size="small">{{ referralTriggerLabel(row.trigger_type) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="奖励积分" width="100">
+              <template #default="{ row }">
+                <span style="font-weight: 600; color: #059669;">+{{ row.reward_credits }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="时间" min-width="140">
+              <template #default="{ row }">
+                {{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-' }}
+              </template>
+            </el-table-column>
+          </el-table>
+          <div v-else-if="!loadingReferralDetails" style="color: #9ca3af; font-size: 0.85rem;">暂无推广记录，分享推广链接邀请好友吧</div>
+        </div>
+
+        <!-- 推广积分兑现 -->
+        <div style="margin-top: 14px;">
+          <div style="font-size: 0.9rem; font-weight: 600; color: #374151; margin-bottom: 8px;">推广积分兑现</div>
+          <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+            <el-input v-model="withdrawForm.credits_amount" placeholder="兑现积分数" size="small" style="width: 120px;" type="number" />
+            <el-input v-model="withdrawForm.platform_account" placeholder="平台注册手机号" size="small" style="width: 150px;" />
+            <el-input v-model="withdrawForm.wechat_phone" placeholder="微信绑定手机号" size="small" style="width: 150px;" />
+            <el-button type="success" size="small" :loading="submittingWithdraw" @click="applyWithdraw">申请兑现</el-button>
+          </div>
+          <div style="margin-top: 6px; font-size: 0.78rem; color: #f59e0b; line-height: 1.6;">
+            ⚠ 请确保微信已开启「手机号转账」功能（微信 → 我 → 服务 → 收付款 → 向银行卡或手机号转账 → 开启允许通过手机号向我转账）
+          </div>
+          <div style="margin-top: 4px; font-size: 0.78rem; color: #9ca3af;">
+            最低 {{ saasCredits.promo?.min_withdraw ?? 100 }} 积分起提 · 折现比例 1 积分 = {{ saasCredits.promo?.cash_rate ?? 0.1 }} 元
+          </div>
+        </div>
+
+        <!-- 兑现记录 -->
+        <div v-if="withdrawals.length > 0" style="margin-top: 10px;">
+          <div style="font-size: 0.85rem; color: #6b7280; margin-bottom: 4px;">兑现记录</div>
+          <el-table :data="withdrawals" size="small" stripe style="width: 100%;" max-height="200">
+            <el-table-column label="积分" width="80">
+              <template #default="{ row }">{{ row.credits_used }}</template>
+            </el-table-column>
+            <el-table-column label="金额" width="80">
+              <template #default="{ row }">¥{{ row.amount_yuan }}</template>
+            </el-table-column>
+            <el-table-column label="状态" width="80">
+              <template #default="{ row }">
+                <el-tag :type="withdrawStatusType(row.status)" size="small">{{ withdrawStatusLabel(row.status) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="申请时间" min-width="130">
+              <template #default="{ row }">
+                {{ row.created_at ? new Date(row.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-' }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="note" label="备注" min-width="150">
+              <template #default="{ row }">
+                <span v-if="row.status === 'rejected' && row.note" style="font-size: 0.8rem; color: #ef4444;">拒绝原因：{{ row.note }}</span>
+                <span v-else style="font-size: 0.8rem; color: #6b7280;">{{ row.note || '-' }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
         </div>
       </div>
 
       <div class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
-        <div style="font-weight: 600; color: #374151; margin-bottom: 8px;">兑换客户端授权码</div>
+        <div style="font-weight: 600; color: #374151; margin-bottom: 8px;">客户端授权码</div>
+
+        <!-- 领取管理员分发的授权码 -->
+        <div style="display: flex; gap: 8px; align-items: flex-end; margin-bottom: 12px;">
+          <el-input
+            v-model="claimCodeInput"
+            placeholder="输入管理员分发的授权码（如 LINSCIO-XXXX-XXXX-XXXX）"
+            :disabled="claimingCode"
+            clearable
+            style="max-width: 380px; font-family: monospace;"
+            @keyup.enter="handleClaimCode"
+          />
+          <el-button type="primary" size="default" :loading="claimingCode" @click="handleClaimCode">领取</el-button>
+        </div>
+
+        <!-- 积分兑换 -->
         <div style="display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap;">
           <div class="redeem-card">
             <div class="redeem-title">积分兑换</div>
-            <div class="redeem-price">6000 积分</div>
+            <div class="redeem-price">600 积分</div>
             <div class="redeem-desc">充值积分 + 赠送积分均可使用</div>
             <el-button size="small" type="primary" @click="redeemLicense('credits')" :loading="redeemingLicense">
               兑换
@@ -63,7 +200,7 @@
           </div>
           <div class="redeem-card">
             <div class="redeem-title">推广积分兑换</div>
-            <div class="redeem-price">10000 推广积分</div>
+            <div class="redeem-price">6000 推广积分</div>
             <div class="redeem-desc">仅使用推广积分兑换</div>
             <el-button size="small" type="success" @click="redeemLicense('promo_credits')" :loading="redeemingLicense">
               兑换
@@ -78,6 +215,8 @@
             </template>
           </el-alert>
         </div>
+
+        <!-- 我的授权码列表 -->
         <div v-if="myLicenseCodes.length > 0" style="margin-top: 12px;">
           <div style="font-size: 0.85rem; color: #6b7280; margin-bottom: 4px;">我的授权码</div>
           <el-table :data="myLicenseCodes" size="small" stripe style="width: 100%;">
@@ -86,15 +225,40 @@
                 <span style="font-family: monospace; font-size: 0.8rem; user-select: all;">{{ row.code }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="80">
+            <el-table-column label="状态" width="100">
               <template #default="{ row }">
-                <el-tag :type="row.is_used ? 'info' : 'success'" size="small">{{ row.is_used ? '已使用' : '未使用' }}</el-tag>
+                <el-tag v-if="row.is_used" type="info" size="small">已激活</el-tag>
+                <el-tag v-else type="success" size="small">未激活</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="兑换时间" width="140">
-              <template #default="{ row }">{{ new Date(row.created_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</template>
+            <el-table-column label="绑定设备" min-width="140">
+              <template #default="{ row }">
+                <span v-if="row.device_id" style="font-size: 0.78rem; color: #6b7280; font-family: monospace;">
+                  {{ row.device_id.slice(0, 16) }}...
+                </span>
+                <span v-else style="color: #9ca3af; font-size: 0.8rem;">未绑定</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="激活时间" width="140">
+              <template #default="{ row }">
+                <span v-if="row.activated_at">{{ new Date(row.activated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}</span>
+                <span v-else style="color: #9ca3af;">-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="110">
+              <template #default="{ row }">
+                <el-button
+                  v-if="row.is_used"
+                  text type="warning" size="small"
+                  :loading="unbindingDevice"
+                  @click="handleUnbindDevice"
+                >解绑设备</el-button>
+              </template>
             </el-table-column>
           </el-table>
+        </div>
+        <div style="margin-top: 8px; font-size: 0.78rem; color: #9ca3af; line-height: 1.6;">
+          授权码在客户端首次登录时自动绑定设备，绑定后仅限该设备使用。每 30 天可自助解绑 1 次，解绑后可在新设备上重新激活。
         </div>
       </div>
       <div class="about-section" style="margin-top: 12px; border-top: 1px solid #e5e7eb; padding-top: 12px;">
@@ -199,6 +363,7 @@
       <div class="about-section" style="margin-top: 12px;">
         <el-button type="warning" size="small" @click="saasLogout">退出登录</el-button>
       </div>
+      </div>
     </el-card>
 
     <!-- 桌面模式：账户与关于 -->
@@ -208,6 +373,7 @@
         <div class="about-row"><span class="label">当前用户</span> {{ authStore.user?.display_name || '未登录' }}</div>
         <div class="about-row"><span class="label">手机号</span> {{ authStore.user?.phone || '-' }}</div>
         <div class="about-row" style="gap: 8px; margin-top: 4px;">
+          <el-button v-if="!authStore.user" size="small" type="primary" @click="router.push('/login')">登录 / 注册</el-button>
           <el-button v-if="authStore.user" size="small" type="warning" @click="logout">退出登录</el-button>
         </div>
       </div>
@@ -568,71 +734,118 @@
     <el-button @click="$router.back()" style="margin-top: 1rem;">返回</el-button>
 
     <!-- 充值弹窗 -->
-    <el-dialog v-model="showRechargeDialog" title="积分充值" width="520px" :close-on-click-modal="false">
-      <div v-if="!payingOrder">
-        <div class="recharge-plans">
-          <div
-            v-for="plan in rechargePlans"
-            :key="plan.amount_yuan"
-            :class="['plan-card', { active: selectedPlan === plan.amount_yuan }]"
-            @click="selectedPlan = plan.amount_yuan"
-          >
-            <div class="plan-price">¥{{ plan.amount_yuan }}</div>
-            <div class="plan-credits">{{ plan.credits }} 积分</div>
-            <div v-if="plan.bonus > 0" class="plan-bonus">赠送 {{ plan.bonus }}</div>
-            <div class="plan-unit">{{ plan.unit_price }}</div>
+    <el-dialog v-model="showRechargeDialog" title="积分充值" width="560px" :close-on-click-modal="false">
+      <el-tabs v-model="rechargeTab">
+        <el-tab-pane label="兑换码充值" name="redeem">
+          <div style="padding: 12px 0;">
+            <div class="recharge-plans" style="margin-bottom: 16px;">
+              <div v-for="plan in rechargePlans" :key="plan.amount_yuan" class="plan-card plan-card--readonly">
+                <div class="plan-price">¥{{ plan.amount_yuan }}</div>
+                <div class="plan-credits">{{ plan.credits }} 积分</div>
+                <div v-if="plan.bonus > 0" class="plan-bonus">赠送 {{ plan.bonus }}</div>
+              </div>
+            </div>
+            <el-form @submit.prevent="handleRedeem" style="max-width: 420px;">
+              <el-form-item label="兑换码" :error="redeemError">
+                <el-input
+                  v-model="redeemCodeInput"
+                  placeholder="请输入兑换码，如 LS3B-XXXX-XXXX-XXXX-XXXX"
+                  :disabled="redeemLoading"
+                  clearable
+                  style="font-family: monospace; letter-spacing: 0.5px;"
+                  @keyup.enter="handleRedeem"
+                />
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" :loading="redeemLoading" @click="handleRedeem">
+                  确认兑换
+                </el-button>
+              </el-form-item>
+            </el-form>
+            <div v-if="redeemResult" style="margin-top: 8px;">
+              <el-alert :title="redeemResult.message" type="success" :closable="false" show-icon>
+                <template #default>
+                  <span style="font-size: 0.85rem; color: #166534;">
+                    获得 {{ redeemResult.credits }} 积分
+                    <span v-if="redeemResult.bonus_credits > 0"> + {{ redeemResult.bonus_credits }} 赠送积分</span>
+                  </span>
+                </template>
+              </el-alert>
+            </div>
+            <div style="margin-top: 16px; padding: 10px 14px; background: #f0f9ff; border-radius: 8px; border: 1px solid #bae6fd; font-size: 0.82rem; color: #0c4a6e; line-height: 1.7;">
+              兑换码由管理员生成并分发，不同价位对应不同的兑换码前缀。<br/>
+              每个兑换码仅限使用一次，充值成功后积分立即到账。<br/>
+              50 元及以上档位享有赠送积分，详见上方价位表。
+            </div>
           </div>
-        </div>
-        <div style="margin-top: 16px;">
-          <span style="font-size: 0.9rem; color: #374151;">支付方式：</span>
-          <el-radio-group v-model="payType" style="margin-left: 8px;">
-            <el-radio value="alipay">支付宝</el-radio>
-            <el-radio value="wxpay">微信支付</el-radio>
-          </el-radio-group>
-        </div>
-        <div style="margin-top: 12px; padding: 10px 12px; background: #fffbe6; border-radius: 6px; border: 1px solid #ffe58f;">
-          <p style="font-size: 0.8rem; color: #8c6d1f; margin: 0; line-height: 1.6;">
-            ⚠️ 退款政策：充值后 24 小时内未消费可全额退款；已消费部分退还未消费余额（扣 5% 手续费）；
-            <strong>充值超过 7 天不退款</strong>，余额可继续使用。充值即视为同意以上政策。
-          </p>
-        </div>
-        <div style="text-align: right; margin-top: 16px;">
-          <el-button @click="showRechargeDialog = false">取消</el-button>
-          <el-button type="primary" :loading="creatingOrder" @click="handleCreateOrder">
-            确认充值 ¥{{ selectedPlan }}
-          </el-button>
-        </div>
-      </div>
-      <div v-else>
-        <div class="pay-qrcode-area">
-          <p style="text-align: center; margin-bottom: 12px; color: #374151;">
-            请使用{{ payType === 'alipay' ? '支付宝' : '微信' }}扫码支付
-          </p>
-          <div v-if="payingOrder.img" style="text-align: center;">
-            <img :src="payingOrder.img" alt="支付二维码" style="max-width: 240px; border: 1px solid #e5e7eb; border-radius: 8px;" />
+        </el-tab-pane>
+        <el-tab-pane label="在线支付" name="online">
+          <div v-if="!payingOrder" style="padding: 12px 0;">
+            <div class="recharge-plans">
+              <div
+                v-for="plan in rechargePlans"
+                :key="plan.amount_yuan"
+                :class="['plan-card', { active: selectedPlan === plan.amount_yuan }]"
+                @click="selectedPlan = plan.amount_yuan"
+              >
+                <div class="plan-price">¥{{ plan.amount_yuan }}</div>
+                <div class="plan-credits">{{ plan.credits }} 积分</div>
+                <div v-if="plan.bonus > 0" class="plan-bonus">赠送 {{ plan.bonus }}</div>
+                <div class="plan-unit">{{ plan.unit_price }}</div>
+              </div>
+            </div>
+            <div style="margin-top: 16px;">
+              <span style="font-size: 0.9rem; color: #374151;">支付方式：</span>
+              <el-radio-group v-model="payType" style="margin-left: 8px;">
+                <el-radio value="alipay">支付宝</el-radio>
+                <el-radio value="wxpay">微信支付</el-radio>
+              </el-radio-group>
+            </div>
+            <div style="margin-top: 12px; padding: 10px 12px; background: #fffbe6; border-radius: 6px; border: 1px solid #ffe58f;">
+              <p style="font-size: 0.8rem; color: #8c6d1f; margin: 0; line-height: 1.6;">
+                ⚠️ 退款政策：充值后 24 小时内未消费可全额退款；已消费部分退还未消费余额（扣 5% 手续费）；
+                <strong>充值超过 7 天不退款</strong>，余额可继续使用。充值即视为同意以上政策。
+              </p>
+            </div>
+            <div style="text-align: right; margin-top: 16px;">
+              <el-button @click="showRechargeDialog = false">取消</el-button>
+              <el-button type="primary" :loading="creatingOrder" @click="handleCreateOrder">
+                确认充值 ¥{{ selectedPlan }}
+              </el-button>
+            </div>
           </div>
-          <div v-else-if="payingOrder.qrcode" style="text-align: center;">
-            <img :src="'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(payingOrder.qrcode)" alt="支付二维码" style="max-width: 240px; border: 1px solid #e5e7eb; border-radius: 8px;" />
+          <div v-else>
+            <div class="pay-qrcode-area">
+              <p style="text-align: center; margin-bottom: 12px; color: #374151;">
+                请使用{{ payType === 'alipay' ? '支付宝' : '微信' }}扫码支付
+              </p>
+              <div v-if="payingOrder.img" style="text-align: center;">
+                <img :src="payingOrder.img" alt="支付二维码" style="max-width: 240px; border: 1px solid #e5e7eb; border-radius: 8px;" />
+              </div>
+              <div v-else-if="payingOrder.qrcode" style="text-align: center;">
+                <img :src="'https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=' + encodeURIComponent(payingOrder.qrcode)" alt="支付二维码" style="max-width: 240px; border: 1px solid #e5e7eb; border-radius: 8px;" />
+              </div>
+              <div style="text-align: center; margin-top: 12px;">
+                <p style="color: #6b7280; font-size: 0.85rem;">
+                  充值 ¥{{ payingOrder.amount_yuan }} → {{ payingOrder.credits }} + {{ payingOrder.bonus }} 积分
+                </p>
+                <p style="color: #9ca3af; font-size: 0.8rem; margin-top: 4px;">
+                  订单号：{{ payingOrder.order_no }}
+                </p>
+                <el-button v-if="payingOrder.pay_url" type="primary" text size="small" style="margin-top: 8px;" @click="openPayUrl">
+                  打开收银台页面支付
+                </el-button>
+              </div>
+              <div style="text-align: center; margin-top: 16px;">
+                <el-button :loading="pollingPayment" @click="checkPaymentStatus">
+                  {{ pollingPayment ? '查询中...' : '我已支付' }}
+                </el-button>
+                <el-button @click="cancelPayment">取消</el-button>
+              </div>
+            </div>
           </div>
-          <div style="text-align: center; margin-top: 12px;">
-            <p style="color: #6b7280; font-size: 0.85rem;">
-              充值 ¥{{ payingOrder.amount_yuan }} → {{ payingOrder.credits }} + {{ payingOrder.bonus }} 积分
-            </p>
-            <p style="color: #9ca3af; font-size: 0.8rem; margin-top: 4px;">
-              订单号：{{ payingOrder.order_no }}
-            </p>
-            <el-button v-if="payingOrder.pay_url" type="primary" text size="small" style="margin-top: 8px;" @click="openPayUrl">
-              打开收银台页面支付
-            </el-button>
-          </div>
-          <div style="text-align: center; margin-top: 16px;">
-            <el-button :loading="pollingPayment" @click="checkPaymentStatus">
-              {{ pollingPayment ? '查询中...' : '我已支付' }}
-            </el-button>
-            <el-button @click="cancelPayment">取消</el-button>
-          </div>
-        </div>
-      </div>
+        </el-tab-pane>
+      </el-tabs>
     </el-dialog>
   </div>
 </template>
@@ -640,7 +853,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { api, http, setAuthToken } from '@/api'
+import { api, http, setAuthToken, getAuthToken } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
 import { useSettingsStore } from '@/stores/settings'
@@ -658,6 +871,7 @@ const isElectronEnv = typeof window !== 'undefined' && !!(window as any).electro
 // SaaS 模式数据
 const saasUser = ref<any>(null)
 const saasCredits = ref<any>({})
+const saasLoggedIn = computed(() => !isElectronEnv && !!getAuthToken())
 
 async function loadSaasProfile() {
   if (isElectronEnv) return
@@ -741,6 +955,7 @@ async function handleDownloadClient(platform: string) {
 
 // ── 充值 ─────────────────────────────────────────────────
 const showRechargeDialog = ref(false)
+const rechargeTab = ref('redeem')
 const selectedPlan = ref(100)
 const payType = ref('alipay')
 const creatingOrder = ref(false)
@@ -748,12 +963,35 @@ const payingOrder = ref<any>(null)
 const pollingPayment = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
+// ── 兑换码充值 ────────────────────────────────────────────
+const redeemCodeInput = ref('')
+const redeemLoading = ref(false)
+const redeemError = ref('')
+const redeemResult = ref<{ credits: number; bonus_credits: number; total_added: number; message: string } | null>(null)
+
+async function handleRedeem() {
+  const code = redeemCodeInput.value.trim()
+  if (!code) { redeemError.value = '请输入兑换码'; return }
+  redeemError.value = ''
+  redeemResult.value = null
+  redeemLoading.value = true
+  try {
+    const res = await http.post('/api/v1/credits/redeem', { code })
+    redeemResult.value = res.data
+    redeemCodeInput.value = ''
+    ElMessage.success(res.data.message || '兑换成功')
+    await loadSaasProfile()
+  } catch (e: any) {
+    redeemError.value = e?.response?.data?.detail || '兑换失败'
+  } finally { redeemLoading.value = false }
+}
+
 const rechargePlans = [
-  { amount_yuan: 10, credits: 100, bonus: 0, unit_price: '1.00元/10积分' },
-  { amount_yuan: 50, credits: 500, bonus: 50, unit_price: '0.91元/10积分' },
-  { amount_yuan: 100, credits: 1000, bonus: 100, unit_price: '0.91元/10积分' },
-  { amount_yuan: 300, credits: 3000, bonus: 300, unit_price: '0.91元/10积分' },
-  { amount_yuan: 500, credits: 5000, bonus: 500, unit_price: '0.91元/10积分' },
+  { amount_yuan: 10, credits: 10, bonus: 0, unit_price: '1.00元/积分' },
+  { amount_yuan: 50, credits: 50, bonus: 3, unit_price: '0.94元/积分' },
+  { amount_yuan: 100, credits: 100, bonus: 8, unit_price: '0.93元/积分' },
+  { amount_yuan: 300, credits: 300, bonus: 30, unit_price: '0.91元/积分' },
+  { amount_yuan: 500, credits: 500, bonus: 60, unit_price: '0.89元/积分' },
 ]
 
 async function handleCreateOrder() {
@@ -948,13 +1186,30 @@ function orderStatusType(status: string): string {
   return map[status] || ''
 }
 
-// ── 授权码兑换 ──────────────────────────────────────────
+// ── 授权码领取 & 兑换 ─────────────────────────────────────
+const claimCodeInput = ref('')
+const claimingCode = ref(false)
+
+async function handleClaimCode() {
+  const code = claimCodeInput.value.trim()
+  if (!code) { ElMessage.warning('请输入授权码'); return }
+  claimingCode.value = true
+  try {
+    const res = await http.post('/api/v1/credits/claim-license', { code })
+    ElMessage.success(res.data.message || '领取成功')
+    claimCodeInput.value = ''
+    loadMyLicenseCodes()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '领取失败')
+  } finally { claimingCode.value = false }
+}
+
 const redeemingLicense = ref(false)
 const redeemedCode = ref('')
 const myLicenseCodes = ref<any[]>([])
 
 async function redeemLicense(creditType: string) {
-  const costLabel = creditType === 'credits' ? '6000 积分（充值积分 + 赠送积分）' : '10000 推广积分'
+  const costLabel = creditType === 'credits' ? '6000 积分（充值积分 + 赠送积分）' : '6000 推广积分'
   await ElMessageBox.confirm(`确认使用 ${costLabel} 兑换一个客户端授权码？`, '兑换确认')
   redeemingLicense.value = true
   try {
@@ -975,8 +1230,130 @@ async function loadMyLicenseCodes() {
   } catch { /* ignore */ }
 }
 
+const unbindingDevice = ref(false)
+
+async function handleUnbindDevice() {
+  try {
+    await ElMessageBox.confirm(
+      '解绑后当前设备将无法使用客户端，您可以在新设备上重新激活。\n注意：每 30 天仅可解绑 1 次。',
+      '解绑设备确认',
+      { confirmButtonText: '确认解绑', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch { return }
+
+  unbindingDevice.value = true
+  try {
+    const res = await http.post('/api/v1/credits/unbind-device')
+    if (res.data.success) {
+      ElMessage.success(res.data.message || '设备已解绑')
+      loadMyLicenseCodes()
+    } else {
+      ElMessage.warning(res.data.message || '解绑失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '解绑失败')
+  } finally { unbindingDevice.value = false }
+}
+
 function copyCode(code: string) {
   navigator.clipboard.writeText(code).then(() => ElMessage.success('已复制')).catch(() => {})
+}
+
+// ── 推广中心 ──────────────────────────────────────────────
+const referralInfo = ref<{ referral_code: string; referral_link: string; total_referred: number; total_reward_credits: number } | null>(null)
+const referralDetails = ref<any[]>([])
+const loadingReferral = ref(false)
+const loadingReferralDetails = ref(false)
+const withdrawals = ref<any[]>([])
+const submittingWithdraw = ref(false)
+const withdrawForm = ref({ credits_amount: '', platform_account: '', wechat_phone: '' })
+
+async function loadReferralInfo() {
+  loadingReferral.value = true
+  try {
+    const res = await api.referral.getInfo()
+    referralInfo.value = res.data
+  } catch { /* ignore */ }
+  finally { loadingReferral.value = false }
+}
+
+async function loadReferralDetails() {
+  loadingReferralDetails.value = true
+  try {
+    const res = await api.referral.getDetails()
+    referralDetails.value = res.data
+  } catch { /* ignore */ }
+  finally { loadingReferralDetails.value = false }
+}
+
+async function loadWithdrawals() {
+  try {
+    const res = await api.referral.getWithdrawals()
+    withdrawals.value = res.data
+  } catch { /* ignore */ }
+}
+
+function copyReferralLink() {
+  if (!referralInfo.value) return
+  navigator.clipboard.writeText(referralInfo.value.referral_link)
+    .then(() => ElMessage.success('推广链接已复制'))
+    .catch(() => {})
+}
+
+async function resetReferralCode() {
+  try {
+    await ElMessageBox.confirm('重置后旧推广码将失效，已分享的链接需要重新分享。确认重置？', '重置推广码', {
+      confirmButtonText: '确认重置', cancelButtonText: '取消', type: 'warning',
+    })
+    const res = await api.referral.resetCode()
+    referralInfo.value = {
+      ...referralInfo.value!,
+      referral_code: res.data.referral_code,
+      referral_link: res.data.referral_link,
+    }
+    ElMessage.success('推广码已重置')
+  } catch { /* user cancel */ }
+}
+
+async function applyWithdraw() {
+  const amount = parseFloat(withdrawForm.value.credits_amount)
+  if (!amount || amount <= 0) { ElMessage.warning('请输入兑现积分数'); return }
+  if (!withdrawForm.value.platform_account.trim()) { ElMessage.warning('请输入平台注册手机号'); return }
+  if (!withdrawForm.value.wechat_phone.trim()) { ElMessage.warning('请输入微信绑定手机号'); return }
+  submittingWithdraw.value = true
+  try {
+    const res = await api.referral.applyWithdraw({
+      credits_amount: amount,
+      platform_account: withdrawForm.value.platform_account.trim(),
+      wechat_phone: withdrawForm.value.wechat_phone.trim(),
+    })
+    ElMessage.success(res.data.message || '兑现申请已提交，等待管理员审核')
+    withdrawForm.value = { credits_amount: '', platform_account: '', wechat_phone: '' }
+    loadWithdrawals()
+    loadSaasProfile()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.detail || '兑现申请失败')
+  } finally { submittingWithdraw.value = false }
+}
+
+function referralTriggerLabel(type: string): string {
+  const map: Record<string, string> = { register: '注册奖励', recharge: '充值返利', first_recharge_bonus: '首充奖励' }
+  return map[type] || type
+}
+
+function referralTriggerTag(type: string): string {
+  const map: Record<string, string> = { register: 'success', recharge: '', first_recharge_bonus: 'warning' }
+  return map[type] || ''
+}
+
+function withdrawStatusLabel(status: string): string {
+  const map: Record<string, string> = { pending: '审核中', approved: '已通过', rejected: '已拒绝', paid: '已打款' }
+  return map[status] || status
+}
+
+function withdrawStatusType(status: string): string {
+  const map: Record<string, string> = { pending: 'warning', approved: 'success', rejected: 'danger', paid: 'success' }
+  return map[status] || ''
 }
 
 async function saasLogout() {
@@ -1214,7 +1591,7 @@ const selectedLlmProvider = ref('openai')
 const MODEL_TOKENS: Record<string, number> = {
   'gpt-4o-mini': 128000, 'gpt-4o': 128000, 'gpt-4.1-mini': 1047576, 'gpt-4.1': 1047576,
   'claude-sonnet-4-6': 1000000, 'claude-opus-4-6': 1000000, 'claude-haiku-4-5': 200000,
-  'gemini-2.5-flash': 1048576, 'gemini-2.5-pro': 1048576,
+  'gemini-2.5-flash': 1048576, 'gemini-3.1-pro-preview': 1048576,
   'deepseek-chat': 64000, 'deepseek-coder': 16000, 'deepseek-reasoner': 64000,
   'kimi-k2.5': 262144, 'kimi-k2-0905-preview': 262144, 'kimi-k2-turbo-preview': 262144, 'kimi-k2-thinking': 131072, 'kimi-k2-thinking-turbo': 262144, 'kimi-k2-0711-preview': 131072,
   'qwen3-235b-a22b': 131072, 'qwen-turbo': 131072, 'qwen-turbo-latest': 1000000,
@@ -1226,7 +1603,7 @@ const MODEL_TOKENS: Record<string, number> = {
   'openrouter/openai/gpt-4o-mini': 128000, 'openrouter/openai/gpt-4o': 128000,
   'openrouter/anthropic/claude-sonnet-4.6': 1000000, 'openrouter/anthropic/claude-opus-4.6': 1000000,
   'openrouter/anthropic/claude-haiku-4.5': 200000,
-  'openrouter/google/gemini-2.5-flash': 1048576, 'openrouter/google/gemini-2.5-pro': 1048576,
+  'openrouter/google/gemini-2.5-flash': 1048576, 'openrouter/google/gemini-3.1-pro-preview': 1048576,
   'openrouter/deepseek/deepseek-r1': 64000, 'openrouter/deepseek/deepseek-v3': 64000,
   'openrouter/meta-llama/llama-4-scout': 131072,
   'qiniu/deepseek-v3': 64000, 'qiniu/deepseek-r1': 64000,
@@ -1293,7 +1670,7 @@ function buildLocalModels(): LlmModel[] {
       { id: 'openrouter/anthropic/claude-opus-4.6', name: 'anthropic/claude-opus-4.6', provider: 'openrouter' },
       { id: 'openrouter/anthropic/claude-haiku-4.5', name: 'anthropic/claude-haiku-4.5', provider: 'openrouter' },
       { id: 'openrouter/google/gemini-2.5-flash', name: 'google/gemini-2.5-flash', provider: 'openrouter' },
-      { id: 'openrouter/google/gemini-2.5-pro', name: 'google/gemini-2.5-pro', provider: 'openrouter' },
+      { id: 'openrouter/google/gemini-3.1-pro-preview', name: 'google/gemini-3.1-pro-preview', provider: 'openrouter' },
       { id: 'openrouter/deepseek/deepseek-r1', name: 'deepseek/deepseek-r1', provider: 'openrouter' },
       { id: 'openrouter/deepseek/deepseek-v3', name: 'deepseek/deepseek-v3', provider: 'openrouter' },
       { id: 'openrouter/meta-llama/llama-4-scout', name: 'meta-llama/llama-4-scout', provider: 'openrouter' }
@@ -1302,7 +1679,7 @@ function buildLocalModels(): LlmModel[] {
   if (googleAiKey.value) {
     local.push(
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google_ai' },
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'google_ai' }
+      { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview', provider: 'google_ai' }
     )
   }
   if (siliconflowKey.value) {
@@ -1363,12 +1740,15 @@ function buildLocalModels(): LlmModel[] {
 }
 
 onMounted(async () => {
-  if (!isElectronEnv) {
+  if (!isElectronEnv && getAuthToken()) {
     await loadSaasProfile()
     loadOrderHistory()
     loadMyLicenseCodes()
     loadClientProductInfo()
     loadUsageLogs()
+    loadReferralInfo()
+    loadReferralDetails()
+    loadWithdrawals()
   }
   await authStore.refreshMe()
   await settingsStore.loadDefaultModelFromServer()
@@ -1788,6 +2168,30 @@ h2 { margin-bottom: 1rem; }
 .download-plat-card--disabled { opacity: 0.5; }
 .plat-icon { font-size: 1.6rem; }
 .plat-name { font-size: 0.85rem; font-weight: 500; color: #374151; }
+.referral-code-block {
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+.referral-stat {
+  text-align: center;
+  padding: 10px 20px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  min-width: 100px;
+}
+.referral-stat-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #1e40af;
+}
+.referral-stat-label {
+  font-size: 0.78rem;
+  color: #6b7280;
+  margin-top: 2px;
+}
 .redeem-card {
   border: 2px solid #e5e7eb;
   border-radius: 10px;
@@ -1816,12 +2220,16 @@ h2 { margin-bottom: 1rem; }
   cursor: pointer;
   transition: all 0.2s;
 }
-.plan-card:hover {
+.plan-card:not(.plan-card--readonly):hover {
   border-color: #93c5fd;
 }
 .plan-card.active {
   border-color: #3b82f6;
   background: #eff6ff;
+}
+.plan-card--readonly {
+  cursor: default;
+  padding: 10px 8px;
 }
 .plan-price {
   font-size: 1.4rem;

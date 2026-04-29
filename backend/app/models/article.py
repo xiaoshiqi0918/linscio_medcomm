@@ -40,6 +40,7 @@ class ArticleSection(Base):
     order_num = Column(Integer, default=0)
     status = Column(String(20), default="pending")
     format_meta = Column(JSON)
+    section_metadata = Column(JSON, nullable=True)
     image_suggestions = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())

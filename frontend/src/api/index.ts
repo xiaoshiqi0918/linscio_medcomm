@@ -1,9 +1,20 @@
 import axios from 'axios'
 
 const _isElectronEnv = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
+
+/** 与 http 请求路径配合：路径已含 `/api/v1/...`，base 只能是「空（同域）」或「不含 /api/v1 的 origin」。 */
+function normalizeWebApiBase(raw: string | undefined): string {
+  let s = (raw ?? '').trim().replace(/\/+$/, '')
+  if (s.endsWith('/api/v1')) {
+    s = s.slice(0, -'/api/v1'.length).replace(/\/+$/, '')
+  }
+  if (s === '/api/v1') return ''
+  return s
+}
+
 export const API_BASE = _isElectronEnv
   ? 'http://127.0.0.1:8765'
-  : (import.meta.env.VITE_API_BASE ?? '')
+  : normalizeWebApiBase(import.meta.env.VITE_API_BASE as string | undefined)
 
 /** LLM / long-running MedPic calls (local models often exceed 30s) */
 export const MEDPIC_LLM_TIMEOUT_MS = 180000
@@ -421,6 +432,14 @@ export const api = {
     }) => http.post('/api/v1/literature/search/save', data),
     designKeywords: (description: string) =>
       http.post<{ groups: string[]; raw: string }>('/api/v1/literature/search/design-keywords', { description }, { timeout: 30000 }),
+    filterSearchResults: (data: {
+      topic: string;
+      results: any[];
+      top_k?: number;
+      min_score?: number;
+    }) => http.post('/api/v1/literature/search/filter', data, { timeout: 120000 }),
+    estimateFilterCost: (paperCount: number) =>
+      http.get<{ cost: number; available_credits: number | null; sufficient: boolean }>('/api/v1/literature/search/filter/cost', { params: { paper_count: paperCount } }),
     analyzeLiterature: (data: { paper_ids: number[]; topic_hint?: string }) =>
       http.post('/api/v1/literature/analyze', data, {
         responseType: 'text',
@@ -912,5 +931,44 @@ export const api = {
       params: { scene?: string; style?: string; aspect?: string; audience?: string; color_tone?: string }
       explanation?: string
     }>('/api/v1/medpic/ai-prompt/refine', data, { timeout: MEDPIC_LLM_TIMEOUT_MS }),
+  },
+
+  referral: {
+    getInfo: () => http.get<{
+      referral_code: string
+      referral_link: string
+      total_referred: number
+      total_reward_credits: number
+    }>('/api/v1/referral/info'),
+
+    resetCode: () => http.post<{
+      referral_code: string
+      referral_link: string
+    }>('/api/v1/referral/reset-code'),
+
+    getDetails: () => http.get<Array<{
+      id: number
+      referred_display_name: string
+      trigger_type: string
+      reward_credits: number
+      created_at: string
+    }>>('/api/v1/referral/details'),
+
+    applyWithdraw: (data: {
+      credits_amount: number
+      platform_account: string
+      wechat_phone: string
+    }) => http.post('/api/v1/referral/withdraw', data),
+
+    getWithdrawals: () => http.get<Array<{
+      id: number
+      credits_used: number
+      amount_yuan: number
+      status: string
+      created_at: string
+      reviewed_at: string | null
+      paid_at: string | null
+      note: string | null
+    }>>('/api/v1/referral/withdrawals'),
   },
 }

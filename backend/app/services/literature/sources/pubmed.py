@@ -113,8 +113,9 @@ async def _optimize_query_for_pubmed(query: str) -> str:
     """Use LLM to convert a natural-language query into an optimized PubMed
     search string with MeSH terms and Boolean operators."""
     try:
-        from app.services.llm.openai_client import chat_completion
+        from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
         from app.services.llm.manager import TaskTier
+        from app.core.config import is_saas
 
         messages = [
             {
@@ -136,7 +137,10 @@ async def _optimize_query_for_pubmed(query: str) -> str:
             },
             {"role": "user", "content": query},
         ]
-        optimized = await chat_completion(messages, task=TaskTier.FAST)
+        if is_saas():
+            optimized = await call_llm_with_fallback("keyword_generation", messages, stream=False)
+        else:
+            optimized = await chat_completion(messages, task=TaskTier.FAST)
         optimized = (optimized or "").strip()
         if optimized.startswith("```") and optimized.endswith("```"):
             optimized = optimized.strip("`").strip()
@@ -167,8 +171,9 @@ async def _translate_query_to_english(query: str) -> str:
         return q
 
     try:
-        from app.services.llm.openai_client import chat_completion
+        from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
         from app.services.llm.manager import TaskTier
+        from app.core.config import is_saas
 
         messages = [
             {
@@ -187,7 +192,10 @@ async def _translate_query_to_english(query: str) -> str:
             },
             {"role": "user", "content": query},
         ]
-        translated = await chat_completion(messages, task=TaskTier.FAST)
+        if is_saas():
+            translated = await call_llm_with_fallback("keyword_generation", messages, stream=False)
+        else:
+            translated = await chat_completion(messages, task=TaskTier.FAST)
         translated = (translated or "").strip().strip('"').strip("'")
         if translated:
             return translated

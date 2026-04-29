@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import json as _json
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Depends
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Query, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, delete as sa_delete, func as sa_func
@@ -857,15 +857,43 @@ class AIPromptRefineRequest(BaseModel):
 
 
 @router.post("/ai-prompt")
-async def ai_generate_prompt(req: AIPromptRequest):
+async def ai_generate_prompt(req: AIPromptRequest, request: Request = None):
     """LLM 生成正/反向提示词 + 自动推荐参数。"""
     from app.services.medpic.prompt_agent import generate_prompt, generate_prompt_stream
+    from app.core.config import is_saas
 
     if not req.description.strip():
         raise HTTPException(400, "描述不能为空")
 
+    billing_sid: str | None = None
+    _fixed_cost = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user_or_default
+        from app.core.database import AsyncSessionLocal
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.pricing import calc_medpic_prompt_cost
+        from app.services.credit.service import InsufficientCreditsError
+        async with AsyncSessionLocal() as db:
+            user = await get_current_user_or_default(request, db)
+            _fixed_cost = calc_medpic_prompt_cost()
+            try:
+                billing_sid = await open_billing_session(
+                    user.id, "medpic_prompt", _fixed_cost, db,
+                    business_ref={"action": "generate"},
+                )
+                await db.commit()
+            except InsufficientCreditsError as e:
+                raise HTTPException(402, f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分")
+
+    _captured_gen_billing_sid = billing_sid
+    _captured_gen_cost = _fixed_cost
+
     if req.stream:
         async def event_stream():
+            if _captured_gen_billing_sid:
+                from app.services.billing.dependency import current_billing_session_id
+                current_billing_session_id.set(_captured_gen_billing_sid)
+            stream_completed = False
             try:
                 full = ""
                 async for chunk in generate_prompt_stream(
@@ -879,8 +907,19 @@ async def ai_generate_prompt(req: AIPromptRequest):
                     yield f"data: {_json.dumps({'type': 'done', 'result': parsed}, ensure_ascii=False)}\n\n"
                 except Exception:
                     yield f"data: {_json.dumps({'type': 'done', 'raw': full}, ensure_ascii=False)}\n\n"
+                stream_completed = True
             except Exception as e:
                 yield f"data: {_json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            finally:
+                if _captured_gen_billing_sid and is_saas():
+                    try:
+                        from app.services.billing.dependency import close_billing_session
+                        from app.core.database import AsyncSessionLocal as _ASL
+                        async with _ASL() as settle_db:
+                            await close_billing_session(_captured_gen_billing_sid, settle_db, success=stream_completed, override_cost=_captured_gen_cost if stream_completed else None)
+                            await settle_db.commit()
+                    except Exception:
+                        pass
 
         return StreamingResponse(
             event_stream(),
@@ -890,21 +929,61 @@ async def ai_generate_prompt(req: AIPromptRequest):
 
     try:
         result = await generate_prompt(req.description, req.specialty, req.context_hint)
+        if _captured_gen_billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            from app.core.database import AsyncSessionLocal as _ASL
+            async with _ASL() as settle_db:
+                await close_billing_session(_captured_gen_billing_sid, settle_db, success=True, override_cost=_captured_gen_cost)
+                await settle_db.commit()
         return result
     except Exception as e:
+        if _captured_gen_billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            from app.core.database import AsyncSessionLocal as _ASL
+            async with _ASL() as settle_db:
+                await close_billing_session(_captured_gen_billing_sid, settle_db, success=False)
+                await settle_db.commit()
         raise HTTPException(500, f"提示词生成失败: {e}")
 
 
 @router.post("/ai-prompt/refine")
-async def ai_refine_prompt(req: AIPromptRefineRequest):
+async def ai_refine_prompt(req: AIPromptRefineRequest, request: Request = None):
     """多轮优化：基于当前提示词 + 用户指令调整。"""
     from app.services.medpic.prompt_agent import refine_prompt, refine_prompt_stream
+    from app.core.config import is_saas
 
     if not req.instruction.strip():
         raise HTTPException(400, "调整指令不能为空")
 
+    billing_sid: str | None = None
+    _fixed_cost_r = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user_or_default
+        from app.core.database import AsyncSessionLocal
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.pricing import calc_medpic_prompt_cost
+        from app.services.credit.service import InsufficientCreditsError
+        async with AsyncSessionLocal() as db:
+            user = await get_current_user_or_default(request, db)
+            _fixed_cost_r = calc_medpic_prompt_cost()
+            try:
+                billing_sid = await open_billing_session(
+                    user.id, "medpic_prompt", _fixed_cost_r, db,
+                    business_ref={"action": "refine"},
+                )
+                await db.commit()
+            except InsufficientCreditsError as e:
+                raise HTTPException(402, f"积分不足：需要 {e.required} 积分，当前可用 {e.available} 积分")
+
+    _captured_refine_billing_sid = billing_sid
+    _captured_refine_cost = _fixed_cost_r
+
     if req.stream:
         async def event_stream():
+            if _captured_refine_billing_sid:
+                from app.services.billing.dependency import current_billing_session_id
+                current_billing_session_id.set(_captured_refine_billing_sid)
+            stream_completed = False
             try:
                 full = ""
                 async for chunk in refine_prompt_stream(
@@ -919,8 +998,19 @@ async def ai_refine_prompt(req: AIPromptRefineRequest):
                     yield f"data: {_json.dumps({'type': 'done', 'result': parsed}, ensure_ascii=False)}\n\n"
                 except Exception:
                     yield f"data: {_json.dumps({'type': 'done', 'raw': full}, ensure_ascii=False)}\n\n"
+                stream_completed = True
             except Exception as e:
                 yield f"data: {_json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            finally:
+                if _captured_refine_billing_sid and is_saas():
+                    try:
+                        from app.services.billing.dependency import close_billing_session
+                        from app.core.database import AsyncSessionLocal as _ASL
+                        async with _ASL() as settle_db:
+                            await close_billing_session(_captured_refine_billing_sid, settle_db, success=stream_completed, override_cost=_captured_refine_cost if stream_completed else None)
+                            await settle_db.commit()
+                    except Exception:
+                        pass
 
         return StreamingResponse(
             event_stream(),
@@ -933,8 +1023,20 @@ async def ai_refine_prompt(req: AIPromptRefineRequest):
             req.current_positive, req.current_negative,
             req.current_params, req.instruction,
         )
+        if _captured_refine_billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            from app.core.database import AsyncSessionLocal as _ASL
+            async with _ASL() as settle_db:
+                await close_billing_session(_captured_refine_billing_sid, settle_db, success=True, override_cost=_captured_refine_cost)
+                await settle_db.commit()
         return result
     except Exception as e:
+        if _captured_refine_billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            from app.core.database import AsyncSessionLocal as _ASL
+            async with _ASL() as settle_db:
+                await close_billing_session(_captured_refine_billing_sid, settle_db, success=False)
+                await settle_db.commit()
         raise HTTPException(500, f"提示词优化失败: {e}")
 
 

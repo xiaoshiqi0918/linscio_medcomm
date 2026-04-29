@@ -116,25 +116,30 @@ async def complete_streaming_session(
     final_tokens_in: int,
     final_tokens_out: int,
     db: AsyncSession,
+    *,
+    actual_word_count: int | None = None,
+    model_tier: str | None = None,
+    include_embedding: bool = False,
 ) -> Decimal:
-    """流正常完成：按实际 token 全额扣费，释放冻结"""
+    """流正常完成：按实际产出字数 + 实际模型档位扣费，否则按预估全额扣费。"""
     if not is_saas():
         return Decimal("0")
 
     from app.models.billing import StreamingSession
     from app.models.user import User
     from app.services.credit.service import unfreeze_credits, deduct_credits
-    from app.services.credit.pricing import calc_cost_from_token_ratio
 
     session = await db.get(StreamingSession, session_id, with_for_update=True)
     if not session or session.status != "streaming":
         return Decimal("0")
 
-    estimated_tokens = max(final_tokens_in + final_tokens_out, 1)
-    actual_cost = calc_cost_from_token_ratio(
-        session.estimated_cost, final_tokens_out, estimated_tokens,
-    )
-    actual_cost = max(actual_cost, session.estimated_cost)
+    if actual_word_count is not None and actual_word_count > 0:
+        from app.services.credit.pricing import calc_generation_cost
+        tier = model_tier or "standard"
+        actual_cost = calc_generation_cost(actual_word_count, model_tier=tier, include_embedding=include_embedding)
+        actual_cost = min(actual_cost, session.estimated_cost)
+    else:
+        actual_cost = session.estimated_cost
 
     await unfreeze_credits(session.user_id, session.estimated_cost, db)
     await deduct_credits(

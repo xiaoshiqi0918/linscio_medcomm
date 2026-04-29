@@ -55,10 +55,10 @@ PROVIDER_MODEL_TIERS: dict[str, dict] = {
     },
     "gemini": {
         "env_key": "GOOGLE_API_KEY",
-        "quality": ["gemini-2.5-pro", "gemini-2.5-flash"],
+        "quality": ["gemini-3.1-pro-preview", "gemini-2.5-flash"],
         "balanced": ["gemini-2.5-flash"],
         "fast": ["gemini-2.5-flash"],
-        "reasoning": ["gemini-2.5-pro", "gemini-2.5-flash"],
+        "reasoning": ["gemini-3.1-pro-preview", "gemini-2.5-flash"],
     },
     "zhipu": {
         "env_key": "ZHIPU_API_KEY",
@@ -119,70 +119,79 @@ SAAS_PROVIDER_PRIORITY = [
 # ── SaaS 任务精确路由表（8.3）──────────────────────────────────────
 # primary → fallback → degraded 三级降级，按具体业务任务类型
 SAAS_TASK_ROUTES: dict[str, dict] = {
-    "literature_analysis_abstract": {
-        "primary":   "kimi-k2.5",
-        "fallback":  "deepseek-chat",
-        "degraded":  "qwen-plus",
-        "task_tier": TaskTier.BALANCED,
-    },
-    "literature_analysis_fulltext": {
-        "primary":   "gemini-2.5-pro",
-        "fallback":  "kimi-k2.5",
-        "degraded":  "qwen-plus",
-        "task_tier": TaskTier.QUALITY,
-    },
+    # ── 核心生成（高质量）───────────────────────────────
     "generation_round1": {
         "primary":   "gpt-4o",
-        "fallback":  "gemini-2.5-pro",
+        "fallback":  "gemini-3.1-pro-preview",
         "degraded":  "deepseek-chat",
         "task_tier": TaskTier.QUALITY,
     },
     "deai_rewrite_round2": {
         "primary":   "gpt-4o",
-        "fallback":  "gemini-2.5-pro",
+        "fallback":  "gemini-3.1-pro-preview",
         "degraded":  "deepseek-chat",
         "task_tier": TaskTier.QUALITY,
     },
     "optimization_round3": {
         "primary":   "gpt-4o",
-        "fallback":  "gemini-2.5-pro",
+        "fallback":  "gemini-3.1-pro-preview",
         "degraded":  "deepseek-chat",
         "task_tier": TaskTier.QUALITY,
-    },
-    "keyword_generation": {
-        "primary":   "deepseek-chat",
-        "fallback":  "qwen-plus",
-        "degraded":  "glm-4-flash",
-        "task_tier": TaskTier.FAST,
-    },
-    "quality_check": {
-        "primary":   "deepseek-chat",
-        "fallback":  "qwen-plus",
-        "degraded":  "glm-4-flash",
-        "task_tier": TaskTier.BALANCED,
-    },
-    "translation": {
-        "primary":   "deepseek-chat",
-        "fallback":  "qwen-plus",
-        "degraded":  "glm-4-flash",
-        "task_tier": TaskTier.FAST,
     },
     "polish": {
         "primary":   "gpt-4o",
         "fallback":  "deepseek-chat",
-        "degraded":  "qwen-plus",
+        "degraded":  "kimi-k2.5",
         "task_tier": TaskTier.QUALITY,
+    },
+    # ── 文献分析 ────────────────────────────────────────
+    "literature_analysis_abstract": {
+        "primary":   "kimi-k2.5",
+        "fallback":  "deepseek-chat",
+        "degraded":  "gpt-4o-mini",
+        "task_tier": TaskTier.BALANCED,
+    },
+    "literature_analysis_fulltext": {
+        "primary":   "gemini-3.1-pro-preview",
+        "fallback":  "kimi-k2.5",
+        "degraded":  "deepseek-chat",
+        "task_tier": TaskTier.QUALITY,
+    },
+    "literature_filter": {
+        "primary":   "deepseek-chat",
+        "fallback":  "kimi-k2-turbo-preview",
+        "degraded":  "gpt-4o-mini",
+        "task_tier": TaskTier.FAST,
+    },
+    # ── 辅助任务（快速/经济）────────────────────────────
+    "keyword_generation": {
+        "primary":   "deepseek-chat",
+        "fallback":  "kimi-k2-turbo-preview",
+        "degraded":  "gpt-4o-mini",
+        "task_tier": TaskTier.FAST,
+    },
+    "quality_check": {
+        "primary":   "deepseek-chat",
+        "fallback":  "kimi-k2-turbo-preview",
+        "degraded":  "gpt-4o-mini",
+        "task_tier": TaskTier.BALANCED,
+    },
+    "translation": {
+        "primary":   "deepseek-chat",
+        "fallback":  "kimi-k2-turbo-preview",
+        "degraded":  "gpt-4o-mini",
+        "task_tier": TaskTier.FAST,
     },
     "verification": {
         "primary":   "deepseek-chat",
-        "fallback":  "qwen-plus",
-        "degraded":  "glm-4-flash",
+        "fallback":  "kimi-k2-turbo-preview",
+        "degraded":  "gpt-4o-mini",
         "task_tier": TaskTier.BALANCED,
     },
     "aigc_detection": {
         "primary":   "deepseek-chat",
-        "fallback":  "qwen-plus",
-        "degraded":  "glm-4-flash",
+        "fallback":  "kimi-k2-turbo-preview",
+        "degraded":  "gpt-4o-mini",
         "task_tier": TaskTier.FAST,
     },
 }
@@ -229,7 +238,7 @@ DOMESTIC_PROVIDERS = {
     "qwen-max-latest": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"),
     # Google AI Studio（Gemini，OpenAI 兼容端点）
     "gemini-2.5-flash": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),
-    "gemini-2.5-pro": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),
+    "gemini-3.1-pro-preview": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),
     # 月之暗面 Kimi
     "kimi-k2.5": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
     "kimi-k2-0905-preview": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
@@ -254,7 +263,7 @@ DOMESTIC_PROVIDERS = {
     "openrouter/anthropic/claude-opus-4.6": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/anthropic/claude-haiku-4.5": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/google/gemini-2.5-flash": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
-    "openrouter/google/gemini-2.5-pro": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+    "openrouter/google/gemini-3.1-pro-preview": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/deepseek/deepseek-r1": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/deepseek/deepseek-v3": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "openrouter/meta-llama/llama-4-scout": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
@@ -279,7 +288,7 @@ MODEL_MAX_TOKENS: dict[str, int] = {
     "claude-haiku-4-5": 200_000,
     # Google AI Studio
     "gemini-2.5-flash": 1_048_576,
-    "gemini-2.5-pro": 1_048_576,
+    "gemini-3.1-pro-preview": 1_048_576,
     # DeepSeek
     "deepseek-chat": 64_000,
     "deepseek-coder": 16_000,
@@ -318,7 +327,7 @@ MODEL_MAX_TOKENS: dict[str, int] = {
     "openrouter/anthropic/claude-opus-4.6": 1_000_000,
     "openrouter/anthropic/claude-haiku-4.5": 200_000,
     "openrouter/google/gemini-2.5-flash": 1_048_576,
-    "openrouter/google/gemini-2.5-pro": 1_048_576,
+    "openrouter/google/gemini-3.1-pro-preview": 1_048_576,
     "openrouter/deepseek/deepseek-r1": 64_000,
     "openrouter/deepseek/deepseek-v3": 64_000,
     "openrouter/meta-llama/llama-4-scout": 131_072,
@@ -361,7 +370,7 @@ _DEPRECATED_MODEL_MAP: dict[str, str] = {
     "openrouter/anthropic/claude-3.5-haiku": "openrouter/anthropic/claude-haiku-4.5",
     # OpenRouter Gemini (deprecated)
     "openrouter/google/gemini-2.0-flash-001": "openrouter/google/gemini-2.5-flash",
-    "openrouter/google/gemini-1.5-pro": "openrouter/google/gemini-2.5-pro",
+    "openrouter/google/gemini-1.5-pro": "openrouter/google/gemini-3.1-pro-preview",
     "openrouter/google/gemini-1.5-flash": "openrouter/google/gemini-2.5-flash",
 }
 
@@ -719,16 +728,21 @@ async def resolve_model_for_task(
     task: TaskTier = TaskTier.BALANCED,
     article_id: Optional[int] = None,
     article_default_model: Optional[str] = None,
+    user=None,
 ) -> str:
     """
     基于任务类型的智能模型路由。
 
-    SaaS 模式：平台 Key，仅用 env / provider 扫描
-    桌面模式：用户自有 Key，额外走用户 DB 设置
+    SaaS 模式：平台 Key，仅用 env / provider 扫描。
+    若传入 user 且充值积分不足，强制降级为 deepseek-chat。
+    桌面模式：用户自有 Key，额外走用户 DB 设置。
     """
     from app.core.config import is_saas
 
     if is_saas():
+        if user and should_downgrade_to_budget(user):
+            if _model_has_key(BUDGET_MODEL):
+                return BUDGET_MODEL
         return _resolve_task_saas(task)
 
     return await _resolve_task_desktop(task, article_id, article_default_model)
@@ -841,6 +855,84 @@ def resolve_model_for_saas_task(task_type: str) -> list[str]:
     )
 
 
+# ── 模型 → 积分档位映射（定价分层）──────────────────────────────────
+_MODEL_TO_TIER: dict[str, str] = {
+    # PRO — 高端模型
+    "gpt-4o": "pro",
+    "gpt-4o-mini": "standard",
+    "gemini-3.1-pro-preview": "pro",
+    # STANDARD — 中端模型
+    "gemini-2.5-flash": "standard",
+    "kimi-k2.5": "standard",
+    "kimi-k2-0905-preview": "standard",
+    "kimi-k2-turbo-preview": "basic",
+    # BASIC — 经济模型
+    "deepseek-chat": "basic",
+    "deepseek-coder": "basic",
+    "deepseek-reasoner": "basic",
+    "qwen-plus": "basic",
+    "qwen-turbo": "basic",
+    "qwen-max": "standard",
+    "glm-4-flash": "basic",
+    "glm-4-plus": "basic",
+    "glm-4.7": "standard",
+    "glm-4.7-flash": "basic",
+    # 聚合平台 — 按底层模型归类
+    "deepseek-ai/DeepSeek-V3": "basic",
+    "deepseek-ai/DeepSeek-R1": "basic",
+    "Qwen/Qwen3-32B": "basic",
+    "Qwen/Qwen2.5-7B-Instruct": "basic",
+    "openrouter/openai/gpt-4o": "pro",
+    "openrouter/openai/gpt-4o-mini": "standard",
+    "openrouter/google/gemini-3.1-pro-preview": "pro",
+    "openrouter/google/gemini-2.5-flash": "standard",
+    "openrouter/deepseek/deepseek-v3": "basic",
+    "openrouter/deepseek/deepseek-r1": "basic",
+    "qiniu/deepseek-v3": "basic",
+    "qiniu/deepseek-r1": "basic",
+    "qiniu/qwen2.5-72b-instruct": "basic",
+    "qiniu/qwen2.5-32b-instruct": "basic",
+    "qiniu/glm-4-plus": "basic",
+}
+
+
+def get_model_tier(model: str) -> str:
+    """返回模型对应的积分档位：basic / standard / pro"""
+    return _MODEL_TO_TIER.get(model, "standard")
+
+
+def get_primary_model_for_task(task_type: str) -> str | None:
+    """获取 SAAS_TASK_ROUTES 中某任务的 primary 模型，用于预估费用。"""
+    route = SAAS_TASK_ROUTES.get(task_type)
+    if route:
+        return route.get("primary")
+    return None
+
+
+BUDGET_MODEL = "deepseek-chat"
+
+
+def should_downgrade_to_budget(user) -> bool:
+    """判断是否应降级为预算模型。
+    规则：如果用户的充值积分（credits）不足以覆盖本次预估费用，
+    则降级为 deepseek-chat，使赠送积分 / 推广积分只消耗最便宜的模型。
+    这里用简化阈值：credits <= 0 表示完全依赖赠送/推广积分。
+    """
+    from decimal import Decimal
+    paid = getattr(user, "credits", None) or Decimal("0")
+    return paid <= Decimal("0")
+
+
+def resolve_model_for_saas_task_with_budget(task_type: str, user=None) -> list[str]:
+    """与 resolve_model_for_saas_task 相同，但额外检查用户积分类型。
+    若用户无充值积分（仅赠送/推广积分），强制使用 deepseek-chat。
+    """
+    if user and should_downgrade_to_budget(user):
+        if _model_has_key(BUDGET_MODEL):
+            return [BUDGET_MODEL]
+    return resolve_model_for_saas_task(task_type)
+
+
 def _pick_saas_model_from_providers(task: TaskTier) -> str | None:
     """SaaS 专用：按 SAAS_PROVIDER_PRIORITY 扫描（排除 Anthropic）"""
     for provider in SAAS_PROVIDER_PRIORITY:
@@ -866,11 +958,20 @@ async def log_llm_call(
     article_id: int | None = None,
     section_id: int | None = None,
     session_id: str | None = None,
+    billing_session_id: str | None = None,
     cost_usd: float | None = None,
     cost_credits: float | None = None,
+    cost_billable: bool | None = None,
+    tokens_in_reported: int | None = None,
+    tokens_out_reported: int | None = None,
     meta: dict | None = None,
 ) -> None:
-    """写入 LlmCallLog 埋点（仅 SaaS 模式，静默失败）"""
+    """写入 LlmCallLog 埋点（仅 SaaS 模式，静默失败）。
+
+    cost_billable: None → 自动推断（success=True, error=False）。
+    tokens_*_reported: API 返回的真实值（优先用于结算）。
+    billing_session_id: 未显式传入时自动从 contextvar 获取。
+    """
     try:
         from app.core.config import is_saas
         if not is_saas():
@@ -878,10 +979,25 @@ async def log_llm_call(
         from app.core.database import AsyncSessionLocal
         from app.models.billing import LlmCallLog
         from decimal import Decimal
+
+        if billing_session_id is None:
+            try:
+                from app.services.billing.dependency import get_billing_session_id
+                billing_session_id = get_billing_session_id()
+            except Exception:
+                pass
+
+        if cost_billable is None:
+            cost_billable = (status == "success")
+
+        final_in = tokens_in_reported if tokens_in_reported is not None else tokens_in
+        final_out = tokens_out_reported if tokens_out_reported is not None else tokens_out
+        token_source = "api" if tokens_in_reported is not None else "estimated"
+
         provider = _model_to_provider(model)
 
-        if cost_usd is None and tokens_in + tokens_out > 0:
-            cost_usd = _estimate_cost_usd(model, tokens_in, tokens_out)
+        if cost_usd is None and final_in + final_out > 0:
+            cost_usd = _estimate_cost_usd(model, final_in, final_out)
 
         async with AsyncSessionLocal() as db:
             db.add(LlmCallLog(
@@ -889,14 +1005,19 @@ async def log_llm_call(
                 article_id=article_id,
                 section_id=section_id,
                 session_id=session_id,
+                billing_session_id=billing_session_id,
                 task_type=task_type,
                 model=model,
                 provider=provider,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
+                tokens_in=final_in,
+                tokens_out=final_out,
+                tokens_in_reported=tokens_in_reported,
+                tokens_out_reported=tokens_out_reported,
+                token_source=token_source,
                 latency_ms=latency_ms,
                 cost_usd=Decimal(str(cost_usd)) if cost_usd else None,
                 cost_credits=Decimal(str(cost_credits)) if cost_credits else None,
+                cost_billable=cost_billable,
                 status=status,
                 error_message=error,
                 meta=meta,
@@ -921,7 +1042,7 @@ _MODEL_PRICING_PER_1M: dict[str, tuple[float, float]] = {
     # (input_per_1M, output_per_1M)
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
-    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-3.1-pro-preview": (1.25, 10.00),
     "gemini-2.5-flash": (0.075, 0.30),
     "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),

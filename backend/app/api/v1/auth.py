@@ -348,6 +348,7 @@ async def logout(request: Request, user: User = Depends(get_current_user)):
 @router.get("/me")
 async def get_me(user: User = Depends(get_current_user)):
     return {
+        "id": user.id,
         "user_id": user.id,
         "phone": user.phone,
         "display_name": user.display_name,

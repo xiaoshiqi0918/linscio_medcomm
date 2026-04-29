@@ -63,11 +63,11 @@ class RechargePlan(BaseModel):
 
 
 RECHARGE_PLANS: list[dict] = [
-    {"amount_yuan": 10, "credits": 100, "bonus": 0, "unit_price": "1.00 元/10积分"},
-    {"amount_yuan": 50, "credits": 500, "bonus": 50, "unit_price": "0.91 元/10积分"},
-    {"amount_yuan": 100, "credits": 1000, "bonus": 100, "unit_price": "0.91 元/10积分"},
-    {"amount_yuan": 300, "credits": 3000, "bonus": 300, "unit_price": "0.91 元/10积分"},
-    {"amount_yuan": 500, "credits": 5000, "bonus": 500, "unit_price": "0.91 元/10积分"},
+    {"amount_yuan": 10, "credits": 10, "bonus": 0, "unit_price": "1.00 元/积分"},
+    {"amount_yuan": 50, "credits": 50, "bonus": 3, "unit_price": "0.94 元/积分"},
+    {"amount_yuan": 100, "credits": 100, "bonus": 8, "unit_price": "0.93 元/积分"},
+    {"amount_yuan": 300, "credits": 300, "bonus": 30, "unit_price": "0.91 元/积分"},
+    {"amount_yuan": 500, "credits": 500, "bonus": 60, "unit_price": "0.89 元/积分"},
 ]
 
 
@@ -260,6 +260,82 @@ async def get_recharge_plans():
 
 
 # ══════════════════════════════════════════════════════════════
+#  兑换码充值
+# ══════════════════════════════════════════════════════════════
+
+class RedeemCodeRequest(BaseModel):
+    code: str = Field(..., min_length=10, max_length=32)
+
+
+class RedeemCodeResponse(BaseModel):
+    credits: float
+    bonus_credits: float
+    total_added: float
+    message: str
+
+
+@router.post("/redeem", response_model=RedeemCodeResponse)
+async def redeem_code(
+    req: RedeemCodeRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """用户提交兑换码充值"""
+    from app.models.billing import RedeemCode
+    from app.services.credit.service import add_credits
+    from app.services.credit.referral_rewards import (
+        grant_referral_recharge_reward,
+        grant_referred_first_recharge_bonus,
+    )
+
+    code_str = req.code.strip().upper()
+
+    result = await db.execute(
+        select(RedeemCode).where(RedeemCode.code == code_str).limit(1)
+    )
+    rc = result.scalar_one_or_none()
+
+    if rc is None:
+        raise HTTPException(404, "兑换码不存在")
+    if rc.status == "used":
+        raise HTTPException(400, "该兑换码已被使用")
+    if rc.status == "revoked":
+        raise HTTPException(400, "该兑换码已作废")
+
+    rc.status = "used"
+    rc.used_by = user.id
+    rc.used_at = datetime.now()
+
+    total = rc.credits + rc.bonus_credits
+    await add_credits(user.id, total, db, credit_type="credits")
+
+    amount_yuan = Decimal(str(rc.tier))
+    await grant_referral_recharge_reward(
+        user.id, amount_yuan, rc.credits, db,
+        source_id=rc.id, source_type="redeem_code",
+    )
+    await grant_referred_first_recharge_bonus(
+        user.id, amount_yuan, rc.credits, db,
+        source_id=rc.id, source_type="redeem_code",
+    )
+
+    await db.commit()
+
+    logger.info(
+        "兑换码充值成功: user=%d code=%s credits=%s bonus=%s",
+        user.id, rc.code, rc.credits, rc.bonus_credits,
+    )
+
+    return RedeemCodeResponse(
+        credits=float(rc.credits),
+        bonus_credits=float(rc.bonus_credits),
+        total_added=float(total),
+        message=f"充值成功！获得 {float(rc.credits)} 积分"
+               + (f" + {float(rc.bonus_credits)} 赠送积分" if rc.bonus_credits > 0 else ""),
+    )
+
+
+# ══════════════════════════════════════════════════════════════
 #  质量补偿券（用户端）
 # ══════════════════════════════════════════════════════════════
 
@@ -308,13 +384,46 @@ async def my_vouchers(
 # ══════════════════════════════════════════════════════════════
 
 LICENSE_COST = {
-    "credits": Decimal("6000"),
-    "promo_credits": Decimal("10000"),
+    "credits": Decimal("600"),
+    "promo_credits": Decimal("6000"),
 }
 
 
 class RedeemLicenseRequest(BaseModel):
     credit_type: str = Field(..., description="credits 或 promo_credits")
+
+
+class ClaimLicenseRequest(BaseModel):
+    code: str = Field(..., min_length=8, max_length=32)
+
+
+@router.post("/claim-license")
+async def claim_license(
+    req: ClaimLicenseRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """用户输入管理员生成的授权码，绑定到自己账户"""
+    from app.models.billing import LicenseCode
+
+    code_str = req.code.strip().upper()
+    result = await db.execute(
+        select(LicenseCode).where(LicenseCode.code == code_str).limit(1)
+    )
+    lc = result.scalar_one_or_none()
+
+    if lc is None:
+        raise HTTPException(404, "授权码不存在")
+    if lc.owner_id is not None and lc.owner_id != user.id:
+        raise HTTPException(400, "该授权码已被其他用户领取")
+    if lc.owner_id == user.id:
+        return {"code": lc.code, "message": "该授权码已绑定到您的账户"}
+
+    lc.owner_id = user.id
+    await db.commit()
+
+    logger.info("授权码领取: user=%d code=%s", user.id, lc.code)
+    return {"code": lc.code, "message": "授权码领取成功，已绑定到您的账户"}
 
 
 class LicenseCodeItem(BaseModel):
@@ -323,6 +432,8 @@ class LicenseCodeItem(BaseModel):
     credit_type: str
     credits_cost: float
     is_used: bool
+    device_id: str | None = None
+    activated_at: str | None = None
     used_by: str | None
     used_at: str | None
     created_at: str
@@ -409,9 +520,194 @@ async def get_my_licenses(
             credit_type=c.credit_type,
             credits_cost=float(c.credits_cost),
             is_used=c.is_used or False,
+            device_id=c.device_id,
+            activated_at=c.activated_at.isoformat() if c.activated_at else None,
             used_by=c.used_by,
             used_at=c.used_at.isoformat() if c.used_at else None,
             created_at=c.created_at.isoformat() if c.created_at else "",
         )
         for c in codes
     ]
+
+
+# ══════════════════════════════════════════════════════════════
+#  桌面端激活（设备绑定）
+# ══════════════════════════════════════════════════════════════
+
+class ActivateLicenseRequest(BaseModel):
+    device_id: str = Field(..., min_length=8, max_length=128,
+                           description="设备唯一标识（如 MAC 地址哈希 / 硬件指纹）")
+    device_info: dict | None = Field(None,
+                                     description="可选设备详情：hostname, os, arch, cpu 等")
+
+
+class ActivateLicenseResponse(BaseModel):
+    status: str
+    license_code: str
+    message: str
+
+
+@router.post("/activate-license", response_model=ActivateLicenseResponse)
+async def activate_license(
+    req: ActivateLicenseRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    桌面端首次登录时调用：绑定设备 ID 到授权码。
+    - 若用户名下有已绑定该设备的授权码 → 直接通过
+    - 若用户名下有未激活的授权码 → 绑定设备并标记激活
+    - 若用户名下所有授权码都已绑定其他设备 → 拒绝
+    """
+    from app.models.billing import LicenseCode
+
+    result = await db.execute(
+        select(LicenseCode)
+        .where(LicenseCode.owner_id == user.id)
+        .order_by(LicenseCode.created_at)
+    )
+    licenses = result.scalars().all()
+
+    if not licenses:
+        raise HTTPException(403, "您还没有客户端授权码，请先在 Web 端兑换或领取")
+
+    for lc in licenses:
+        if lc.device_id == req.device_id:
+            return ActivateLicenseResponse(
+                status="already_activated",
+                license_code=lc.code,
+                message="该设备已激活",
+            )
+
+    unbound = next((lc for lc in licenses if not lc.is_used), None)
+    if unbound is None:
+        raise HTTPException(
+            403,
+            "授权码已绑定到其他设备，如需更换设备请在 Web 端「设置」中解绑（每 30 天可解绑 1 次）"
+        )
+
+    unbound.is_used = True
+    unbound.device_id = req.device_id
+    unbound.device_info = req.device_info
+    unbound.used_by = user.phone or str(user.id)
+    unbound.used_at = datetime.now()
+    unbound.activated_at = datetime.now()
+    await db.commit()
+
+    logger.info(
+        "授权码激活: user=%d code=%s device=%s",
+        user.id, unbound.code, req.device_id,
+    )
+
+    return ActivateLicenseResponse(
+        status="activated",
+        license_code=unbound.code,
+        message="激活成功，授权码已绑定到当前设备",
+    )
+
+
+class LicenseStatusResponse(BaseModel):
+    has_license: bool
+    activated: bool
+    device_match: bool
+    license_code: str | None = None
+    message: str
+
+
+@router.post("/license-status", response_model=LicenseStatusResponse)
+async def check_license_status(
+    req: ActivateLicenseRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """桌面端定期检查授权状态：验证当前设备是否有有效绑定"""
+    from app.models.billing import LicenseCode
+
+    result = await db.execute(
+        select(LicenseCode).where(
+            LicenseCode.owner_id == user.id,
+            LicenseCode.device_id == req.device_id,
+            LicenseCode.is_used == True,
+        ).limit(1)
+    )
+    matched = result.scalar_one_or_none()
+
+    if matched:
+        return LicenseStatusResponse(
+            has_license=True, activated=True, device_match=True,
+            license_code=matched.code,
+            message="授权有效",
+        )
+
+    any_license = await db.execute(
+        select(LicenseCode).where(LicenseCode.owner_id == user.id).limit(1)
+    )
+    has_any = any_license.scalar_one_or_none() is not None
+
+    return LicenseStatusResponse(
+        has_license=has_any, activated=False, device_match=False,
+        message="当前设备未授权" if has_any else "无授权码",
+    )
+
+
+# ══════════════════════════════════════════════════════════════
+#  用户自助解绑设备
+# ══════════════════════════════════════════════════════════════
+
+UNBIND_COOLDOWN_DAYS = 30
+
+
+class UnbindDeviceResponse(BaseModel):
+    success: bool
+    message: str
+    next_unbind_available_at: str | None = None
+
+
+@router.post("/unbind-device", response_model=UnbindDeviceResponse)
+async def unbind_device(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """用户自助解绑设备。30 天内仅可解绑 1 次。"""
+    from app.models.billing import LicenseCode
+    from datetime import timedelta, timezone
+
+    result = await db.execute(
+        select(LicenseCode).where(
+            LicenseCode.owner_id == user.id,
+            LicenseCode.is_used == True,
+        ).limit(1)
+    )
+    activated = result.scalar_one_or_none()
+
+    if not activated:
+        raise HTTPException(400, "您没有已激活的授权码，无需解绑")
+
+    if activated.last_unbound_at:
+        cooldown_end = activated.last_unbound_at + timedelta(days=UNBIND_COOLDOWN_DAYS)
+        now = datetime.now(timezone.utc)
+        if now < cooldown_end:
+            days_left = (cooldown_end - now).days + 1
+            return UnbindDeviceResponse(
+                success=False,
+                message=f"解绑冷却中，还需等待 {days_left} 天",
+                next_unbind_available_at=cooldown_end.isoformat(),
+            )
+
+    old_device = activated.device_id
+    activated.device_id = None
+    activated.device_info = None
+    activated.is_used = False
+    activated.activated_at = None
+    activated.last_unbound_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    logger.info(
+        "用户自助解绑: user=%d code=%s old_device=%s",
+        user.id, activated.code, old_device,
+    )
+
+    return UnbindDeviceResponse(
+        success=True,
+        message="设备已解绑，您可以在新设备上重新激活",
+    )

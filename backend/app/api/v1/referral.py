@@ -19,6 +19,11 @@ from app.core.deps import get_current_user
 from app.models.user import User, _generate_referral_code
 from app.models.referral import ReferralLog, WithdrawalLog
 
+
+def _referral_link(code: str) -> str:
+    base = settings.site_url.rstrip("/")
+    return f"{base}/register?ref={code}"
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/referral", tags=["推广"])
 
@@ -51,7 +56,8 @@ async def get_referral_info(
         await db.commit()
 
     total_q = await db.execute(
-        select(func.count()).select_from(ReferralLog)
+        select(func.count(func.distinct(ReferralLog.referred_id)))
+        .select_from(ReferralLog)
         .where(ReferralLog.referrer_id == user.id)
     )
     total_referred = total_q.scalar() or 0
@@ -64,7 +70,7 @@ async def get_referral_info(
 
     return ReferralInfo(
         referral_code=code,
-        referral_link=f"https://www.linscio.com/register?ref={code}",
+        referral_link=_referral_link(code),
         total_referred=total_referred,
         total_reward_credits=round(total_reward, 2),
     )
@@ -81,7 +87,7 @@ async def reset_referral_code(
     await db.commit()
     return {
         "referral_code": new_code,
-        "referral_link": f"https://www.linscio.com/register?ref={new_code}",
+        "referral_link": _referral_link(new_code),
     }
 
 
@@ -119,9 +125,8 @@ async def get_referral_details(
 
 class WithdrawRequest(BaseModel):
     credits_amount: float = Field(..., gt=0, description="兑现积分数量")
-    real_name: str = Field(..., min_length=2, max_length=64)
-    id_card: str = Field(..., min_length=15, max_length=32)
-    bank_account: str = Field(..., min_length=10, max_length=64, description="收款账号（银行卡/支付宝）")
+    platform_account: str = Field(..., min_length=2, max_length=32, description="平台注册手机号")
+    wechat_phone: str = Field(..., min_length=11, max_length=20, description="微信绑定手机号（用于转账）")
 
 
 class WithdrawItem(BaseModel):
@@ -167,9 +172,8 @@ async def apply_withdraw(
         user_id=user.id,
         credits_used=credits,
         amount_yuan=amount_yuan,
-        real_name=req.real_name,
-        id_card=req.id_card,
-        bank_account=req.bank_account,
+        platform_account=req.platform_account,
+        wechat_phone=req.wechat_phone,
         status="pending",
     )
     db.add(wl)

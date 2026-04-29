@@ -14,6 +14,20 @@ from openai import AsyncOpenAI
 
 from app.services.llm.manager import get_domestic_base_url
 
+
+class StreamWithModel:
+    """包装异步流迭代器，携带实际使用的模型名称，供调用方读取。"""
+
+    def __init__(self, stream: AsyncIterator[str], model: str):
+        self._stream = stream
+        self.model = model
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return await self._stream.__anext__()
+
 if TYPE_CHECKING:
     from app.services.llm.manager import TaskTier
 
@@ -124,6 +138,14 @@ async def chat_completion(
         raise
 
 
+_last_usage: dict[str, int | None] = {"prompt_tokens": None, "completion_tokens": None}
+
+
+def get_last_usage() -> dict[str, int | None]:
+    """获取最近一次 OpenAI API 调用返回的 usage（线程不安全，仅同一协程内有效）"""
+    return dict(_last_usage)
+
+
 async def _openai_chat_once(
     messages: list[dict],
     model: str,
@@ -135,6 +157,12 @@ async def _openai_chat_once(
     if temperature is not None:
         kwargs["temperature"] = temperature
     resp = await client.chat.completions.create(**kwargs)
+    if resp.usage:
+        _last_usage["prompt_tokens"] = resp.usage.prompt_tokens
+        _last_usage["completion_tokens"] = resp.usage.completion_tokens
+    else:
+        _last_usage["prompt_tokens"] = None
+        _last_usage["completion_tokens"] = None
     return resp.choices[0].message.content or ""
 
 
@@ -148,10 +176,19 @@ async def _openai_chat_stream(
     kwargs: dict = {"model": api_model, "messages": messages, "stream": True}
     if temperature is not None:
         kwargs["temperature"] = temperature
+    try:
+        kwargs["stream_options"] = {"include_usage": True}
+    except Exception:
+        pass
     stream_obj = await client.chat.completions.create(**kwargs)
+    _last_usage["prompt_tokens"] = None
+    _last_usage["completion_tokens"] = None
     async for chunk in stream_obj:
         if chunk.choices and chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
+        if hasattr(chunk, "usage") and chunk.usage:
+            _last_usage["prompt_tokens"] = chunk.usage.prompt_tokens
+            _last_usage["completion_tokens"] = chunk.usage.completion_tokens
 
 
 async def _anthropic_chat_once(
@@ -232,33 +269,36 @@ async def call_llm_with_fallback(
     section_id: int | None = None,
     stream: bool = False,
     temperature: float | None = None,
+    user=None,
 ) -> str | AsyncIterator[str]:
     """带三级降级的 LLM 调用（SaaS 模式专用）。
 
     从 SAAS_TASK_ROUTES 获取 primary → fallback → degraded 候选列表，
     依次尝试调用，成功则记录埋点返回，全部失败则抛出 AllModelsFailedError。
+
+    若传入 user 且用户充值积分不足，自动降级为 deepseek-chat。
     """
     from app.services.llm.manager import (
-        resolve_model_for_saas_task,
+        resolve_model_for_saas_task_with_budget,
         log_llm_call,
         AllModelsFailedError,
     )
 
-    candidates = resolve_model_for_saas_task(task_type)
+    candidates = resolve_model_for_saas_task_with_budget(task_type, user=user)
     last_error: Exception | None = None
 
     for model_key in candidates:
         t0 = time.monotonic()
         try:
             if stream:
-                result = _streaming_with_log(
+                result = await _streaming_with_log(
                     task_type, model_key, messages,
                     user_id=user_id,
                     article_id=article_id,
                     section_id=section_id,
                     temperature=temperature,
                 )
-                return result
+                return StreamWithModel(result, model_key)
             else:
                 response = await chat_completion(
                     messages=messages,
@@ -267,10 +307,17 @@ async def call_llm_with_fallback(
                     temperature=temperature,
                 )
                 latency = int((time.monotonic() - t0) * 1000)
+                tokens_in_est = sum(len(m.get("content", "")) // 4 for m in messages)
+                tokens_out_est = len(response) // 4
+                usage = get_last_usage()
                 await log_llm_call(
                     user_id=user_id,
                     task_type=task_type,
                     model=model_key,
+                    tokens_in=tokens_in_est,
+                    tokens_out=tokens_out_est,
+                    tokens_in_reported=usage.get("prompt_tokens"),
+                    tokens_out_reported=usage.get("completion_tokens"),
                     latency_ms=latency,
                     status="success",
                     article_id=article_id,
@@ -292,6 +339,7 @@ async def call_llm_with_fallback(
                 error=str(exc),
                 article_id=article_id,
                 section_id=section_id,
+                cost_billable=False,
             )
             last_error = exc
             continue
@@ -311,9 +359,10 @@ async def _streaming_with_log(
     section_id: int | None = None,
     temperature: float | None = None,
 ) -> AsyncIterator[str]:
-    """流式调用包装：在首次 chunk 成功后记录埋点，异常时也记录。"""
+    """流式调用包装：累计 token 数，流结束后写入 llm_call_logs（含 billing_session_id）。"""
     from app.services.llm.manager import log_llm_call
 
+    tokens_in = sum(len(m.get("content", "")) // 4 for m in messages)
     t0 = time.monotonic()
     try:
         gen = await chat_completion(
@@ -328,31 +377,41 @@ async def _streaming_with_log(
             user_id=user_id,
             task_type=task_type,
             model=model,
+            tokens_in=tokens_in,
             latency_ms=latency,
             status="error",
             error=str(exc),
             article_id=article_id,
             section_id=section_id,
+            cost_billable=False,
         )
         raise
 
     async def _wrapper():
-        logged = False
+        output_chars = 0
+        success = False
         try:
             async for chunk in gen:
-                if not logged:
-                    logged = True
+                output_chars += len(chunk)
+                success = True
                 yield chunk
         finally:
             latency = int((time.monotonic() - t0) * 1000)
+            tokens_out_est = max(output_chars // 4, 1) if output_chars else 0
+            usage = get_last_usage()
             await log_llm_call(
                 user_id=user_id,
                 task_type=task_type,
                 model=model,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out_est,
+                tokens_in_reported=usage.get("prompt_tokens"),
+                tokens_out_reported=usage.get("completion_tokens"),
                 latency_ms=latency,
-                status="success" if logged else "error",
+                status="success" if success else "error",
                 article_id=article_id,
                 section_id=section_id,
+                cost_billable=success,
             )
 
     return _wrapper()

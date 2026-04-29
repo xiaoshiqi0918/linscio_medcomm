@@ -193,23 +193,27 @@ async def _call_llm(
     article_default_model: str | None = None,
 ) -> str | None:
     """统一的 LLM 调用，带错误处理。使用略高温度提升 token 选择多样性以对抗困惑度检测。"""
-    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
     from app.services.llm.manager import resolve_model_for_task, TaskTier
+    from app.core.config import is_saas
 
     try:
-        model = await resolve_model_for_task(
-            task=TaskTier.BALANCED,
-            article_id=article_id,
-            article_default_model=article_default_model,
-        )
-    except Exception as e:
-        logger.warning(f"去AI化改写：模型解析失败 {e}")
-        return None
-
-    try:
-        return await chat_completion(
-            messages, model=model, stream=False, temperature=DEAI_TEMPERATURE,
-        )
+        if is_saas():
+            return await call_llm_with_fallback(
+                "deai_rewrite_round2", messages,
+                article_id=article_id,
+                stream=False,
+                temperature=DEAI_TEMPERATURE,
+            )
+        else:
+            model = await resolve_model_for_task(
+                task=TaskTier.BALANCED,
+                article_id=article_id,
+                article_default_model=article_default_model,
+            )
+            return await chat_completion(
+                messages, model=model, stream=False, temperature=DEAI_TEMPERATURE,
+            )
     except Exception as e:
         logger.warning(f"去AI化改写：LLM 调用异常 {e}")
         return None
@@ -462,8 +466,13 @@ async def rewrite_multi_pass(
             logger.warning(f"第2轮段落{para_idx}改写丢失引用，跳过")
             continue
 
-        if original_para in current:
-            current = current.replace(original_para, rewritten_para, 1)
+        _start = 0
+        while True:
+            idx = current.find(original_para, _start)
+            if idx == -1:
+                break
+            current = current[:idx] + rewritten_para + current[idx + len(original_para):]
+            _start = idx + len(rewritten_para)
             pass2_replaced += 1
 
     stats["pass2_applied"] = pass2_replaced > 0

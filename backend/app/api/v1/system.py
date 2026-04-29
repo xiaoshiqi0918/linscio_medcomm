@@ -304,7 +304,7 @@ async def list_llm_models():
     # Google AI Studio
     if os.environ.get("GOOGLE_API_KEY"):
         _add("gemini-2.5-flash", "Gemini 2.5 Flash", "google_ai")
-        _add("gemini-2.5-pro", "Gemini 2.5 Pro", "google_ai")
+        _add("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", "google_ai")
     # DOMESTIC_PROVIDERS（跳过已添加的模型，避免重复）
     for model_id, (_, env_key) in DOMESTIC_PROVIDERS.items():
         if model_id in added_ids:

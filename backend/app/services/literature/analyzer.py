@@ -313,14 +313,20 @@ async def _load_papers_text(paper_ids: list[int], budget_per_paper: int = 6000) 
 
 async def _analyze_one_paper(paper_text: str, model: str) -> dict:
     """Map 阶段：非流式调用 LLM 对单篇文献做结构化提取。失败时返回降级结果。"""
-    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
+    from app.core.config import is_saas
 
     messages = [
         {"role": "system", "content": _get_per_paper_system_prompt()},
         {"role": "user", "content": f"请分析以下文献：\n\n{paper_text}"},
     ]
     try:
-        raw = await chat_completion(messages, model=model, stream=False)
+        if is_saas():
+            raw = await call_llm_with_fallback(
+                "literature_analysis_abstract", messages, stream=False,
+            )
+        else:
+            raw = await chat_completion(messages, model=model, stream=False)
         parsed = _try_parse_json(raw)
         if parsed and isinstance(parsed, dict) and "title" in parsed:
             return parsed
@@ -352,17 +358,23 @@ async def analyze_literature_stream(
     - 3+ 篇文献：MapReduce（逐篇精读 + 综合汇总）
     yield 事件格式: {"type": "start"|"progress"|"paper_start"|"paper_done"|"synthesizing"|"delta"|"report"|"done"|"error", ...}
     """
-    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
     from app.services.llm.manager import resolve_model_for_task as _resolve, TaskTier
+    from app.core.config import is_saas
+
+    _use_saas_route = is_saas()
 
     yield {"type": "start", "message": "正在读取文献内容…"}
 
     try:
-        model = await _resolve(task=TaskTier.QUALITY)
+        if _use_saas_route:
+            model = None
+        else:
+            model = await _resolve(task=TaskTier.QUALITY)
     except Exception as e:
         yield {"type": "error", "message": f"模型初始化失败：{e}"}
         return
-    budget = _per_paper_budget(model, len(paper_ids))
+    budget = _per_paper_budget(model or "gpt-4o", len(paper_ids))
 
     papers_info = await _load_papers_text(paper_ids, budget_per_paper=budget)
 
@@ -398,7 +410,12 @@ async def analyze_literature_stream(
 
         full_response = ""
         try:
-            stream = await chat_completion(messages, model=model, stream=True)
+            if _use_saas_route:
+                stream = await call_llm_with_fallback(
+                    "literature_analysis_fulltext", messages, stream=True,
+                )
+            else:
+                stream = await chat_completion(messages, model=model, stream=True)
             async for token in stream:
                 full_response += token
                 yield {"type": "delta", "text": token}
@@ -463,7 +480,12 @@ async def analyze_literature_stream(
 
     full_response = ""
     try:
-        stream = await chat_completion(messages, model=model, stream=True)
+        if _use_saas_route:
+            stream = await call_llm_with_fallback(
+                "literature_analysis_fulltext", messages, stream=True,
+            )
+        else:
+            stream = await chat_completion(messages, model=model, stream=True)
         async for token in stream:
             full_response += token
             yield {"type": "delta", "text": token}

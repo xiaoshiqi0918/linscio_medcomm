@@ -4,7 +4,8 @@ from __future__ import annotations
 import re
 
 from app.services.llm.manager import resolve_model_for_task, TaskTier
-from app.services.llm.openai_client import chat_completion
+from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
+from app.core.config import is_saas
 
 
 def _clean_title(raw: str) -> str:
@@ -50,30 +51,35 @@ async def generate_article_title(
     if not body.strip():
         return ""
 
-    model = await resolve_model_for_task(
-        task=TaskTier.FAST,
-        article_id=article_id,
-        article_default_model=article_default_model,
-    )
     system = (
         "你是医学科普编辑。根据用户提供的全文草稿与元数据，生成一个适合发布的文章标题。"
         "要求：准确反映核心信息；通俗可读；避免恐吓式营销；"
         "长度建议 8～30 个汉字（或相当长度）；不要书名号、引号、换行、序号前缀；"
         "只输出一行标题，不要解释。"
     )
-    user = (
+    user_msg = (
         f"主题线索：{topic or '（未填）'}\n"
         f"写作形式：{content_format}\n"
         f"目标平台：{platform}\n"
         f"受众：{target_audience}\n\n"
         f"全文草稿：\n{body}"
     )
-    raw = await chat_completion(
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        model=model,
-        stream=False,
-    )
+    msgs = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_msg},
+    ]
+
+    if is_saas():
+        raw = await call_llm_with_fallback(
+            "keyword_generation", msgs,
+            article_id=article_id,
+            stream=False,
+        )
+    else:
+        model = await resolve_model_for_task(
+            task=TaskTier.FAST,
+            article_id=article_id,
+            article_default_model=article_default_model,
+        )
+        raw = await chat_completion(messages=msgs, model=model, stream=False)
     return _clean_title(raw or "")

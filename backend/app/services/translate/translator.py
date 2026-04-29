@@ -90,10 +90,11 @@ async def _azure_translate(text: str, target_lang: str, source_lang: str) -> str
 _LANG_NAMES = {"zh": "中文", "en": "English", "ja": "日本語", "de": "Deutsch", "fr": "Français"}
 
 async def _llm_translate(text: str, target_lang: str, source_lang: str) -> tuple[str, str]:
-    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.openai_client import chat_completion, call_llm_with_fallback
     from app.services.llm.manager import (
         TaskTier, _pick_model_from_available_providers, _find_any_available_model,
     )
+    from app.core.config import is_saas
 
     target_name = _LANG_NAMES.get(target_lang, target_lang)
     messages = [
@@ -111,6 +112,14 @@ async def _llm_translate(text: str, target_lang: str, source_lang: str) -> tuple
         },
         {"role": "user", "content": text},
     ]
+
+    if is_saas():
+        try:
+            result = await call_llm_with_fallback("translation", messages, stream=False)
+            return result, "saas_routed"
+        except Exception as e:
+            raise RuntimeError(f"SaaS 翻译失败: {e}") from e
+
     model = (
         _pick_model_from_available_providers(TaskTier.FAST)
         or _find_any_available_model()

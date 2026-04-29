@@ -1108,6 +1108,15 @@ Q&A 去重要求：正文已阐述的知识点不得再次解释；问题须是�
 4. 证据强度一致：对同一发现的因果/相关性判断前后统一"""
 
     if content_format == "article":
+        _is_metadata_format = prior_sections_context.startswith("## 前文已建立的内容")
+        if _is_metadata_format:
+            return f"""{prior_sections_context}
+
+▌⚠️ 衔接规则
+1. 🚫 「已用过的修辞资源」中列出的比喻、案例、数据点——严禁重复使用，换新的
+2. 🔗 已解释过的术语直接使用，不必再次解释
+3. 📖 语气风格、术语用法保持一致，让读者感到是同一篇文章
+4. ⛔ 开头不要回顾前文内容，直接进入本章主题"""
         return f"""## 前序章节内容（⚠️ 必读——当前章节必须基于以下内容进行写作）
 {prior_sections_context}
 
@@ -1123,7 +1132,9 @@ Q&A 去重要求：正文已阐述的知识点不得再次解释；问题须是�
 
 3. 📖 全文一体感
    - 读者读完全部章节后应感到是同一篇文章，而非拼凑的几篇独立短文
-   - 语气风格、术语使用、指代方式保持一致"""
+   - 语气风格、术语使用、指代方式保持一致
+
+4. ⛔ 开头不要回顾前文内容，直接进入本章主题"""
 
     return f"""## 前序内容（保持一致性，不得矛盾或重复）
 {prior_sections_context}"""
@@ -1192,6 +1203,77 @@ _READING_LEVEL_LABELS = {
 }
 
 
+_SECTION_RESPONSIBILITIES: dict[str, dict[str, tuple[str, str]]] = {
+    "article": {
+        "body": (
+            "引入话题 + 讲解 2-3 个核心知识点",
+            "不写行动建议、不写案例故事、不写Q&A",
+        ),
+        "case": (
+            "一个简短虚构案例，展示知识的实际应用",
+            "不重复正文知识原理、不写行动建议",
+        ),
+        "qa": (
+            "3 个简短问答，补充正文未覆盖的疑惑",
+            "不重复正文内容、不复述案例",
+        ),
+        "summary": (
+            "2-3 条行动要点 + 1 句就医提示，写完即止",
+            "不重复正文讲解、不展开新概念、不写升华段",
+        ),
+    },
+}
+
+
+def _build_section_word_and_responsibility(
+    content_format: str, section_type: str,
+    target_word_count: int | None, platform: str,
+    skip_sections: list[str] | None = None,
+) -> str:
+    """返回本章节的字数预算 + 职责边界描述。"""
+    from app.agents.prompts.task_prompts import _section_word_target, _PLATFORM_DEFAULT_WORD_COUNT
+
+    _state = {
+        "content_format": content_format,
+        "section_type": section_type,
+        "target_word_count": target_word_count,
+        "platform": platform,
+        "skip_sections": skip_sections or [],
+    }
+    section_wt = _section_word_target(_state)
+
+    _PLATFORM_DEFAULT_WC = {
+        "wechat": 1200, "xiaohongshu": 800, "douyin": 300,
+        "journal": 3000, "offline": 2000,
+    }
+    effective_wc = target_word_count or _PLATFORM_DEFAULT_WC.get(platform, 1500)
+
+    if section_wt:
+        wc_line = f"本章节目标字数：{section_wt}（全文预算 {effective_wc} 字）"
+    else:
+        wc_line = f"全文预算 {effective_wc} 字"
+
+    resp = _SECTION_RESPONSIBILITIES.get(content_format, {}).get(section_type)
+    if resp:
+        do_desc, dont_desc = resp
+        from app.services.format_router import SECTION_TITLES
+        titles = SECTION_TITLES.get(content_format, {})
+        other_sections = [
+            f"{titles.get(st, st)}（{_SECTION_RESPONSIBILITIES[content_format][st][0][:15]}…）"
+            for st in _SECTION_RESPONSIBILITIES.get(content_format, {})
+            if st != section_type
+        ]
+        others_line = "、".join(other_sections) if other_sections else ""
+        resp_block = (
+            f"\n- ✅ 本章节职责：{do_desc}"
+            f"\n- ⛔ 本章节禁区：{dont_desc}"
+        )
+        if others_line:
+            resp_block += f"\n- 📋 其他章节负责：{others_line}"
+        return wc_line + resp_block
+    return wc_line
+
+
 def _build_article_meta_block(
     topic: str,
     content_format: str,
@@ -1201,6 +1283,7 @@ def _build_article_meta_block(
     target_word_count: int | None = None,
     tone: str | None = None,
     reading_level: str | None = None,
+    skip_sections: list[str] | None = None,
 ) -> str:
     """结构化文章元信息，对应参考架构 Part 3 的「文章基本信息」"""
     format_name = FORMAT_NAMES.get(content_format, content_format)
@@ -1214,12 +1297,9 @@ def _build_article_meta_block(
     knowledge_level = _AUDIENCE_TO_KNOWLEDGE_LEVEL.get(target_audience, "无医学背景")
     resolved_tone = tone or _AUDIENCE_TO_TONE.get(target_audience, "亲和平易")
 
-    _PLATFORM_DEFAULT_WC = {
-        "wechat": 1200, "xiaohongshu": 800, "douyin": 300,
-        "journal": 3000, "offline": 2000,
-    }
-    effective_wc = target_word_count or _PLATFORM_DEFAULT_WC.get(platform, 1500)
-    word_count_str = f"全文严格控制在 {effective_wc} 字以内"
+    wc_and_resp = _build_section_word_and_responsibility(
+        content_format, section_type, target_word_count, platform, skip_sections,
+    )
 
     template_hint = _TEMPLATE_SECTION_MAPPING.get(content_format, {}).get(section_type, "")
     mapping_line = f"\n- 当前章节对应模板位置：{template_hint}" if template_hint else ""
@@ -1232,7 +1312,7 @@ def _build_article_meta_block(
 - 当前章节：{section_name}{mapping_line}
 - 目标读者：{audience_name}
 - 读者知识水平：{knowledge_level}
-- 目标字数：{word_count_str}
+- {wc_and_resp}
 - 语气风格：{resolved_tone}
 - 阅读难度：{_READING_LEVEL_LABELS.get(reading_level or "normal", reading_level or "适中")}
 - 发布平台：{platform_name}"""
@@ -1261,6 +1341,7 @@ async def build_enhanced_prompt(
     target_word_count: int | None = None,
     tone: str | None = None,
     reading_level: str | None = None,
+    skip_sections: list[str] | None = None,
 ) -> tuple[str, dict]:
     """
     四层 Prompt 架构 — User Message 装配（Part 1 + Part 2 + Part 3）。
@@ -1448,6 +1529,7 @@ async def build_enhanced_prompt(
         target_word_count=target_word_count,
         tone=tone,
         reading_level=reading_level,
+        skip_sections=skip_sections,
     )
     prior_block = _build_prior_sections_block(prior_sections_context, section_type, content_format)
 

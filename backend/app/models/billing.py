@@ -90,6 +90,30 @@ class CompensationVoucher(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+# ── 兑换码 ────────────────────────────────────────────────────
+
+class RedeemCode(Base):
+    """积分兑换码（由管理员批量生成，用户输入兑换）"""
+    __tablename__ = "redeem_codes"
+    __table_args__ = (
+        Index("idx_redeem_status", "status"),
+        Index("idx_redeem_batch", "batch_id"),
+        Index("idx_redeem_tier", "tier", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    code = Column(String(32), unique=True, nullable=False, index=True)
+    tier = Column(Integer, nullable=False)
+    credits = Column(Numeric(10, 4), nullable=False)
+    bonus_credits = Column(Numeric(10, 4), default=0, server_default="0")
+    status = Column(String(16), nullable=False, server_default="unused")
+    batch_id = Column(String(32), nullable=True)
+    created_by = Column(Integer, nullable=True)
+    used_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 # ── 支付中台模型 ──────────────────────────────────────────────
 
 class PaymentOrder(Base):
@@ -159,6 +183,10 @@ class LicenseCode(Base):
     is_used = Column(Boolean, default=False, server_default="false")
     used_by = Column(String(100), nullable=True)
     used_at = Column(DateTime(timezone=True), nullable=True)
+    device_id = Column(String(128), nullable=True)
+    device_info = Column(JSON, nullable=True)
+    activated_at = Column(DateTime(timezone=True), nullable=True)
+    last_unbound_at = Column(DateTime(timezone=True), nullable=True)
     note = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -263,6 +291,47 @@ class AdminAuditLog(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+# ── 模型定价 ───────────────────────────────────────────────────
+
+class ModelPrice(Base):
+    """LLM 模型定价表 — 数据库驱动，改价无需发版"""
+    __tablename__ = "model_prices"
+
+    model = Column(String(100), primary_key=True)
+    provider = Column(String(50), nullable=True)
+    price_in_per_mtok = Column(Numeric(10, 6), nullable=False)
+    price_out_per_mtok = Column(Numeric(10, 6), nullable=False)
+    markup_ratio = Column(Numeric(6, 2), nullable=False, server_default="8.0")
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    effective_from = Column(DateTime(timezone=True), nullable=True)
+    effective_to = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# ── 计费会话 ───────────────────────────────────────────────────
+
+class BillingSession(Base):
+    """计费会话 — 一个用户感知的原子操作（生成/分析/翻译/润色等）"""
+    __tablename__ = "billing_sessions"
+    __table_args__ = (
+        Index("idx_bs_user_status", "user_id", "status"),
+        Index("idx_bs_status_activity", "status", "last_activity_at"),
+        UniqueConstraint("user_id", "idempotency_key", name="uq_bs_user_idempotency"),
+    )
+
+    session_id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    business_type = Column(String(64), nullable=False)
+    business_ref = Column(JSON, nullable=True)
+    idempotency_key = Column(String(64), nullable=True)
+    estimated_cost = Column(Numeric(10, 4), nullable=False)
+    actual_cost = Column(Numeric(10, 4), nullable=True)
+    status = Column(String(20), nullable=False, server_default="pending")
+    started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    settled_at = Column(DateTime(timezone=True), nullable=True)
+    last_activity_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 # ── LLM 调用埋点 ──────────────────────────────────────────────
 
 class LlmCallLog(Base):
@@ -272,6 +341,7 @@ class LlmCallLog(Base):
         Index("idx_llm_call_user_created", "user_id", "created_at"),
         Index("idx_llm_call_model", "model", "created_at"),
         Index("idx_llm_call_task", "task_type", "created_at"),
+        Index("idx_llm_billing_session", "billing_session_id"),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -279,14 +349,19 @@ class LlmCallLog(Base):
     article_id = Column(Integer, nullable=True)
     section_id = Column(Integer, nullable=True)
     session_id = Column(String(36), nullable=True)
+    billing_session_id = Column(String(36), ForeignKey("billing_sessions.session_id"), nullable=True)
     task_type = Column(String(64), nullable=False)
     model = Column(String(100), nullable=False)
     provider = Column(String(50), nullable=True)
     tokens_in = Column(Integer, default=0)
     tokens_out = Column(Integer, default=0)
+    tokens_in_reported = Column(Integer, nullable=True)
+    tokens_out_reported = Column(Integer, nullable=True)
+    token_source = Column(String(20), server_default="estimated")
     latency_ms = Column(Integer, nullable=True)
     cost_usd = Column(Numeric(10, 6), nullable=True)
     cost_credits = Column(Numeric(10, 4), nullable=True)
+    cost_billable = Column(Boolean, nullable=False, server_default="true")
     status = Column(String(20), nullable=False, server_default="success")
     error_message = Column(Text, nullable=True)
     meta = Column(JSON, nullable=True)

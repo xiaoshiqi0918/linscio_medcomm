@@ -21,6 +21,12 @@
         <router-link to="/admin/licenses" active-class="active" class="nav-item">
           <span class="nav-icon">🔑</span> 授权码管理
         </router-link>
+        <router-link to="/admin/redeem-codes" active-class="active" class="nav-item">
+          <span class="nav-icon">🎫</span> 兑换码管理
+        </router-link>
+        <router-link to="/admin/withdrawals" active-class="active" class="nav-item">
+          <span class="nav-icon">💰</span> 兑现审批
+        </router-link>
         <router-link to="/admin/config" active-class="active" class="nav-item">
           <span class="nav-icon">⚡</span> 系统配置
         </router-link>
