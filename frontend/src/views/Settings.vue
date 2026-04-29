@@ -138,7 +138,7 @@
             ⚠ 请确保微信已开启「手机号转账」功能（微信 → 我 → 服务 → 收付款 → 向银行卡或手机号转账 → 开启允许通过手机号向我转账）
           </div>
           <div style="margin-top: 4px; font-size: 0.78rem; color: #9ca3af;">
-            最低 {{ saasCredits.promo?.min_withdraw ?? 100 }} 积分起提 · 折现比例 1 积分 = {{ saasCredits.promo?.cash_rate ?? 0.1 }} 元
+            最低 {{ saasCredits.promo?.min_withdraw_credits ?? 100 }} 积分起提 · 折现比例 1 积分 = {{ saasCredits.promo?.cash_rate ?? 0.1 }} 元
           </div>
         </div>
 
@@ -1209,7 +1209,7 @@ const redeemedCode = ref('')
 const myLicenseCodes = ref<any[]>([])
 
 async function redeemLicense(creditType: string) {
-  const costLabel = creditType === 'credits' ? '6000 积分（充值积分 + 赠送积分）' : '6000 推广积分'
+  const costLabel = creditType === 'credits' ? '600 积分（充值积分 + 赠送积分）' : '6000 推广积分'
   await ElMessageBox.confirm(`确认使用 ${costLabel} 兑换一个客户端授权码？`, '兑换确认')
   redeemingLicense.value = true
   try {

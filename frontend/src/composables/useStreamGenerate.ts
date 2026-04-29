@@ -52,6 +52,12 @@ export function useStreamGenerate() {
         headers,
       })
       if (!res.ok) {
+        if (res.status === 429) {
+          throw new Error('请求过于频繁，请稍后重试')
+        }
+        if (res.status === 402) {
+          throw new Error('积分不足，请先充值')
+        }
         let detail = ''
         try {
           detail = await res.text()

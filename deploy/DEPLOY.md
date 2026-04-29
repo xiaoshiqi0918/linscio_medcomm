@@ -1,7 +1,7 @@
 # LinScio MedComm SaaS 部署指南
 
 > 宝塔面板 + Docker Compose 方案
-> 腾讯云轻量（香港）入门型 2核4G · 公网 IP 124.156.174.98
+> 腾讯云轻量（香港）通用型 4核8G · 公网 IP 43.129.175.64
 
 ---
 
@@ -12,7 +12,7 @@
     │
     ▼
 ┌──────────────────────────────────────────────────┐
-│ 腾讯云轻量 香港 2核4G  (124.156.174.98)           │
+│ 腾讯云轻量 香港 4核8G  (43.129.175.64)           │
 │                                                   │
 │  ┌─ 宝塔面板管理 ─────────────────────────────┐   │
 │  │  Nginx (:443 HTTPS)                        │   │
@@ -24,9 +24,9 @@
 │  └────────────────────────────────────────────┘   │
 │                                                   │
 │  ┌─ Docker Compose ──────────────────────────┐    │
-│  │  FastAPI  (:8765) [1GB 限制]              │    │
-│  │  PostgreSQL (:5432) [768MB 限制]          │    │
-│  │  Redis (:6379) [256MB 限制]               │    │
+│  │  FastAPI  (:8765) [1.5GB 限制]            │    │
+│  │  PostgreSQL (:5432) [1.5GB 限制]          │    │
+│  │  Redis (:6379) [384MB 限制]               │    │
 │  └───────────────────────────────────────────┘    │
 │                                                   │
 │  外部调用:                                        │
@@ -55,12 +55,11 @@
 
 | 项目 | 配置 |
 |------|------|
-| 机型 | 腾讯云轻量应用服务器（中国香港）入门型 |
-| 规格 | 2核 CPU / 4GB 内存 / 70GB SSD |
-| 带宽 | 30Mbps 峰值 / 2TB 月流量 |
-| 公网 IP | 124.156.174.98 |
+| 机型 | 腾讯云轻量应用服务器（中国香港）通用型 |
+| 规格 | 4核 CPU / 8GB 内存 / 180GB SSD |
+| 带宽 | 30Mbps 峰值 / 5TB 月流量 |
+| 公网 IP | 43.129.175.64 |
 | 系统 | Ubuntu 24.04 LTS |
-| 升级路径 | 用户量上升后可原地升配至通用型 4核8G |
 
 ### 1.2 安装宝塔面板
 
@@ -126,8 +125,8 @@ sudo apt install -y nodejs
 
 | 域名 | 类型 | 值 |
 |------|------|-----|
-| `www.linscio.com` | A | `124.156.174.98` |
-| `linscio.com` | A | `124.156.174.98` |
+| `www.linscio.com` | A | `43.129.175.64` |
+| `linscio.com` | A | `43.129.175.64` |
 | `releases.linscio.com` | CNAME | COS CDN 域名 |
 
 ---
@@ -137,16 +136,16 @@ sudo apt install -y nodejs
 ### 2.1 拉取代码
 
 ```bash
-sudo mkdir -p /opt/medcomm
-sudo chown $USER:$USER /opt/medcomm
-cd /opt/medcomm
+sudo mkdir -p /www/wwwroot/linscio_medcomm
+sudo chown $USER:$USER /www/wwwroot/linscio_medcomm
+cd /www/wwwroot/linscio_medcomm
 git clone https://github.com/xiaoshiqi0918/linscio_medcomm.git .
 ```
 
 ### 2.2 配置环境变量
 
 ```bash
-cd /opt/medcomm/deploy
+cd /www/wwwroot/linscio_medcomm/deploy
 
 # 生成安全密码
 POSTGRES_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
@@ -216,7 +215,7 @@ SAAS_API_URL=https://www.linscio.com
 ### 2.3 构建前端
 
 ```bash
-cd /opt/medcomm
+cd /www/wwwroot/linscio_medcomm
 npm install
 VITE_API_BASE="" npx vite build
 # 产物在 dist/ 目录
@@ -225,7 +224,7 @@ VITE_API_BASE="" npx vite build
 ### 2.4 启动 Docker 服务
 
 ```bash
-cd /opt/medcomm/deploy
+cd /www/wwwroot/linscio_medcomm/deploy
 docker compose up -d --build
 ```
 
@@ -281,10 +280,17 @@ asyncio.run(create_admin())
 |--------|-----|
 | 域名 | `www.linscio.com` |
 | 备注 | LinScio MedComm SaaS |
-| 根目录 | `/opt/medcomm/dist` |
+| 根目录 | `/www/wwwroot/linscio_medcomm/dist` |
 | PHP版本 | 纯静态 |
 
-在「域名管理」中额外添加 `linscio.com`。
+### 3.1.1 裸域跳转（推荐）
+
+为 `linscio.com` 单独添加一个站点，然后在该站点设置中开启 **重定向**：
+
+- 目标 URL：`https://www.linscio.com`
+- 状态码：301
+
+这样用户访问 `linscio.com` 会自动跳转到 `www.linscio.com`，避免双入口导致的 SEO 和登录态不一致问题。
 
 ### 3.2 配置 SSL 证书
 
@@ -366,7 +372,7 @@ limit_req_zone $binary_remote_addr zone=api_payment:5m rate=5r/m;
     }
 
     # ── 生成接口限流 + SSE ──
-    location ~ /api/v1/(sections/.*/generate|articles/.*/generate-all) {
+    location ~ /api/v1/medcomm/(sections/.*/generate|articles/.*/generate-all) {
         limit_req zone=api_generate burst=5 nodelay;
         limit_req_status 429;
         proxy_pass http://127.0.0.1:8765;
@@ -380,7 +386,7 @@ limit_req_zone $binary_remote_addr zone=api_payment:5m rate=5r/m;
     }
 
     # ── 支付创建限流 ──
-    location /api/v1/payment/create {
+    location /api/v1/payment/create-order {
         limit_req zone=api_payment burst=2 nodelay;
         limit_req_status 429;
         proxy_pass http://127.0.0.1:8765;
@@ -447,19 +453,16 @@ curl https://www.linscio.com/health
 
 ## 四、内存分配
 
-总计 4GB（入门型 2核4G），各组件内存分配：
+总计 8GB，各组件内存分配：
 
 | 组件 | 限制 | 实际占用 | 说明 |
 |------|------|---------|------|
-| PostgreSQL | 768MB | ~300-500MB | shared_buffers=192MB, max_connections=50 |
-| Redis | 256MB | ~30-100MB | maxmemory=128MB + 开销 |
-| FastAPI | 1024MB | ~300-500MB | LLM 调用是 IO 等待，不占内存 |
+| PostgreSQL | 1.5GB | ~800MB-1.2GB | shared_buffers=384MB + 连接 + 缓存 |
+| Redis | 384MB | ~50-256MB | maxmemory=256MB + 开销 |
+| FastAPI | 1.5GB | ~400-800MB | LLM 调用是 IO 等待，不占内存 |
 | 宝塔 + Nginx | - | ~200-300MB | 宝塔面板 + Nginx worker |
-| Docker 引擎 + 系统 | - | ~600-800MB | 系统保留 |
-| **合计** | | **~1.4-2.2GB** | **剩余 1.8-2.6GB 作为缓冲** |
-
-> 升配至 4核8G 后，建议同步调大：PG→1536M, Redis→384M (maxmemory=256mb), Backend→1536M，
-> 并修改 `pg-init.conf` 中 shared_buffers→384MB, effective_cache_size→1GB, max_connections→100。
+| Docker 引擎 + 系统 | - | ~1GB | 系统保留 |
+| **合计** | | **~2.5-3.5GB** | **剩余 4.5-5.5GB 作为缓冲** |
 
 ---
 
@@ -468,7 +471,7 @@ curl https://www.linscio.com/health
 ### 5.1 查看日志
 
 ```bash
-cd /opt/medcomm/deploy
+cd /www/wwwroot/linscio_medcomm/deploy
 docker compose logs -f backend      # 后端日志
 docker compose logs -f postgres     # 数据库日志
 docker compose logs -f redis        # Redis 日志
@@ -491,7 +494,7 @@ Nginx 重启：宝塔面板 → Nginx → 重启
 ### 5.3 更新代码
 
 ```bash
-cd /opt/medcomm
+cd /www/wwwroot/linscio_medcomm
 git pull
 
 # 重新构建前端（如前端有变更）
@@ -513,7 +516,7 @@ mkdir -p /opt/backups
 docker compose exec -T postgres pg_dump -U medcomm medcomm | gzip > /opt/backups/medcomm_$(date +%Y%m%d_%H%M).sql.gz
 
 # 自动每日备份（宝塔 → 计划任务 → Shell 脚本，每天 03:00）
-cd /opt/medcomm/deploy && docker compose exec -T postgres pg_dump -U medcomm medcomm | gzip > /opt/backups/medcomm_$(date +%Y%m%d).sql.gz && find /opt/backups -name "*.sql.gz" -mtime +30 -delete
+cd /www/wwwroot/linscio_medcomm/deploy && docker compose exec -T postgres pg_dump -U medcomm medcomm | gzip > /opt/backups/medcomm_$(date +%Y%m%d).sql.gz && find /opt/backups -name "*.sql.gz" -mtime +30 -delete
 ```
 
 也可以用宝塔自带的**计划任务**功能，添加 Shell 脚本类型的定时任务。
@@ -618,14 +621,14 @@ sudo systemctl restart docker
 - [ ] Node.js 安装完成
 - [ ] 域名 DNS 解析配置（www / 裸域 / releases）
 - [ ] 防火墙开放 22 / 80 / 443 / 宝塔端口
-- [ ] 代码克隆到 `/opt/medcomm`
+- [ ] 代码克隆到 `/www/wwwroot/linscio_medcomm`
 - [ ] `.env.production` 填写所有必填项
 - [ ] `.env` 设置 PG/Redis 密码
 - [ ] 前端构建完成（`dist/` 目录存在）
 - [ ] Docker 三服务启动成功
 - [ ] Alembic 数据库迁移完成
 - [ ] 管理员账号创建
-- [ ] 宝塔创建网站指向 `/opt/medcomm/dist`
+- [ ] 宝塔创建网站指向 `/www/wwwroot/linscio_medcomm/dist`
 - [ ] SSL 证书申请成功
 - [ ] Nginx 反代配置完成（参考 `bt-nginx.conf`）
 - [ ] `curl https://www.linscio.com/health` 返回正常

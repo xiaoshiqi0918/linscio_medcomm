@@ -98,7 +98,9 @@ http.interceptors.response.use(
       if (typeof window !== 'undefined' && _isElectron) {
         window.location.hash = '#/login'
       }
-      // SaaS: don't force redirect — let components handle via useAuthGuard
+    }
+    if (status === 429) {
+      error.message = '请求过于频繁，请稍后重试'
     }
     return Promise.reject(error)
   }
@@ -270,7 +272,12 @@ export const api = {
             body: JSON.stringify(data),
             signal: ctrl.signal,
           })
-          if (!resp.ok || !resp.body) { onError(`HTTP ${resp.status}`); return }
+          if (!resp.ok || !resp.body) {
+            if (resp.status === 429) { onError('请求过于频繁，请稍后重试'); return }
+            if (resp.status === 402) { onError('积分不足，请先充值'); return }
+            onError(`HTTP ${resp.status}`)
+            return
+          }
           const reader = resp.body.getReader()
           const decoder = new TextDecoder()
           let buf = ''

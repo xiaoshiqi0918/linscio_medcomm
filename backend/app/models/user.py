@@ -53,7 +53,6 @@ class User(Base):
 
     # ── 管理 ──────────────────────────────────────────────
     admin_note = Column(Text, nullable=True)
-    last_login_at = Column(DateTime(timezone=True), nullable=True)
 
     # ── 时间戳 ────────────────────────────────────────────
     created_at = Column(DateTime, default=func.now())
