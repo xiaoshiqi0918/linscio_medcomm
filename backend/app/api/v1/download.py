@@ -19,6 +19,120 @@ router = APIRouter()
 PLATFORM_EXT = {"win-x64": "exe", "mac-arm64": "dmg", "mac-x64": "dmg"}
 
 
+def _parse_version_tuple(v: str) -> tuple[int, ...]:
+    """用于版本比较的简化语义化版本（提取数字段）。"""
+    import re
+
+    s = (v or "0").strip()
+    parts = re.findall(r"\d+", s)
+    if not parts:
+        return (0,)
+    return tuple(int(x) for x in parts[:6])
+
+
+def _version_compare(a: str, b: str) -> int:
+    """-1 表示 a<b，0 相等，1 表示 a>b。"""
+    ta, tb = _parse_version_tuple(a), _parse_version_tuple(b)
+    maxlen = max(len(ta), len(tb))
+    ta = ta + (0,) * (maxlen - len(ta))
+    tb = tb + (0,) * (maxlen - len(tb))
+    if ta < tb:
+        return -1
+    if ta > tb:
+        return 1
+    return 0
+
+
+def _find_product(manifest: dict, product_id: str) -> tuple[dict | None, str]:
+    canonical_id = product_id
+    prod = None
+    for p in manifest.get("products", []):
+        if (p.get("id") or "").lower() == product_id.lower():
+            prod = p
+            canonical_id = p["id"]
+            break
+    return prod, canonical_id
+
+
+# ── Electron：仅主程序更新检查（学科包改由客户端本地上传安装）──────────
+
+
+class UpdateCheckRequest(BaseModel):
+    """与 Electron `auth-checker.checkSoftwareUpdate` 请求体对齐。"""
+
+    product_id: str = Field(default="medcomm")
+    platform: str = Field(..., description="mac-arm64 / mac-x64 / win-x64")
+    software_version: str = Field(default="0.0.0")
+
+
+@router.post("/update-check")
+async def client_update_check(
+    req: UpdateCheckRequest,
+    user: User = Depends(get_current_user),
+):
+    """
+    桌面客户端检查主程序更新（Bearer JWT）。
+    学科包不再有云端分发；响应中 specialty_updates / drawing_pack_updates 恒为空。
+    """
+    from app.core.config import settings
+    from app.services.cos import read_manifest, generate_presigned_download_url
+
+    manifest = read_manifest()
+    prod, canonical_id = _find_product(manifest, req.product_id)
+    min_cv = manifest.get("min_client_version") or None
+
+    if not prod:
+        return {
+            "base_valid": True,
+            "has_software_update": False,
+            "latest_version": None,
+            "min_client_version": min_cv,
+            "specialty_updates": [],
+            "drawing_pack_updates": [],
+        }
+
+    latest_ver = str(prod.get("latest_version") or "0.0.0")
+    has_sw = _version_compare(latest_ver, req.software_version) > 0
+    if has_sw:
+        allowed = prod.get("platforms") or []
+        if allowed and req.platform not in allowed:
+            has_sw = False
+
+    download_url = None
+    update_filename = None
+    if has_sw and settings.cos_secret_id:
+        overrides = prod.get("download_files") or {}
+        if req.platform in overrides:
+            update_filename = overrides[req.platform]
+        else:
+            ext = PLATFORM_EXT.get(req.platform, "dmg")
+            update_filename = f"LinScio-MedComm-{latest_ver}-{req.platform}.{ext}"
+        cos_key = f"releases/{canonical_id}/v{latest_ver}/{update_filename}"
+        try:
+            download_url = generate_presigned_download_url(cos_key, expires=7200)
+        except Exception:
+            logger.exception("生成主程序预签名 URL 失败")
+    elif has_sw and not settings.cos_secret_id:
+        logger.warning("COS 未配置，无法返回安装包下载地址")
+
+    return {
+        "base_valid": True,
+        "has_software_update": has_sw,
+        "latest_version": latest_ver,
+        "download_url": download_url,
+        "update_download_url": download_url,
+        "update_filename": update_filename,
+        "update_size_bytes": 0,
+        "update_sha256": None,
+        "release_notes": prod.get("release_notes"),
+        "platform_status": prod.get("platform_status"),
+        "min_client_version": min_cv,
+        "specialty_updates": [],
+        "drawing_pack_updates": [],
+        "changelog": prod.get("changelog"),
+    }
+
+
 # ── 公开接口：产品信息 ──────────────────────────────────────
 
 @router.get("/product-info")

@@ -40,6 +40,9 @@ class TokenResponse(BaseModel):
     display_name: str | None = None
     credits: float = 0
     gift_credits: float = 0
+    # 桌面端远程登录/注册时由 SaaS 签发，供 Electron 调 www 云端 API（更新检查、学科包等）
+    saas_access_token: str | None = None
+    saas_refresh_token: str | None = None
 
 
 class RegisterRequest(BaseModel):
@@ -163,7 +166,7 @@ async def _desktop_register(req: RegisterRequest, db: AsyncSession) -> TokenResp
             saas_data = resp.json()
             user = await _sync_user_to_local(req.phone, req.password, saas_data, db)
             logger.info("桌面端远程注册成功: phone=%s", req.phone)
-            return _issue_local_token(user)
+            return _issue_local_token(user, saas_data)
         detail = "注册失败"
         try:
             detail = resp.json().get("detail", detail)
@@ -232,7 +235,7 @@ async def _desktop_login(req: LoginRequest, db: AsyncSession) -> TokenResponse:
             saas_data = resp.json()
             user = await _sync_user_to_local(req.phone, req.password, saas_data, db)
             logger.info("桌面端远程登录成功: phone=%s user_id=%d", req.phone, user.id)
-            return _issue_local_token(user)
+            return _issue_local_token(user, saas_data)
         detail = "登录失败"
         try:
             detail = resp.json().get("detail", detail)
@@ -284,8 +287,13 @@ async def _local_fallback_login(req: LoginRequest, db: AsyncSession) -> TokenRes
     return _issue_local_token(user)
 
 
-def _issue_local_token(user: User) -> TokenResponse:
-    """签发本地 JWT"""
+def _issue_local_token(user: User, saas_data: dict | None = None) -> TokenResponse:
+    """签发本地 JWT；若刚从 SaaS 同步，则附带 SaaS access/refresh 供 Electron 调云端 API。"""
+    saas_access = None
+    saas_refresh = None
+    if saas_data:
+        saas_access = saas_data.get("access_token")
+        saas_refresh = saas_data.get("refresh_token")
     return TokenResponse(
         access_token=create_access_token(user.id),
         refresh_token=create_refresh_token(user.id),
@@ -293,6 +301,8 @@ def _issue_local_token(user: User) -> TokenResponse:
         display_name=user.display_name,
         credits=float(user.credits or 0),
         gift_credits=float(user.gift_credits or 0),
+        saas_access_token=saas_access,
+        saas_refresh_token=saas_refresh,
     )
 
 

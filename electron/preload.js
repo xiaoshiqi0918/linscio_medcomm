@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   isElectron: true,
   getLocalApiKey: () => ipcRenderer.invoke('get-local-api-key'),
   saveApiKey: (account, value) => ipcRenderer.invoke('save-api-key', account, value),
+  deleteApiKey: (account) => ipcRenderer.invoke('delete-api-key', account),
   reloadBackendEnv: () => ipcRenderer.invoke('reload-backend-env'),
   getApiKey: (account) => ipcRenderer.invoke('get-api-key', account),
   backupFull: () => ipcRenderer.invoke('backup-full'),
@@ -63,6 +64,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('download-specialty', specialtyId, specialtyName, version, fromVersion),
   getPackStatus: () => ipcRenderer.invoke('get-pack-status'),
   checkForUpdate: () => ipcRenderer.invoke('check-for-update'),
+  refreshLicenseStatus: () => ipcRenderer.invoke('refresh-license-status'),
+  installSpecialtyFromFile: (zipPath, displayName) =>
+    ipcRenderer.invoke('install-specialty-from-file', zipPath, displayName),
   downloadSoftwareUpdate: (opts) => ipcRenderer.invoke('download-software-update', opts),
   installSoftwareUpdate: () => ipcRenderer.invoke('install-software-update'),
   cancelSoftwareUpdate: () => ipcRenderer.invoke('cancel-software-update'),

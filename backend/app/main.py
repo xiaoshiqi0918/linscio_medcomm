@@ -217,11 +217,13 @@ if is_saas():
     from app.api.v1.payment import router as payment_router
     from app.api.v1.admin import router as admin_router
     from app.api.v1.download import router as download_router
+    from app.api.v1.client import router as client_router
     app.include_router(credits_router, prefix="/api/v1", tags=["credits"])
     app.include_router(referral_router, prefix="/api/v1", tags=["referral"])
     app.include_router(payment_router, prefix="/api/v1", tags=["payment"])
     app.include_router(admin_router, prefix="/api/v1", tags=["admin"])
     app.include_router(download_router, prefix="/api/v1/download", tags=["download"])
+    app.include_router(client_router, prefix="/api/v1/client", tags=["client"])
 
 # ── 双模式共享路由 ─────────────────────────────────────────
 from app.api.v1 import system

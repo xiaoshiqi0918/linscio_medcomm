@@ -49,6 +49,31 @@ export function getAuthToken(): string | null {
   return _authToken
 }
 
+/** Electron：将 SaaS 签发的 access_token 写入钥匙串，供主进程调 www 更新/学科包 API */
+export async function persistElectronSaasTokens(resData: { saas_access_token?: string | null }) {
+  const tok = resData?.saas_access_token
+  const electron = typeof window !== 'undefined' && (window as any).electronAPI
+  if (tok && electron?.saveApiKey) {
+    await electron.saveApiKey('saas_access_token', tok)
+  }
+}
+
+export async function clearElectronSaasToken() {
+  const electron = typeof window !== 'undefined' && (window as any).electronAPI
+  if (electron?.deleteApiKey) {
+    await electron.deleteApiKey('saas_access_token')
+  }
+}
+
+/** Electron：登录成功后刷新主进程许可证缓存（调 SaaS /api/v1/client/license-status） */
+export async function refreshElectronLicenseStatus() {
+  const electron = typeof window !== 'undefined' && (window as any).electronAPI
+  if (electron?.refreshLicenseStatus) {
+    return electron.refreshLicenseStatus()
+  }
+  return { ok: false as const, error: 'not_electron' }
+}
+
 async function getLocalApiKeyHeader(): Promise<Record<string, string>> {
   try {
     const electron = (typeof window !== 'undefined' && (window as any).electronAPI)

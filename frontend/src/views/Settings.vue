@@ -1876,7 +1876,7 @@ async function logout() {
       cancelButtonText: '取消',
       type: 'warning',
     })
-    authStore.logout()
+    await authStore.logout()
     ElMessage.success('已退出')
   } catch {
     // ignore

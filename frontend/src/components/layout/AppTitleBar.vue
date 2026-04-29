@@ -223,7 +223,7 @@ async function onCommand(cmd: string) {
         cancelButtonText: '取消',
         type: 'warning',
       })
-      authStore.logout()
+      await authStore.logout()
       ncbiMask.value = ''
       s2Mask.value   = ''
     } catch {

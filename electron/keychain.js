@@ -1,7 +1,7 @@
 /**
  * Keychain 安全存储 - MedComm v3 规范
  * "LinScio MedComm"        / access_token  → 软件 access_token（64 位 hex，激活后下发）
- * "LinScio MedComm"        / user@email.com → 门户 token（兼容）
+ * "LinScio MedComm"        / saas_access_token  → 手机号登录时 SaaS 签发，用于调 www 更新/学科包 API
  * "LinScio MedComm - Keys" / openai         → OpenAI API Key
  * "LinScio MedComm - Keys" / dashscope      → 绘图 LLM / 通义万相 API Key
  * "LinScio MedComm - Keys" / siliconflow    → 硅基流动 API Key
@@ -95,7 +95,7 @@ function normalizeAccount(account) {
 
 function getServiceForAccount(account) {
   const a = normalizeAccount(account)
-  if (a === 'access_token' || a === 'user@email.com') return SERVICE_PORTAL
+  if (a === 'access_token' || a === 'user@email.com' || a === 'saas_access_token') return SERVICE_PORTAL
   if (ACCOUNT_TO_ENV[a]) return SERVICE_KEYS
   return SERVICE_KEYS
 }

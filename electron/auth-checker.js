@@ -1,8 +1,7 @@
 /**
- * MedComm v3 授权检查
- * 6 小时缓存，延迟 10 秒异步验证，不阻塞界面
- *
- * 与 linscio-portal API 对齐：POST /api/license/status + Bearer access_token
+ * MedComm v3 授权检查（SaaS）
+ * 6 小时缓存；使用权状态走 linscio.com POST /api/v1/client/license-status
+ * 主程序更新：POST /api/v1/download/update-check（Bearer = SaaS JWT）
  */
 const { net } = require('electron')
 const manifestCompat = require('./manifest-compat')
@@ -11,12 +10,23 @@ const manifestCache = require('./manifest-cache')
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 5000
 
-/** 生产环境默认 API 根（无环境变量时使用）；本地开发请设 LINSCIO_PORTAL_API_URL */
-const DEFAULT_PORTAL_API_BASE = 'https://api.linscio.com.cn'
-/** 生产环境默认门户根（用于激活页外链）；本地开发请设 LINSCIO_PORTAL_URL */
-const DEFAULT_PORTAL_URL = 'https://portal.linscio.com.cn'
+/** 门户 API：仅当仍配置 LINSCIO_PORTAL_API_URL 时使用（激活码交换等遗留能力） */
+const DEFAULT_PORTAL_API_BASE = ''
+/** 激活说明外链默认落到站点设置页（可在部署时覆盖 LINSCIO_PORTAL_URL） */
+const DEFAULT_PORTAL_SITE_BASE = 'https://www.linscio.com'
+
+/** SaaS 站点根：使用权校验、软件更新（Bearer = saas_access_token） */
+const DEFAULT_SAAS_CLIENT_API_BASE = 'https://www.linscio.com'
 
 const MEDCOMM_PRODUCT_ID = 'medcomm'
+
+function getSaaSClientApiBase() {
+  const v =
+    process.env.LINSCIO_SAAS_CLIENT_API_URL ||
+    process.env.MEDCOMM_CLIENT_API_URL ||
+    DEFAULT_SAAS_CLIENT_API_BASE
+  return v.replace(/\/$/, '')
+}
 
 function getPortalApiBase() {
   return (
@@ -26,14 +36,15 @@ function getPortalApiBase() {
   )
 }
 
-/** 门户激活页完整 URL，用于 openExternal */
+/** 激活 / 购买授权说明页（门户已下线时指向 SaaS 站点） */
 function getPortalActivateUrl() {
   const base =
     process.env.MEDCOMM_PORTAL_URL ||
     process.env.LINSCIO_PORTAL_URL ||
-    DEFAULT_PORTAL_URL
+    process.env.LINSCIO_SITE_URL ||
+    DEFAULT_PORTAL_SITE_BASE
   if (!base) return ''
-  return `${base.replace(/\/$/, '')}/license/activate`
+  return `${base.replace(/\/$/, '')}/settings`
 }
 
 function isCacheValid(cache) {
@@ -44,24 +55,29 @@ function isCacheValid(cache) {
 /**
  * @param {Electron.BrowserWindow} mainWindow
  * @param {object} globalLicenseCache - 共享缓存 { timestamp, data }
- * @param {string} token - access_token
+ * @param {string} token - SaaS JWT（access_token from linscio.com）
  */
 async function checkAuthStatus(mainWindow, globalLicenseCache, token) {
   if (!mainWindow || mainWindow.isDestroyed()) return
+
+  if (!token) {
+    if (globalLicenseCache?.data) applyLicenseStatus(mainWindow, globalLicenseCache.data)
+    return
+  }
 
   if (isCacheValid(globalLicenseCache)) {
     applyLicenseStatus(mainWindow, globalLicenseCache.data)
     return
   }
 
-  const base = getPortalApiBase()
+  const base = getSaaSClientApiBase()
   if (!base) {
     if (globalLicenseCache?.data) applyLicenseStatus(mainWindow, globalLicenseCache.data)
     return
   }
 
   try {
-    const url = `${base.replace(/\/$/, '')}/api/license/status`
+    const url = `${base}/api/v1/client/license-status`
     const res = await net.fetch(url, {
       method: 'POST',
       headers: {
@@ -80,7 +96,7 @@ async function checkAuthStatus(mainWindow, globalLicenseCache, token) {
     if (globalLicenseCache?.data) {
       applyLicenseStatus(mainWindow, globalLicenseCache.data)
     }
-    console.warn('[MedComm] auth check failed (offline?):', err.message)
+    console.warn('[MedComm] SaaS license check failed (offline?):', err.message)
   }
 }
 
@@ -117,29 +133,13 @@ function clearLicenseCache(globalLicenseCache) {
   }
 }
 
-/**
- * 检查主程序是否有新版本（调 POST /api/update/check）
- * 结果通过 IPC 'software-update-available' 推送到渲染进程
- */
-async function checkSoftwareUpdate(mainWindow, token, currentVersion, localPacks) {
+async function checkSoftwareUpdate(mainWindow, token, currentVersion, _localPacks) {
   if (!mainWindow || mainWindow.isDestroyed()) return
-  const base = getPortalApiBase()
+  const base = getSaaSClientApiBase()
   if (!base || !token) return
 
-  const specialties = {}
-  const drawing_packs = {}
-  for (const p of (localPacks || [])) {
-    if (!p.specialty_id || !p.local_version) continue
-    const isDrawing = p.category === 'drawing' || (p.specialty_id || '').startsWith('medpic-')
-    if (isDrawing) {
-      drawing_packs[p.specialty_id] = p.local_version
-    } else {
-      specialties[p.specialty_id] = p.local_version
-    }
-  }
-
   try {
-    const url = `${base.replace(/\/$/, '')}/api/update/check`
+    const url = `${base}/api/v1/download/update-check`
     const res = await net.fetch(url, {
       method: 'POST',
       headers: {
@@ -152,8 +152,6 @@ async function checkSoftwareUpdate(mainWindow, token, currentVersion, localPacks
           ? (process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64')
           : 'win-x64',
         software_version: currentVersion || '0.0.0',
-        specialties: Object.keys(specialties).length ? specialties : undefined,
-        drawing_packs: Object.keys(drawing_packs).length ? drawing_packs : undefined,
       }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
@@ -162,7 +160,6 @@ async function checkSoftwareUpdate(mainWindow, token, currentVersion, localPacks
     const data = manifestCompat.parseUpdateResponse(raw)
     if (!data) return
 
-    // min_client_version 强制升级检查
     if (data.min_client_version) {
       const check = manifestCompat.checkMinClientVersion(currentVersion, data.min_client_version)
       if (!check.ok) {
@@ -175,14 +172,12 @@ async function checkSoftwareUpdate(mainWindow, token, currentVersion, localPacks
       }
     }
 
-    // 成功获取数据后持久化到本地缓存
     manifestCache.save(data)
 
     mainWindow.webContents.send('software-update-available', data)
   } catch (err) {
     console.warn('[MedComm] software update check failed:', err.message)
 
-    // 网络不可用时回退到本地缓存
     const cached = manifestCache.load()
     if (cached && !cached.stale) {
       console.log('[MedComm] Using cached manifest data (offline fallback)')
@@ -202,43 +197,14 @@ async function checkSoftwareUpdate(mainWindow, token, currentVersion, localPacks
   }
 }
 
-/**
- * 下载学科包（调 POST /api/download/specialty），返回签名 URL
- */
-async function downloadSpecialty(token, specialtyId, version, fromVersion) {
-  const base = getPortalApiBase()
-  if (!base || !token) throw new Error('未配置 API 或未登录')
-
-  const url = `${base.replace(/\/$/, '')}/api/download/specialty`
-  const res = await net.fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      product_id: MEDCOMM_PRODUCT_ID,
-      specialty_id: specialtyId,
-      version,
-      from_version: fromVersion || null,
-    }),
-    signal: AbortSignal.timeout(15000),
-  })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail || `HTTP ${res.status}`)
-  }
-  return await res.json()
-}
-
 module.exports = {
   checkAuthStatus,
   checkSoftwareUpdate,
-  downloadSpecialty,
   applyLicenseStatus,
   clearLicenseCache,
   isCacheValid,
   getPortalApiBase,
+  getSaaSClientApiBase,
   getPortalActivateUrl,
   MEDCOMM_PRODUCT_ID,
 }

@@ -18,7 +18,14 @@ _manifest_cache: dict[str, Any] = {}
 _manifest_ts: float = 0
 _CACHE_TTL = 300  # 5 分钟缓存
 
-_LOCAL_MANIFEST = Path(__file__).resolve().parent.parent.parent.parent / "deploy" / "cos-manifest.json"
+# 仓库结构：backend/app/services/cos.py → parents[3] = 仓库根 → deploy/cos-manifest.json
+# Docker：COPY backend→/app 后为 /app/app/services/cos.py → parents[2]=/app → /app/deploy/cos-manifest.json（见 Dockerfile）
+def _candidate_local_manifests() -> list[Path]:
+    here = Path(__file__).resolve()
+    return [
+        here.parents[3] / "deploy" / "cos-manifest.json",
+        here.parents[2] / "deploy" / "cos-manifest.json",
+    ]
 
 
 def _get_cos_client():
@@ -55,26 +62,36 @@ def read_manifest() -> dict:
             _manifest_ts = now
             logger.info("manifest.json 已从 COS 加载")
             return _manifest_cache
-        except Exception:
-            logger.warning("从 COS 读取 manifest.json 失败，尝试本地文件")
+        except Exception as e:
+            logger.warning(
+                "从 COS 读取 manifest.json 失败 bucket=%s region=%s key=manifest.json: %s",
+                _manifest_bucket(),
+                settings.cos_region,
+                e,
+            )
 
     return _read_local_manifest()
 
 
 def _read_local_manifest() -> dict:
-    """从本地 deploy/cos-manifest.json 读取"""
+    """从本地 deploy/cos-manifest.json 读取（先试仓库根 deploy，再试镜像 /app/deploy）。"""
     global _manifest_cache, _manifest_ts
-    if _LOCAL_MANIFEST.exists():
+    for path in _candidate_local_manifests():
+        if not path.exists():
+            continue
         try:
-            data = json.loads(_LOCAL_MANIFEST.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
             _manifest_cache = data
             _manifest_ts = time.time()
-            logger.info("manifest.json 已从本地文件加载: %s", _LOCAL_MANIFEST)
+            logger.info("manifest.json 已从本地文件加载: %s", path)
             return data
         except Exception:
-            logger.exception("本地 manifest.json 解析失败")
+            logger.exception("本地 manifest.json 解析失败: %s", path)
 
-    logger.warning("无可用 manifest.json（COS 和本地均不可用），返回硬编码默认值")
+    logger.warning(
+        "无可用 manifest.json（COS 和本地均不可用），返回硬编码默认值；本地尝试过路径: %s",
+        [str(p) for p in _candidate_local_manifests()],
+    )
     return {
         "schema_version": "2.0",
         "products": [

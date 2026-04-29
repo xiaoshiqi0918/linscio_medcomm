@@ -16,6 +16,9 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY backend/ /app/
 
+# 供容器内 read_manifest 降级读取（与仓库 deploy/cos-manifest.json 一致）；仍以 COS 为准。
+COPY deploy/cos-manifest.json /app/deploy/cos-manifest.json
+
 RUN rm -f /app/.env
 
 ENV DEPLOYMENT_MODE=saas

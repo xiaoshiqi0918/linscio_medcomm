@@ -44,7 +44,19 @@ const firstRun = require('./first-run')
 const backup = require('./backup')
 const authChecker = require('./auth-checker')
 const keychain = require('./keychain')
-const packDownloader = require('./pack-downloader')
+
+/** 调 linscio.com SaaS API 的 Bearer：优先手机号登录下发的 saas_access_token，否则兼容门户 access_token */
+async function getCloudAuthToken() {
+  try {
+    const s = await keychain.getPassword('saas_access_token')
+    if (s) return s
+  } catch {}
+  try {
+    return await keychain.getPassword('access_token')
+  } catch {
+    return null
+  }
+}
 
 global.licenseCache = { timestamp: 0, data: null }
 
@@ -227,8 +239,9 @@ function storeTokenAndActivate(token) {
     authChecker.clearLicenseCache(global.licenseCache)
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('license-activated', { token })
-      setTimeout(() => {
-        authChecker.checkAuthStatus(mainWindow, global.licenseCache, token)
+      setTimeout(async () => {
+        const t = await getCloudAuthToken()
+        if (t) await authChecker.checkAuthStatus(mainWindow, global.licenseCache, t)
       }, 500)
     }
   }).catch(console.warn)
@@ -318,6 +331,15 @@ ipcMain.handle('save-api-key', async (_, account, value) => {
   }
 })
 
+ipcMain.handle('delete-api-key', async (_, account) => {
+  try {
+    await require('./keychain').deletePassword(account)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+})
+
 ipcMain.handle('reload-backend-env', async () => {
   try {
     const ok = await reloadBackendWithLatestKeys()
@@ -399,8 +421,9 @@ ipcMain.handle('portal-login', async (_, email, password) => {
       authChecker.clearLicenseCache(global.licenseCache)
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('license-activated', { token: data.access_token })
-        setTimeout(() => {
-          authChecker.checkAuthStatus(mainWindow, global.licenseCache, data.access_token)
+        setTimeout(async () => {
+          const t = await getCloudAuthToken()
+          if (t) await authChecker.checkAuthStatus(mainWindow, global.licenseCache, t)
         }, 2500)
       }
       return { ok: true, email: data.email, expires_at: data.expires_at, days_remaining: data.days_remaining }
@@ -432,24 +455,37 @@ ipcMain.handle('get-license-cache', async () => {
   if (authChecker.isCacheValid(cache) && cache.data?.base) {
     return { base: cache.data.base, portalEmail }
   }
-  const token = await keychain.getPassword('access_token').catch(() => null)
+  const token = await getCloudAuthToken().catch(() => null)
   return { base: null, hasToken: !!token, portalEmail }
 })
 
-ipcMain.handle('download-specialty', async (_, specialtyId, specialtyName, version, fromVersion) => {
+ipcMain.handle('refresh-license-status', async () => {
   try {
-    const token = await keychain.getPassword('access_token')
-    if (!token) return { ok: false, error: '未激活，请先完成授权' }
-    return await packDownloader.installSpecialtyPack(
-      mainWindow, token, specialtyId, specialtyName || specialtyId, version, fromVersion, localApiKey
-    )
-  } catch (e) {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('specialty-download-progress', {
-        specialty_id: specialtyId, percent: 0, status: 'error', detail: e.message,
-      })
+    const token = await getCloudAuthToken()
+    if (!mainWindow || mainWindow.isDestroyed() || !token) {
+      return { ok: false, error: '未登录或无可用的 SaaS 令牌' }
     }
-    return { ok: false, error: e.message }
+    global.licenseCache.timestamp = 0
+    await authChecker.checkAuthStatus(mainWindow, global.licenseCache, token)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) }
+  }
+})
+
+ipcMain.handle('download-specialty', async (_, specialtyId, specialtyName, _version, _fromVersion) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('specialty-download-progress', {
+      specialty_id: specialtyId,
+      name: specialtyName,
+      percent: 0,
+      status: 'error',
+      detail: '云端学科包下载已关闭，请在「设置」中通过上传 ZIP 文件安装。',
+    })
+  }
+  return {
+    ok: false,
+    error: '云端学科包下载已关闭，请在「设置」中通过上传 ZIP 文件安装。',
   }
 })
 
@@ -470,18 +506,10 @@ ipcMain.handle('get-app-version', () => app.getVersion())
 
 ipcMain.handle('check-for-update', async () => {
   try {
-    const token = await keychain.getPassword('access_token')
-    if (!token) return { ok: false, error: '未激活' }
+    const token = await getCloudAuthToken()
+    if (!token) return { ok: false, error: '请先在应用内使用手机号登录（联网），或完成账号授权' }
     const pkgVersion = app.getVersion() || '0.0.0'
-    let localPacks = []
-    try {
-      const { net: _net } = require('electron')
-      const headers = { 'Content-Type': 'application/json' }
-      if (localApiKey) headers['X-Local-Api-Key'] = localApiKey
-      const packRes = await _net.fetch('http://127.0.0.1:8765/api/v1/specialty/status', { headers })
-      if (packRes.ok) localPacks = await packRes.json()
-    } catch { /* ignore */ }
-    await authChecker.checkSoftwareUpdate(mainWindow, token, pkgVersion, localPacks)
+    await authChecker.checkSoftwareUpdate(mainWindow, token, pkgVersion, [])
     return { ok: true }
   } catch (e) {
     return { ok: false, error: e.message }
@@ -530,6 +558,29 @@ ipcMain.handle('run-startup-check', () => {
 ipcMain.handle('get-log-paths', () => {
   const errorCodes = require('./error-codes')
   return errorCodes.getLogPaths()
+})
+
+ipcMain.handle('install-specialty-from-file', async (_, zipPath, _displayName) => {
+  try {
+    if (!zipPath || typeof zipPath !== 'string') {
+      return { ok: false, error: '无效的文件路径' }
+    }
+    const { net: _net } = require('electron')
+    const headers = { 'Content-Type': 'application/json' }
+    if (localApiKey) headers['X-Local-Api-Key'] = localApiKey
+    const res = await _net.fetch('http://127.0.0.1:8765/api/v1/specialty/import-local', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ zip_path: zipPath }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      return { ok: false, error: body.detail || `导入失败 (${res.status})` }
+    }
+    return await res.json()
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) }
+  }
 })
 
 ipcMain.handle('import-local-pack', async () => {

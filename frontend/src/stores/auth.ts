@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { api, setAuthToken } from '@/api'
+import { api, setAuthToken, clearElectronSaasToken } from '@/api'
 
 export const AUTH_USER_CHANGED_EVENT = 'linscio:auth-user-changed'
 export const AUTH_PREFERRED_USERNAME_KEY = 'linscio_preferred_username'
@@ -32,7 +32,7 @@ export const useAuthStore = defineStore('auth', () => {
     }))
   }
 
-  function logout() {
+  async function logout() {
     setAuthToken(null)
     user.value = null
     try {
@@ -40,6 +40,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch {
       // ignore
     }
+    await clearElectronSaasToken()
     window.dispatchEvent(new CustomEvent(AUTH_USER_CHANGED_EVENT, {
       detail: {
         userId: null,

@@ -45,7 +45,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { http, setAuthToken } from '@/api'
+import { http, setAuthToken, persistElectronSaasTokens, refreshElectronLicenseStatus } from '@/api'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 
@@ -115,6 +115,8 @@ async function handleRegister() {
     })
     const { access_token, refresh_token } = res.data
     setAuthToken(access_token)
+    await persistElectronSaasTokens(res.data)
+    await refreshElectronLicenseStatus()
     if (refresh_token) {
       try { localStorage.setItem('linscio_refresh_token', refresh_token) } catch {}
     }
