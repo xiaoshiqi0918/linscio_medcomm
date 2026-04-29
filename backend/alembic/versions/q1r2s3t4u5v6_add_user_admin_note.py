@@ -13,9 +13,17 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(table: str, column: str) -> bool:
+    conn = op.get_bind()
+    insp = sa.inspect(conn)
+    return column in [c["name"] for c in insp.get_columns(table)]
+
+
 def upgrade() -> None:
-    op.add_column("users", sa.Column("admin_note", sa.Text(), nullable=True))
-    op.add_column("users", sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True))
+    if not _has_column("users", "admin_note"):
+        op.add_column("users", sa.Column("admin_note", sa.Text(), nullable=True))
+    if not _has_column("users", "last_login_at"):
+        op.add_column("users", sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True))
 
 
 def downgrade() -> None:

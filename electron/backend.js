@@ -74,8 +74,12 @@ async function start(envExtra = {}) {
   )
   console.log('[MedComm] Backend PID:', backendProcess.pid)
 
-  backendProcess.stdout?.on('data', (d) => process.stdout.write(d.toString()))
-  backendProcess.stderr?.on('data', (d) => process.stderr.write(d.toString()))
+  backendProcess.stdout?.on('data', (d) => {
+    try { process.stdout.write(d.toString()) } catch { /* EPIPE — pipe closed */ }
+  })
+  backendProcess.stderr?.on('data', (d) => {
+    try { process.stderr.write(d.toString()) } catch { /* EPIPE — pipe closed */ }
+  })
   backendProcess.on('error', (err) => console.error('[MedComm] Backend spawn error:', err))
   backendProcess.on('exit', (code, signal) => {
     backendProcess = null

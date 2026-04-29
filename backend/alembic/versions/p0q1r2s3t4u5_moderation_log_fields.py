@@ -44,24 +44,20 @@ def upgrade() -> None:
         WHERE stage IS NULL
     """)
 
-    # Make stage/rule_level NOT NULL now that data is migrated
-    op.alter_column("content_moderation_logs", "stage", nullable=False, server_default="generation")
-    op.alter_column("content_moderation_logs", "rule_level", nullable=False, server_default="info")
+    # Use batch_alter_table for SQLite compatibility (no ALTER COLUMN support)
+    # Must drop old index inside batch to avoid referencing dropped columns
+    with op.batch_alter_table("content_moderation_logs") as batch_op:
+        batch_op.alter_column("stage", nullable=False, server_default="generation")
+        batch_op.alter_column("rule_level", nullable=False, server_default="info")
+        batch_op.drop_index("idx_moderation_result")
+        batch_op.drop_column("content_type")
+        batch_op.drop_column("content_hash")
+        batch_op.drop_column("result")
+        batch_op.drop_column("risk_labels")
+        batch_op.drop_column("confidence")
+        batch_op.drop_column("provider")
+        batch_op.drop_column("raw_response")
 
-    # Drop old columns
-    op.drop_column("content_moderation_logs", "content_type")
-    op.drop_column("content_moderation_logs", "content_hash")
-    op.drop_column("content_moderation_logs", "result")
-    op.drop_column("content_moderation_logs", "risk_labels")
-    op.drop_column("content_moderation_logs", "confidence")
-    op.drop_column("content_moderation_logs", "provider")
-    op.drop_column("content_moderation_logs", "raw_response")
-
-    # Drop old index, create new one
-    try:
-        op.drop_index("idx_moderation_result", table_name="content_moderation_logs")
-    except Exception:
-        pass
     op.create_index("idx_moderation_stage", "content_moderation_logs", ["stage", "rule_level", "created_at"])
 
 

@@ -10,6 +10,11 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
 
 const isDev = process.env.NODE_ENV === 'development'
 
+process.on('uncaughtException', (err) => {
+  if (err.code === 'EPIPE') return
+  console.error('[MedComm] Uncaught exception:', err)
+})
+
 /**
  * 开发模式默认用仓库 backend/.data，与 `cd backend && python run.py` 共用 medcomm.db；
  * 避免 Electron userData 与本地后端各用一套库导致迁移/表结构不一致。

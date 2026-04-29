@@ -16,7 +16,16 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _table_exists(name: str) -> bool:
+    from alembic import op as _op
+    conn = _op.get_bind()
+    insp = sa.inspect(conn)
+    return name in insp.get_table_names()
+
+
 def upgrade() -> None:
+    if not _table_exists("withdrawal_logs"):
+        return
     op.add_column('withdrawal_logs', sa.Column('platform_account', sa.String(length=32), nullable=True))
     op.add_column('withdrawal_logs', sa.Column('wechat_phone', sa.String(length=20), nullable=True))
     op.drop_column('withdrawal_logs', 'bank_account')
@@ -25,6 +34,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if not _table_exists("withdrawal_logs"):
+        return
     op.add_column('withdrawal_logs', sa.Column('real_name', sa.VARCHAR(length=64), autoincrement=False, nullable=True))
     op.add_column('withdrawal_logs', sa.Column('id_card', sa.VARCHAR(length=32), autoincrement=False, nullable=True))
     op.add_column('withdrawal_logs', sa.Column('bank_account', sa.VARCHAR(length=64), autoincrement=False, nullable=True))

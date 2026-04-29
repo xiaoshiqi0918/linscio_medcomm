@@ -45,17 +45,23 @@ def upgrade() -> None:
     )
     op.create_index("idx_bs_user_status", "billing_sessions", ["user_id", "status"])
     op.create_index("idx_bs_status_activity", "billing_sessions", ["status", "last_activity_at"])
-    op.create_unique_constraint("uq_bs_user_idempotency", "billing_sessions", ["user_id", "idempotency_key"])
+    try:
+        op.create_unique_constraint("uq_bs_user_idempotency", "billing_sessions", ["user_id", "idempotency_key"])
+    except Exception:
+        pass
 
     # ── llm_call_logs: add billing_session_id + edge-case fields ──
-    op.add_column(
-        "llm_call_logs",
-        sa.Column("billing_session_id", sa.String(36), sa.ForeignKey("billing_sessions.session_id"), nullable=True),
-    )
-    op.add_column("llm_call_logs", sa.Column("cost_billable", sa.Boolean(), nullable=False, server_default="true"))
-    op.add_column("llm_call_logs", sa.Column("tokens_in_reported", sa.Integer(), nullable=True))
-    op.add_column("llm_call_logs", sa.Column("tokens_out_reported", sa.Integer(), nullable=True))
-    op.add_column("llm_call_logs", sa.Column("token_source", sa.String(20), server_default="estimated"))
+    # Use batch mode for SQLite (no ALTER ADD CONSTRAINT support)
+    with op.batch_alter_table("llm_call_logs") as batch_op:
+        batch_op.add_column(sa.Column(
+            "billing_session_id", sa.String(36),
+            sa.ForeignKey("billing_sessions.session_id", name="fk_llm_billing_session"),
+            nullable=True,
+        ))
+        batch_op.add_column(sa.Column("cost_billable", sa.Boolean(), nullable=False, server_default="true"))
+        batch_op.add_column(sa.Column("tokens_in_reported", sa.Integer(), nullable=True))
+        batch_op.add_column(sa.Column("tokens_out_reported", sa.Integer(), nullable=True))
+        batch_op.add_column(sa.Column("token_source", sa.String(20), server_default="estimated"))
     op.create_index("idx_llm_billing_session", "llm_call_logs", ["billing_session_id"])
 
     # ── seed model_prices with current pricing ──
