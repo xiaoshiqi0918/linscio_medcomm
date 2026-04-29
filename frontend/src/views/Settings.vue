@@ -1367,7 +1367,7 @@ async function saasLogout() {
     ElMessage.success('已退出')
   } catch { /* user cancel */ }
 }
-const appVersion = ref('0.0.0')
+const appVersion = ref(typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0')
 if (isElectronEnv && window.electronAPI?.getAppVersion) {
   window.electronAPI.getAppVersion().then((v: string) => { appVersion.value = v }).catch(() => {})
 }

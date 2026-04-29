@@ -1,12 +1,18 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
+import { readFileSync } from 'fs'
+
+const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8'))
 
 /** Electron 包内资源用相对 base；Web 用 /。勿再用「是否设置 VITE_API_BASE」判断，否则同域部署 VITE_API_BASE="" 会被误判为 Electron。 */
 const isElectronBuild = process.env.VITE_IS_ELECTRON === '1'
 
 export default defineConfig({
   plugins: [vue()],
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   root: 'frontend',
   base: isElectronBuild ? './' : '/',
   build: {
