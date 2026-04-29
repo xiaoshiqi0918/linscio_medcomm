@@ -102,6 +102,8 @@
       "!backend/alembic/versions/*moderation*",
       "!backend/alembic/versions/*llm_log*",
       "!backend/alembic/versions/*user_admin_note*",
+      "!backend/alembic/versions/*billing*",
+      "!backend/alembic/versions/*withdrawal*",
       "!backend/.env",
       "!backend/.env.*",
       "!backend/.data/**",
