@@ -56,8 +56,8 @@ declare global {
       getLocalApiKey?: () => Promise<string | undefined>
       saveApiKey?: (account: string, value: string) => Promise<{ ok: boolean; error?: string }>
       deleteApiKey?: (account: string) => Promise<{ ok: boolean; error?: string }>
-  refreshLicenseStatus?: () => Promise<{ ok: boolean; error?: string }>
-  installSpecialtyFromFile?: (zipPath: string, displayName: string) => Promise<{ ok: boolean; error?: string; name?: string }>
+      refreshLicenseStatus?: () => Promise<{ ok: boolean; error?: string }>
+      installSpecialtyFromFile?: (zipPath: string, displayName: string) => Promise<{ ok: boolean; error?: string; name?: string }>
       getApiKey?: (account: string) => Promise<string | null>
       reloadBackendEnv?: () => Promise<{ ok: boolean; error?: string }>
       backupFull?: () => Promise<{ ok: boolean; error?: string }>
