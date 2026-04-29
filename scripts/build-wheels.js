@@ -53,7 +53,7 @@ function main() {
     console.error('[build-wheels] Neither pip nor pip3 found. Set PIP_PATH or install pip.')
     process.exit(1)
   })()
-  const SDIST_ONLY = ['jieba', 'bibtexparser']
+  const SDIST_ONLY = ['jieba', 'bibtexparser', 'cos-python-sdk-v5']
 
   const lines = fs.readFileSync(requirementsPath, 'utf-8').split('\n')
   let binaryLines = lines.filter((l) => !SDIST_ONLY.some((s) => l.trim().startsWith(s)))

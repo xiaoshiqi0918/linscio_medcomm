@@ -89,7 +89,7 @@ jobs:
           TMP_REQ="build/.tmp-req.txt"
           sed 's/uvicorn\[standard\]/uvicorn/g' backend/requirements.txt > "$TMP_REQ"
 
-          SDIST_RE='^\s*(jieba|bibtexparser)'
+          SDIST_RE='^\s*(jieba|bibtexparser|cos-python-sdk-v5)'
           grep -vE "$SDIST_RE" "$TMP_REQ" > build/.tmp-req-binary.txt || true
 
           echo "==> Phase 1: binary wheels"
