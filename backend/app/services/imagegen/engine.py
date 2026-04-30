@@ -1,6 +1,6 @@
 """
 图像生成引擎
-DALL·E 3 / 通义万相 / 文心一格 / ComfyUI（本地或 Comfy Cloud）等；Pollinations 免费降级
+GPT Image（gpt-image-2-plus / gpt-image-1.5）/ DALL·E 3 / 通义万相 / 文心一格 / ComfyUI 等；Pollinations 免费降级
 """
 import logging
 import os
@@ -18,7 +18,7 @@ from app.core.config import settings
 _dalle_semaphore = asyncio.Semaphore(2)
 
 
-def _dalle3_size(width: int, height: int) -> str:
+def _openai_image_size(width: int, height: int) -> str:
     if height > width * 1.1:
         return "1024x1792"
     if width > height * 1.1:
@@ -59,6 +59,23 @@ def _comfy_available_cloud(overrides: dict | None) -> bool:
     return _comfy_available_local(overrides) and bool(os.environ.get("COMFY_CLOUD_API_KEY", "").strip())
 
 
+# 绘图引擎键：UI 与服务端均需完整列出（未配置时为 False）
+_IMAGE_PROVIDER_KEYS: tuple[str, ...] = (
+    "gpt_image",
+    "openai",
+    "gemini_image",
+    "moonshot_image",
+    "midjourney",
+    "wanx",
+    "wenxin",
+    "siliconflow",
+    "comfyui_cloud",
+    "comfyui_local",
+    "comfyui_local_running",
+    "pollinations",
+)
+
+
 async def detect_providers() -> dict:
     """检测可用 Provider（含 ComfyUI 运行时健康检查）"""
     wenxin_key = bool(os.environ.get("ERNIE_IMAGE_API_KEY") or os.environ.get("BAIDU_API_KEY"))
@@ -69,8 +86,22 @@ async def detect_providers() -> dict:
     if local_configured:
         base = os.environ.get("COMFYUI_BASE_URL", "").strip() or "http://127.0.0.1:8188"
         local_running = await _comfy_health_check(base)
-    return {
+
+    gemini_img = bool(
+        os.environ.get("GEMINI_IMAGE_API_KEY", "").strip()
+        or os.environ.get("GOOGLE_AI_STUDIO_IMAGE_API_KEY", "").strip()
+        or (
+            os.environ.get("GEMINI_IMAGE_ENABLED", "").strip().lower() in ("1", "true", "yes")
+            and os.environ.get("GOOGLE_AI_STUDIO_API_KEY", "").strip()
+        )
+    )
+    moonshot_img = bool(os.environ.get("MOONSHOT_IMAGE_API_KEY", "").strip())
+
+    truthy: dict[str, bool] = {
+        "gpt_image": _gpt_image_available(),
         "openai": bool(os.environ.get("OPENAI_API_KEY")),
+        "gemini_image": gemini_img,
+        "moonshot_image": moonshot_img,
         "midjourney": bool(os.environ.get("MIDJOURNEY_PROXY_URL")),
         "wanx": bool(os.environ.get("DASHSCOPE_API_KEY")),
         "wenxin": wenxin_key and wenxin_secret,
@@ -80,6 +111,7 @@ async def detect_providers() -> dict:
         "comfyui_cloud": _comfy_available_cloud(ov),
         "pollinations": True,
     }
+    return {k: truthy.get(k, False) for k in _IMAGE_PROVIDER_KEYS}
 
 
 def _save_local(
@@ -100,6 +132,93 @@ def _save_local(
     return str(path.relative_to(settings.app_data_root))
 
 
+def _has_gpt_image_config() -> bool:
+    """用户是否显式配置了 GPT Image（有专属 Key 或指定了 Model）"""
+    return bool(
+        os.environ.get("GPT_IMAGE_API_KEY", "").strip()
+        or settings.gpt_image_api_key.strip()
+        or os.environ.get("GPT_IMAGE_MODEL", "").strip()
+    )
+
+
+def _resolve_gpt_image_key() -> str:
+    """GPT Image API Key：优先独立 Key，回退到 OPENAI_API_KEY（同一平台同一个 Key）"""
+    return (
+        os.environ.get("GPT_IMAGE_API_KEY", "").strip()
+        or settings.gpt_image_api_key.strip()
+        or os.environ.get("OPENAI_API_KEY", "").strip()
+        or settings.openai_api_key.strip()
+    )
+
+
+def _gpt_image_available() -> bool:
+    """GPT Image 可用条件：显式配置了 GPT Image，且有可用 Key"""
+    return _has_gpt_image_config() and bool(_resolve_gpt_image_key())
+
+
+async def _gpt_image(
+    prompt: str,
+    style: str,
+    width: int,
+    height: int,
+    image_type: str = "generated",
+) -> list[str]:
+    """
+    GPT Image 系列（gpt-image-2-plus / gpt-image-1.5）。
+    与文本 LLM 用同一个 Key 和 Base URL — 靠 model 参数和 /images/generations 端点区分。
+    """
+    from openai import AsyncOpenAI
+
+    api_key = _resolve_gpt_image_key()
+    if not api_key:
+        return []
+
+    base_url = (
+        os.environ.get("GPT_IMAGE_BASE_URL", "").strip()
+        or settings.gpt_image_base_url.strip()
+        or os.environ.get("OPENAI_BASE_URL", "").strip()
+        or settings.openai_base_url.strip()
+        or None
+    )
+    model = (
+        os.environ.get("GPT_IMAGE_MODEL", "").strip()
+        or settings.gpt_image_model.strip()
+        or "gpt-image-2-plus"
+    )
+
+    kwargs: dict = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+
+    client = AsyncOpenAI(**kwargs)
+    async with _dalle_semaphore:
+        resp = await client.images.generate(
+            model=model,
+            prompt=prompt,
+            n=1,
+            size=_openai_image_size(width, height),
+            quality="medium",
+        )
+    data = resp.data[0] if resp.data else None
+    if not data:
+        return []
+
+    if getattr(data, "b64_json", None):
+        import base64
+        raw = base64.b64decode(data.b64_json)
+        rel = _save_local(raw, provider="gpt_image", image_type=image_type)
+        return [f"medcomm-image://{rel}"]
+
+    url = getattr(data, "url", None)
+    if not url:
+        return []
+    async with httpx.AsyncClient(timeout=60.0) as c:
+        r = await c.get(url)
+        r.raise_for_status()
+    rel = _save_local(r.content, provider="gpt_image", image_type=image_type)
+    return [f"medcomm-image://{rel}"]
+
+
 async def _dalle3(
     prompt: str,
     style: str,
@@ -107,7 +226,7 @@ async def _dalle3(
     height: int,
     image_type: str = "generated",
 ) -> list[str]:
-    """DALL·E 3，每次 n=1"""
+    """DALL·E 3 — 使用 OPENAI_API_KEY（作为 GPT Image 不可用时的备选）"""
     from openai import AsyncOpenAI
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
@@ -118,7 +237,7 @@ async def _dalle3(
             model="dall-e-3",
             prompt=prompt,
             n=1,
-            size=_dalle3_size(width, height),
+            size=_openai_image_size(width, height),
             quality="standard",
         )
     url = resp.data[0].url
@@ -227,6 +346,25 @@ async def _wenxin(
     return [f"medcomm-image://{rel}"]
 
 
+_KOLORS_SIZES = [
+    (1024, 1024), (960, 1280), (1280, 960),
+    (768, 1024), (1024, 768), (720, 1440),
+    (1440, 720), (720, 1280), (1280, 720),
+]
+_QWEN_IMAGE_SIZES = [
+    (1328, 1328), (1664, 928), (928, 1664),
+    (1472, 1140), (1140, 1472), (1584, 1056), (1056, 1584),
+]
+
+
+def _snap_size(width: int, height: int, model: str) -> str:
+    """将任意尺寸对齐到模型支持的最近分辨率"""
+    sizes = _QWEN_IMAGE_SIZES if "qwen" in model.lower() else _KOLORS_SIZES
+    ratio = width / max(height, 1)
+    best = min(sizes, key=lambda s: abs(s[0] / s[1] - ratio))
+    return f"{best[0]}x{best[1]}"
+
+
 async def _siliconflow(
     prompt: str,
     width: int,
@@ -234,40 +372,54 @@ async def _siliconflow(
     image_type: str = "generated",
     model: str | None = None,
 ) -> list[str]:
-    """硅基流动文生图（OpenAI 兼容 Images API）"""
+    """硅基流动文生图（原生 REST API）"""
     key = os.environ.get("SILICONFLOW_API_KEY", "")
     if not key:
         return []
     image_model = model or os.environ.get("SILICONFLOW_IMAGE_MODEL", "Kwai-Kolors/Kolors")
+    image_size = _snap_size(width, height, image_model)
+    is_qwen = "qwen" in image_model.lower() and "edit" not in image_model.lower()
+
+    payload: dict = {
+        "model": image_model,
+        "prompt": prompt,
+        "image_size": image_size,
+    }
+    if is_qwen:
+        payload["num_inference_steps"] = 50
+        payload["cfg"] = 4.0
+    else:
+        payload["batch_size"] = 1
+        payload["num_inference_steps"] = 20
+        payload["guidance_scale"] = 7.5
+
     try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(
-            api_key=key,
-            base_url="https://api.siliconflow.cn/v1",
-        )
-        resp = await client.images.generate(
-            model=image_model,
-            prompt=prompt,
-            n=1,
-            size=f"{width}x{height}",
-        )
-        data = resp.data[0] if resp.data else None
-        if not data:
+        async with httpx.AsyncClient(timeout=90.0) as c:
+            resp = await c.post(
+                "https://api.siliconflow.cn/v1/images/generations",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        images = data.get("images") or data.get("data") or []
+        if not images:
             return []
-        if getattr(data, "url", None):
-            async with httpx.AsyncClient(timeout=60.0) as c:
-                r = await c.get(data.url)
-                r.raise_for_status()
-            rel = _save_local(r.content, provider="siliconflow", image_type=image_type)
-            return [f"medcomm-image://{rel}"]
-        if getattr(data, "b64_json", None):
-            import base64
-            raw = base64.b64decode(data.b64_json)
-            rel = _save_local(raw, provider="siliconflow", image_type=image_type)
-            return [f"medcomm-image://{rel}"]
-    except Exception:
+        url = images[0].get("url", "")
+        if not url:
+            return []
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+        rel = _save_local(r.content, provider="siliconflow", image_type=image_type)
+        return [f"medcomm-image://{rel}"]
+    except Exception as exc:
+        _log.warning("SiliconFlow 生成失败: %s", exc)
         return []
-    return []
 
 
 _mj_semaphore = asyncio.Semaphore(2)
@@ -547,12 +699,16 @@ async def generate_image(
             return True
         return _comfy_skip_for_mode(m, comfy_overrides)
 
+    skip_gpt_image = not _gpt_image_available()
     skip_openai = not os.environ.get("OPENAI_API_KEY")
     skip_mj = not os.environ.get("MIDJOURNEY_PROXY_URL")
     skip_wanx = not os.environ.get("DASHSCOPE_API_KEY")
     skip_sf = not os.environ.get("SILICONFLOW_API_KEY")
     skip_wenxin = not (os.environ.get("ERNIE_IMAGE_API_KEY") or os.environ.get("BAIDU_API_KEY"))
     skip_comfy = _comfy_provider_skip()
+
+    async def gpt_image_fn(_iter_s: int) -> list[str]:
+        return await _gpt_image(base_pos, style, width, height, it)
 
     async def openai_fn(_iter_s: int) -> list[str]:
         return await _dalle3(api_merged, style, width, height, it)
@@ -595,6 +751,7 @@ async def generate_image(
         return await _pollinations(api_merged, it)
 
     ordered: list[tuple[str, object, bool]] = [
+        ("gpt_image", gpt_image_fn, skip_gpt_image),
         ("comfyui", comfy_fn, skip_comfy),
         ("midjourney", midjourney_fn, skip_mj),
         ("openai", openai_fn, skip_openai),
@@ -614,9 +771,9 @@ async def generate_image(
     elif pref in ("auto", "") and it:
         from app.services.imagegen.image_types import is_structured_type
         if is_structured_type(it):
-            _log.info("图像类型 %s 为结构化类型，优先使用 Midjourney/DALL·E 3", it)
+            _log.info("图像类型 %s 为结构化类型，优先使用 GPT Image/Midjourney", it)
             ordered = sorted(ordered, key=lambda p: (
-                0 if p[0] == "midjourney" else 1 if p[0] == "openai" else 2 if p[0] == "comfyui" else 1
+                0 if p[0] == "gpt_image" else 1 if p[0] == "midjourney" else 2 if p[0] == "openai" else 3 if p[0] == "comfyui" else 2
             ))
 
     winning_fn = None
@@ -651,7 +808,7 @@ async def generate_image(
             if urls:
                 winning_fn = fn
                 meta["provider"] = name
-                primary_names = {"comfyui", "midjourney"}
+                primary_names = {"gpt_image", "comfyui", "midjourney"}
                 if pref and pref not in ("auto", ""):
                     primary_names.add(pref)
                 is_fb = name not in primary_names

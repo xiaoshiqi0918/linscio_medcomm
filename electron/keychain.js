@@ -15,6 +15,7 @@
  * "LinScio MedComm - Keys" / qiniu_maas     → 七牛 MaaS API Key
  * "LinScio MedComm - Keys" / pollinations   → Pollinations API Key
  * "LinScio MedComm - Keys" / comfy_cloud    → Comfy Cloud API Key（platform.comfy.org）
+ * "LinScio MedComm - Keys" / gpt_image      → GPT Image API Key（gpt-image-2-plus 等）
  * "LinScio MedComm - Keys" / deepl          → DeepL 翻译 API Key
  * "LinScio MedComm - Keys" / google_translate → Google Cloud Translation API Key
  * "LinScio MedComm - Keys" / azure_translate  → Azure Translator API Key
@@ -50,6 +51,7 @@ const ACCOUNT_TO_ENV = {
   anthropic: 'ANTHROPIC_API_KEY',
   pollinations: 'POLLINATIONS_API_KEY',
   comfy_cloud: 'COMFY_CLOUD_API_KEY',
+  gpt_image: 'GPT_IMAGE_API_KEY',
   deepl: 'DEEPL_API_KEY',
   google_translate: 'GOOGLE_TRANSLATE_API_KEY',
   azure_translate: 'AZURE_TRANSLATE_KEY',

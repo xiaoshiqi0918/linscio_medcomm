@@ -174,6 +174,16 @@ function createWindow() {
     })
     mainWindow.loadURL(viteDevUrl)
   } else if (fs.existsSync(rendererIndex)) {
+    // 检测构建产物是否使用了正确的相对路径（兜底诊断）
+    try {
+      const html = fs.readFileSync(rendererIndex, 'utf-8')
+      if (/src="\/assets\//.test(html) || /href="\/assets\//.test(html)) {
+        console.error(
+          '[MedComm] ⚠ dist/index.html 中检测到绝对路径 /assets/…，file:// 协议下会导致白屏！'
+          + ' 请使用 VITE_IS_ELECTRON=1 vite build 重新构建，或确认 vite.config.ts base 为 "./"。'
+        )
+      }
+    } catch { /* ignore read error in asar */ }
     mainWindow.loadFile(rendererIndex)
   } else {
     dialog.showErrorBox(
@@ -186,6 +196,68 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.webContents.openDevTools()
+  }
+
+  // 生产模式：F12 / Ctrl+Shift+I 打开 DevTools，便于用户排查白屏等问题
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    const isDevToolsShortcut =
+      input.key === 'F12' ||
+      (input.control && input.shift && input.key.toLowerCase() === 'i') ||
+      (input.meta && input.alt && input.key.toLowerCase() === 'i')
+    if (isDevToolsShortcut && input.type === 'keyDown') {
+      mainWindow.webContents.toggleDevTools()
+    }
+  })
+
+  // 渲染进程加载失败（网络/文件读取错误等）
+  mainWindow.webContents.on('did-fail-load', (_e, errorCode, errorDesc, validatedURL) => {
+    console.error(`[MedComm] Renderer did-fail-load: code=${errorCode} desc="${errorDesc}" url=${validatedURL}`)
+    if (!useViteDevServer && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.loadURL(
+        `data:text/html;charset=utf-8,${encodeURIComponent(
+          `<h2 style="font-family:system-ui;padding:40px">页面加载失败</h2>`
+          + `<p>错误码: ${errorCode}</p><p>${errorDesc}</p>`
+          + `<p>URL: ${validatedURL}</p>`
+          + `<p style="color:#888">按 F12 打开开发者工具查看详情，或重启应用重试。</p>`
+        )}`
+      )
+    }
+  })
+
+  // 渲染进程崩溃
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[MedComm] Render process gone:', details.reason, details.exitCode)
+    dialog.showErrorBox(
+      '渲染进程异常退出',
+      `原因: ${details.reason}\n退出码: ${details.exitCode}\n\n请重启应用。如问题持续，请按 F12 打开开发者工具后截图反馈。`
+    )
+  })
+
+  // 页面无响应检测
+  mainWindow.webContents.on('unresponsive', () => {
+    console.warn('[MedComm] Renderer unresponsive')
+    dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      title: '页面无响应',
+      message: '应用似乎未响应，是否等待？',
+      buttons: ['继续等待', '重新加载'],
+      defaultId: 0,
+    }).then(({ response }) => {
+      if (response === 1 && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.reload()
+      }
+    })
+  })
+  mainWindow.webContents.on('responsive', () => {
+    console.log('[MedComm] Renderer responsive again')
+  })
+
+  // 转发渲染进程 console 日志到主进程（生产模式下无 DevTools 时可从命令行看到）
+  if (!isDev) {
+    mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+      const tag = ['VERBOSE', 'INFO', 'WARN', 'ERROR'][level] || 'LOG'
+      console.log(`[Renderer:${tag}] ${message} (${sourceId}:${line})`)
+    })
   }
 
   mainWindow.once('ready-to-show', async () => {

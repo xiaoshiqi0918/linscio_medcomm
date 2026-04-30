@@ -17,6 +17,7 @@ export const FORMAT_NAMES: Record<string, string> = {
   patient_handbook: '患者教育手册',
   quiz_article: '自测科普',
   h5_outline: 'H5 互动大纲',
+  contest_article: '参赛图文科普',
 }
 
 export const PLATFORM_NAMES: Record<string, string> = {
@@ -27,6 +28,7 @@ export const PLATFORM_NAMES: Record<string, string> = {
   journal: '科普期刊',
   offline: '线下印刷',
   universal: '通用',
+  contest: '参赛投稿',
 }
 
 export function formatLabel(formatId: string): string {

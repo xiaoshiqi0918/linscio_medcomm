@@ -102,6 +102,11 @@ class Settings:
     deepseek_api_key: str = os.environ.get("DEEPSEEK_API_KEY", "")
     deepseek_base_url: str = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
+    # ── GPT Image（独立于文本 LLM，可用不同 API 代理）────────
+    gpt_image_api_key: str = os.environ.get("GPT_IMAGE_API_KEY", "")
+    gpt_image_base_url: str = os.environ.get("GPT_IMAGE_BASE_URL", "")
+    gpt_image_model: str = os.environ.get("GPT_IMAGE_MODEL", "gpt-image-2-plus")
+
     # ── 积分业务 ─────────────────────────────────────────────
     new_user_gift_credits: int = 3
     gift_credits_validity_days: int = 30

@@ -7,6 +7,7 @@
   Part 3   — 写作任务（文章元信息 + 前序章节 + 任务指令 + 回指）
 """
 import json
+import re
 from typing import Optional
 from app.services.enhancement.rag_retriever import RAGRetriever
 from app.services.enhancement.example_retriever import ExampleRetriever
@@ -15,6 +16,7 @@ from app.agents.prompts.loader import load_task_guideline, load_comic_guideline,
 from app.services.format_router import (
     FORMAT_NAMES,
     SECTION_TITLES,
+    SECTION_TYPES_BY_FORMAT,
     PLATFORM_NAMES,
     AUDIENCE_NAMES,
     SPECIALTY_NAMES,
@@ -479,6 +481,121 @@ def _build_knowledge_section(knowledge_chunks: list[dict]) -> str:
 {chunks_text}"""
 
 
+_SENT_SPLIT_RE = re.compile(r'[。！？!?…]+')
+_ORAL_WORDS = {"其实", "就是说", "你看", "对吧", "嘛", "啊", "呢", "吧", "咱们", "咱", "我觉得", "说白了", "简单说", "讲真", "说实话", "搞不好", "折腾", "整"}
+_FORMAL_WORDS = {"因此", "综上", "此外", "然而", "鉴于", "表明", "提示", "值得注意的是", "研究显示", "临床实践中"}
+
+
+def _extract_style_fingerprint(text: str) -> str:
+    """从范例全文中提取写作特征谱（纯文本分析，不调 LLM）"""
+    if not text or len(text) < 50:
+        return ""
+    lines: list[str] = []
+
+    sentences = [s.strip() for s in _SENT_SPLIT_RE.split(text) if s.strip() and len(s.strip()) >= 2]
+    if not sentences:
+        return ""
+
+    # ── 1. 句长分布 ──
+    lens = [len(s) for s in sentences]
+    total = len(lens)
+    short = sum(1 for l in lens if l <= 12)
+    mid = sum(1 for l in lens if 13 <= l <= 35)
+    long = sum(1 for l in lens if l > 35)
+    avg = sum(lens) / total
+    lines.append(
+        f"句长分布：短句(≤12字){short*100//total}% / 中句(13-35字){mid*100//total}% / "
+        f"长句(>35字){long*100//total}%，平均句长{avg:.0f}字"
+    )
+
+    # ── 2. 标点节奏 ──
+    char_count = len(text)
+    q_count = text.count("？") + text.count("?")
+    excl_count = text.count("！") + text.count("!")
+    dash_count = text.count("——")
+    colon_count = text.count("：") + text.count(":")
+    ellipsis_count = text.count("……") + text.count("...")
+    punct_parts = []
+    if q_count:
+        punct_parts.append(f"问句约每{char_count // max(q_count, 1)}字出现1次")
+    if excl_count:
+        punct_parts.append(f"感叹句{excl_count}处")
+    if dash_count:
+        punct_parts.append(f"破折号{dash_count}处（用于解释性插入）")
+    if colon_count:
+        punct_parts.append(f"冒号{colon_count}处（引出要点）")
+    if ellipsis_count:
+        punct_parts.append(f"省略号{ellipsis_count}处")
+    if punct_parts:
+        lines.append("标点节奏：" + "，".join(punct_parts))
+
+    # ── 3. 段落呼吸 ──
+    paras = [p.strip() for p in text.split("\n") if p.strip() and not p.strip().startswith("#")]
+    if paras:
+        para_lens = [len(p) for p in paras]
+        short_p = sum(1 for l in para_lens if l <= 60)
+        mid_p = sum(1 for l in para_lens if 61 <= l <= 200)
+        long_p = sum(1 for l in para_lens if l > 200)
+        tp = len(para_lens)
+        lines.append(
+            f"段落呼吸：共{tp}段，短段(≤60字){short_p}段 / 中段(61-200字){mid_p}段 / "
+            f"长段(>200字){long_p}段"
+        )
+
+    # ── 4. 开篇手法 ──
+    first_para = paras[0] if paras else ""
+    if first_para:
+        snippet = first_para[:120] + ("…" if len(first_para) > 120 else "")
+        opener_type = "叙事场景" if any(w in first_para[:80] for w in ("门诊", "患者", "上周", "前几天", "她", "他", "老王", "张")) \
+            else "提问切入" if "？" in first_para[:80] or "?" in first_para[:80] \
+            else "数据引入" if any(c.isdigit() for c in first_para[:60]) \
+            else "直述主题"
+        lines.append(f"开篇手法：{opener_type} → 「{snippet}」")
+
+    # ── 5. 术语处理 ──
+    bracket_count = len(re.findall(r'[（(][^）)]{1,20}[）)]', text))
+    analogy_count = len(re.findall(r'(?:就像|好比|相当于|类似于|好像|仿佛|如同)', text))
+    term_parts = []
+    if bracket_count:
+        term_parts.append(f"括号注释{bracket_count}处")
+    if analogy_count:
+        term_parts.append(f"类比解释{analogy_count}处")
+    if term_parts:
+        lines.append("术语科普化：" + "，".join(term_parts))
+
+    # ── 6. 口语化程度 ──
+    oral_hits = sum(1 for w in _ORAL_WORDS if w in text)
+    formal_hits = sum(1 for w in _FORMAL_WORDS if w in text)
+    if oral_hits + formal_hits > 0:
+        ratio = oral_hits / (oral_hits + formal_hits)
+        level = "强口语风" if ratio > 0.7 else "口语为主、偶有书面" if ratio > 0.4 else "书面为主、偶有口语" if ratio > 0.15 else "偏书面严谨"
+        lines.append(f"口语化程度：{level}")
+
+    return "\n".join(lines)
+
+
+def _example_snippet(text: str, max_chars: int = 300) -> str:
+    """提取范例的首段+尾段摘要，总长不超过 max_chars"""
+    if not text:
+        return ""
+    paras = [p.strip() for p in text.split("\n") if p.strip() and not p.strip().startswith("#")]
+    if not paras:
+        return text[:max_chars]
+    first = paras[0]
+    last = paras[-1] if len(paras) > 1 else ""
+    if len(first) + len(last) <= max_chars:
+        if last and last != first:
+            return f"{first}\n[…中间省略…]\n{last}"
+        return first
+    if len(first) > max_chars // 2:
+        first = first[:max_chars // 2] + "…"
+    remaining = max_chars - len(first) - 20
+    if last and remaining > 30:
+        last = last[:remaining] + ("…" if len(last) > remaining else "")
+        return f"{first}\n[…中间省略…]\n{last}"
+    return first
+
+
 def _format_example_type_header(e: dict, content_format: str) -> str:
     parts = [
         FORMAT_NAMES.get(content_format, content_format),
@@ -492,6 +609,7 @@ def _format_example_type_header(e: dict, content_format: str) -> str:
 
 
 def _build_single_example(e: dict, content_format: str) -> str:
+    """将范例转为「模式卡片」：特征谱 + 分析/摘要，不再注入全文"""
     header = _format_example_type_header(e, content_format)
     analysis = (e.get("analysis_text") or "").strip()
 
@@ -505,12 +623,20 @@ def _build_single_example(e: dict, content_format: str) -> str:
                 body = e.get("content", e.get("content_text", ""))
         else:
             body = e.get("content", e.get("content_text", ""))
-    else:
-        body = e.get("content", e.get("content_text", ""))
+        return f"{header}\n\n---\n\n{body}" + (f"\n\n【分析】\n{analysis}" if analysis else "")
 
-    blocks = [f"{header}\n\n---\n\n{body}"]
+    body = e.get("content", e.get("content_text", ""))
+    fingerprint = _extract_style_fingerprint(body)
+
+    blocks = [header]
+    if fingerprint:
+        blocks.append(f"〖写作特征谱〗\n{fingerprint}")
     if analysis:
-        blocks.append(f"【分析】\n{analysis}")
+        blocks.append(f"〖编辑点评〗\n{analysis}")
+    else:
+        snippet = _example_snippet(body, max_chars=300)
+        if snippet:
+            blocks.append(f"〖首尾摘要〗（仅供感受行文节奏，禁止复制原文措辞）\n{snippet}")
     return "\n\n".join(blocks)
 
 
@@ -519,10 +645,23 @@ def _build_example_section(examples: list[dict], section_type: str, content_form
         return ""
     examples_text = "\n\n---\n\n".join(
         _build_single_example(e, e.get("content_format", content_format))
-        for i, e in enumerate(examples[:2])
+        for i, e in enumerate(examples[:3])
     )
-    return f"""〔风格示例〕
-参考以下示例的语言风格、结构方式和表达技巧：
+    return f"""〔写作风格参考〕
+以下是从优秀范例中提炼的**写作特征谱**，代表目标写作水准。
+请从以下六个维度内化这些模式，并在写作中自然复现：
+
+① 句长节奏 — 模仿范例的长短句交替比例，避免全篇一律的句长
+② 标点呼吸 — 学习问号、感叹号、破折号的穿插频率，营造阅读节奏
+③ 段落编排 — 遵循范例的段落长短搭配，短段提神、长段铺陈
+④ 开篇手法 — 参考范例的起笔方式（场景、提问、数据、直述）
+⑤ 术语科普 — 延续范例中括号注释和类比解释的密度与手法
+⑥ 口语化程度 — 保持与范例一致的书面/口语比例
+
+⚠ 禁止事项：
+  - 禁止复制范例中任何具体措辞、口头禅或特色互动语（如"敲黑板""有请主角""划重点"等）
+  - 禁止照搬范例的具体举例和案例故事
+  - 你只学模式（HOW），不搬内容（WHAT）
 
 {examples_text}"""
 
@@ -1107,6 +1246,32 @@ Q&A 去重要求：正文已阐述的知识点不得再次解释；问题须是�
 3. 不提前泄露：背景和方法部分不透露结果，结果部分不讨论局限
 4. 证据强度一致：对同一发现的因果/相关性判断前后统一"""
 
+    if content_format == "contest_article":
+        return f"""## 前序章节内容与衔接规则
+
+【前序章节】
+以下是本文已生成的前序章节内容，按生成顺序排列：
+
+{prior_sections_context}
+
+【衔接规则（按条自检，任一违反须重写）】
+
+D1. 职责拆分：上文已完成的任务（导言铺垫 / 各知识点 / 误区 / 建议）本节不得重写。本节只认领"当前章节标题"对应的一件事。
+
+D2. 禁止"独立成篇"：不要像新发一篇文章一样从定义讲到建议；只允许在上文留下的信息缺口上往前推进一步。
+
+D3. 禁止换皮重复：前文出现过的类比、顺口溜、统计数据、小节套路，本节禁止再用。术语本身可以沿用，但定义不复述。
+
+D4. 首句衔接（首节除外）：本节开头第一句必须承接上文的某个信息或留下的问题。
+   裁决：承接的是"信息或问题"，不是"句式或开头模板"。
+   ✓ 承接具体信息，如"上文提到血糖在餐后两小时达峰，但很多人不知道这个峰值受饮食结构的强烈影响。"
+   ✗ "正如上文所说……"（套路句式，不算承接）
+   ✗ "另一个值得关注的问题是……"（万能开头，未承接具体信息）
+
+D5. 篇幅纪律：严格遵守系统给出的"本节目标字数"，宁短勿凑。如本节内容自然写完后未达字数，不要靠重复前文或加套话凑字数——直接收尾，由系统决定是否需要扩写。
+
+D6. 风格延续：保持与前序章节的语气、用词、术语称呼一致。例如前文称"高血压患者"，本节不要改称"血压偏高的朋友们"。"""
+
     if content_format == "article":
         _is_metadata_format = prior_sections_context.startswith("## 前文已建立的内容")
         if _is_metadata_format:
@@ -1158,6 +1323,7 @@ _CONTENT_FORMAT_TO_ARTICLE_TYPE: dict[str, tuple[str, str]] = {
     "quiz_article": ("其他", "自定义"),
     "h5_outline": ("其他", "自定义"),
     "patient_handbook": ("患者教育手册", "患者手册模板"),
+    "contest_article": ("医学科普征稿", "参赛图文模板"),
 }
 
 _AUDIENCE_TO_KNOWLEDGE_LEVEL: dict[str, str] = {
@@ -1193,6 +1359,15 @@ _TEMPLATE_SECTION_MAPPING: dict[str, dict[str, str]] = {
         "correct_practice": "正确做法（可操作建议 + 就医信号 + 权威参考）",
         "anti_fraud": "防骗指南（3条通用谣言辨别方法）",
     },
+    "contest_article": {
+        "intro": "导言（场景引入 + 点题，不展开全套知识）",
+        "knowledge_1": "知识点一（单点深入，一个子主题）",
+        "knowledge_2": "知识点二（与上文不同的子主题）",
+        "knowledge_3": "知识点三（再一层递进）",
+        "misconception": "常见误区（纠正型）",
+        "advice": "实用建议（清单式可执行）",
+        "conclusion": "总结（收束+行动提示，不重复前文讲解）",
+    },
 }
 
 
@@ -1222,6 +1397,36 @@ _SECTION_RESPONSIBILITIES: dict[str, dict[str, tuple[str, str]]] = {
             "不重复正文讲解、不展开新概念、不写升华段",
         ),
     },
+    "contest_article": {
+        "intro": (
+            "用场景或具体疑问引入主题；说明此文要解决什么认知问题即可",
+            "不讲解完整机制、不罗列三个知识点、不用小结式排比",
+        ),
+        "knowledge_1": (
+            "只写第1个独立子主题（现象/概念/机制之一），可配一个极简例子",
+            "不复述导言、不覆盖知识点2/3的内容、不写成可单独发表的完整科普",
+        ),
+        "knowledge_2": (
+            "只写第2个子主题，与知识点一角度或层次不同，形成递进",
+            "不重复知识点一的定义、例证与句式；不写误区与长篇建议（留给后文）",
+        ),
+        "knowledge_3": (
+            "只写第3个子主题或为后文误区做必要铺垫（仍保持一块一事）",
+            "不与前两节同属一块知识换说法；不写误区纠正与清单（留给 misconception/advice）",
+        ),
+        "misconception": (
+            "集中写读者常见误解 + 为什么是错的 + 正确理解一句落地",
+            "不新开大段机制教学；不复制前三节的核心段落",
+        ),
+        "advice": (
+            "3-5条可执行的行动提示（监测/作息/就医指征层级），条目化",
+            "不再从零解释疾病机制；不简单重复前几节段落",
+        ),
+        "conclusion": (
+            "3-5句收束全文：一条核心 takeaway + 行动提醒 +（可选）就医边界",
+            "不引入新论据、新概念、新数据；不用半篇篇幅复述前文",
+        ),
+    },
 }
 
 
@@ -1244,7 +1449,7 @@ def _build_section_word_and_responsibility(
 
     _PLATFORM_DEFAULT_WC = {
         "wechat": 1200, "xiaohongshu": 800, "douyin": 300,
-        "journal": 3000, "offline": 2000,
+        "journal": 3000, "offline": 2000, "contest": 2500,
     }
     effective_wc = target_word_count or _PLATFORM_DEFAULT_WC.get(platform, 1500)
 
@@ -1297,6 +1502,38 @@ def _build_article_meta_block(
     knowledge_level = _AUDIENCE_TO_KNOWLEDGE_LEVEL.get(target_audience, "无医学背景")
     resolved_tone = tone or _AUDIENCE_TO_TONE.get(target_audience, "亲和平易")
 
+    # contest_article 使用精简元信息（v2.0），职责边界由 task_prompt 提供
+    if content_format == "contest_article":
+        from app.agents.prompts.task_prompts import _section_word_target, _PLATFORM_DEFAULT_WORD_COUNT
+        _state = {
+            "content_format": content_format,
+            "section_type": section_type,
+            "target_word_count": target_word_count,
+            "platform": platform,
+            "skip_sections": skip_sections or [],
+        }
+        section_wt = _section_word_target(_state)
+        effective_wc = target_word_count or _PLATFORM_DEFAULT_WORD_COUNT.get(platform, 1000)
+        section_types = SECTION_TYPES_BY_FORMAT.get(content_format, [])
+        section_index = section_types.index(section_type) + 1 if section_type in section_types else 1
+        section_total = len(section_types)
+        wc_line = section_wt if section_wt else f"{effective_wc}"
+        return f"""## 文章基本信息
+
+- 文章类型：医学科普征稿（参赛图文）
+- 主题/选题：{topic}
+- 发布平台：{platform_name}
+- ⚠ 全文总字数硬上限：{effective_wc} 字（全部 {section_total} 个章节合计，绝对不可超出）
+- 当前章节：{section_name}（第 {section_index}/{section_total} 节）
+- ⚠ 本节字数预算：{wc_line}（硬约束，写完即止，宁短勿长）
+- 语气风格：{resolved_tone}
+- 阅读难度：适中（普通成人可理解）
+
+### 字数纪律（最高优先级）
+本节是全文 {section_total} 个章节之一，你的预算只有 {wc_line}。
+写完核心信息后立即收尾，不要铺陈、不要重复、不要凑字数。
+超出预算的内容将被截断。"""
+
     wc_and_resp = _build_section_word_and_responsibility(
         content_format, section_type, target_word_count, platform, skip_sections,
     )
@@ -1316,6 +1553,78 @@ def _build_article_meta_block(
 - 语气风格：{resolved_tone}
 - 阅读难度：{_READING_LEVEL_LABELS.get(reading_level or "normal", reading_level or "适中")}
 - 发布平台：{platform_name}"""
+
+
+def _build_contest_constraints_block(constraints: dict) -> str:
+    """将赛制约束注入 Part 3，包含硬约束、AI 披露处理、优先级裁决。"""
+    _AI_DISC = {"required": "强制", "recommended": "建议", "none": "无说明"}
+    _get = constraints.get
+
+    contest_name = _get("contest_name", "未指定赛事")
+    pack_version = _get("contest_pack_version", "-")
+    pack_updated = _get("contest_pack_updated_at", "-")
+    contest_source = _get("contest_source", "公开赛事通知")
+
+    ai_level = _AI_DISC.get(_get("ai_disclosure", "none"), _get("ai_disclosure", "无说明"))
+    wc_scope = _get("wc_scope", "含标题与图注")
+
+    lines = [
+        f"## 赛制约束（投稿要求，优先级见末尾）",
+        f"",
+        f"本文将提交至「{contest_name}」（赛制包版本：{pack_version}，最后更新：{pack_updated}）。",
+        f"",
+        f"【硬约束】",
+    ]
+
+    _HARD_FIELDS = [
+        ("word_limit", "全文字数上限", lambda v: f"{v} 字（{wc_scope}）"),
+        ("image_count_min", None, None),
+        ("image_count_max", None, None),
+        ("image_format", "配图格式", None),
+        ("image_resolution", "配图分辨率", None),
+        ("file_format", "提交文件格式", None),
+        ("font", "字体要求", lambda v: f"{v}（仅影响导出排版，不影响正文写作）"),
+        ("naming_template", "文件命名规则", None),
+        ("deadline", "截止日期", None),
+    ]
+
+    img_min = _get("image_count_min")
+    img_max = _get("image_count_max")
+    if img_min is not None or img_max is not None:
+        img_range = f"{img_min or '?'} - {img_max or '?'} 张"
+        lines.append(f"- 配图数量：{img_range}")
+
+    for key, label, fmt in _HARD_FIELDS:
+        if key in ("image_count_min", "image_count_max"):
+            continue
+        val = _get(key)
+        if val is None:
+            continue
+        display = fmt(val) if fmt else val
+        lines.append(f"- {label}：{display}")
+
+    for key in constraints:
+        if key not in {f[0] for f in _HARD_FIELDS} | {
+            "contest_name", "contest_pack_version", "contest_pack_updated_at",
+            "contest_source", "ai_disclosure", "wc_scope",
+        }:
+            lines.append(f"- {key}：{constraints[key]}")
+
+    lines += [
+        f"",
+        f"【AI 使用披露】",
+        f"该赛事的 AI 披露要求等级：{ai_level}",
+        f'处理方式：声明文本由系统在导出时统一插入，正文中**不要**自行书写"本文使用了 AI 辅助"等声明语句。',
+        f"",
+        f"【优先级裁决】",
+        f"本块约束的优先级：",
+        f"- 高于：Layer 0 输出格式（R12-R14）、风格偏好",
+        f"- 低于：Layer 0 安全红线（R7-R11）、事实准确（R1-R6）、Layer 1 身份匿名（C1-C2）",
+        f"",
+        f"【责任边界提示】",
+        f"本赛制包整理自{contest_source}，请在投递前对照官方最新通知核对。如赛事方临时调整规则，以官方通知为准。",
+    ]
+    return "\n".join(lines)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1342,6 +1651,7 @@ async def build_enhanced_prompt(
     tone: str | None = None,
     reading_level: str | None = None,
     skip_sections: list[str] | None = None,
+    contest_constraints: dict | None = None,
 ) -> tuple[str, dict]:
     """
     四层 Prompt 架构 — User Message 装配（Part 1 + Part 2 + Part 3）。
@@ -1383,7 +1693,8 @@ async def build_enhanced_prompt(
             target_audience=target_audience,
             platform=platform,
             specialty=specialty or None,
-            top_k=2,
+            topic=topic or None,
+            top_k=3,
         )
 
     # ── 术语 ──
@@ -1415,7 +1726,8 @@ async def build_enhanced_prompt(
                         "drama_plan", "cast_table", "finale", "filming_notes",
                         "anim_plan", "char_design", "prod_notes",
                         "handbook_plan", "cover", "back_cover", "faq"}
-    is_light = section_type in _LIGHT_SECTIONS
+    # 参赛图文每节预算极小（100-250字），使用精简 Part 1 避免写作规则喧宾夺主
+    is_light = section_type in _LIGHT_SECTIONS or content_format == "contest_article"
 
     from app.agents.prompts.audiences import resolve_writing_style
     _style = resolve_writing_style(platform, target_audience)
@@ -1428,7 +1740,14 @@ async def build_enhanced_prompt(
     )
     rhythm_rules = _PARAGRAPH_RHYTHM_RULES.format(style_rules=_style_rules_text)
 
-    if is_light:
+    if is_light and content_format == "contest_article":
+        p1_parts = list(filter(None, [
+            _LANGUAGE_TRANSFORM_RULES,
+            _build_example_section(examples, section_type, content_format),
+            personal_section,
+            _load_writing_guideline(content_format, section_type),
+        ]))
+    elif is_light:
         p1_parts = list(filter(None, [
             _LANGUAGE_TRANSFORM_RULES,
             rhythm_rules,
@@ -1470,7 +1789,8 @@ async def build_enhanced_prompt(
 
     _READER_FACING_P2 = {"article", "qa_article", "debunk", "story", "research_read",
                          "comic_strip", "card_series", "poster", "picture_book", "long_image",
-                         "oral_script", "drama_script", "storyboard", "patient_handbook"}
+                         "oral_script", "drama_script", "storyboard", "patient_handbook",
+                         "contest_article"}
     _is_reader_p2 = content_format in _READER_FACING_P2
 
     if p2_parts:
@@ -1533,7 +1853,9 @@ async def build_enhanced_prompt(
     )
     prior_block = _build_prior_sections_block(prior_sections_context, section_type, content_format)
 
-    p3_parts = list(filter(None, [meta_block, prior_block, base_prompt]))
+    contest_block = _build_contest_constraints_block(contest_constraints) if contest_constraints else None
+
+    p3_parts = list(filter(None, [meta_block, contest_block, prior_block, base_prompt]))
 
     _READER_FACING_FORMATS = {
         "article", "qa_article", "debunk", "story", "research_read",

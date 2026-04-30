@@ -347,6 +347,7 @@
         <el-button type="warning" :loading="aiFilterLoading" :disabled="!aiFilterTopic.trim() || !externalResults.length || (aiFilterCostHint?.sufficient === false)" @click="doAiFilter">
           {{ aiFilterLoading ? 'AI 筛选中...' : 'AI 智能筛选' }}
         </el-button>
+        <ProviderHint workflow="literature" />
         <span v-if="aiFilterCostHint && aiFilterCostHint.cost > 0" class="ai-filter-cost-hint">
           <el-tag v-if="aiFilterCostHint.sufficient" size="small" effect="plain">预计消耗 {{ aiFilterCostHint.cost }} 积分</el-tag>
           <el-tag v-else size="small" type="danger" effect="plain">积分不足（需 {{ aiFilterCostHint.cost }} 积分）</el-tag>
@@ -601,6 +602,7 @@ import { ArrowDown } from '@element-plus/icons-vue'
 import { api, API_BASE, getAuthToken, getLocalApiKeyHeaderForFetch } from '@/api'
 import { AUTH_USER_CHANGED_EVENT } from '@/stores/auth'
 import { useAuthGuard } from '@/composables/useAuthGuard'
+import ProviderHint from '@/components/common/ProviderHint.vue'
 
 function parseAuthors(v: any): any[] {
   if (Array.isArray(v)) return v

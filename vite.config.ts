@@ -5,8 +5,13 @@ import { readFileSync } from 'fs'
 
 const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8'))
 
-/** Electron 包内资源用相对 base；Web 用 /。勿再用「是否设置 VITE_API_BASE」判断，否则同域部署 VITE_API_BASE="" 会被误判为 Electron。 */
-const isElectronBuild = process.env.VITE_IS_ELECTRON === '1'
+/**
+ * 统一使用 './' 相对路径作为 base：
+ * - Electron 必须用 './'，否则 file:// 协议下绝对路径 /assets/xxx 会解析为 file:///assets/xxx 导致白屏
+ * - Web 部署从根目录提供时 './' 与 '/' 等价
+ * - 若 Web 需部署在子目录（如 /app/），可通过 VITE_BASE_PATH 显式指定
+ */
+const basePath = process.env.VITE_BASE_PATH || './'
 
 export default defineConfig({
   plugins: [vue()],
@@ -14,7 +19,7 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
   root: 'frontend',
-  base: isElectronBuild ? './' : '/',
+  base: basePath,
   build: {
     outDir: '../dist',
     emptyOutDir: true,

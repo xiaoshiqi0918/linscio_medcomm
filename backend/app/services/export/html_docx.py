@@ -29,6 +29,65 @@ def _strip_reference_nodes(nodes: list[dict]) -> list[dict]:
     return nodes
 
 
+def _embed_image_or_placeholder(doc, src: str, alt: str) -> None:
+    """Try to embed an image from local path; fall back to text placeholder."""
+    import os
+    from docx.shared import Inches
+
+    if src and os.path.isfile(src):
+        try:
+            p = doc.add_paragraph()
+            p.alignment = 1  # center
+            run = p.add_run()
+            run.add_picture(src, width=Inches(5.0))
+            if alt:
+                cap = doc.add_paragraph(alt)
+                cap.alignment = 1
+                for r in cap.runs:
+                    r.font.size = __import__('docx.shared', fromlist=['Pt']).Pt(9)
+            return
+        except Exception:
+            pass
+    doc.add_paragraph(f"[图片：{alt}]")
+
+
+def embed_image_slot_in_docx(
+    doc,
+    image_path: str | None,
+    intent_text: str,
+    image_status: str,
+    layout_preference: str | None = None,
+) -> None:
+    """Embed a contest image slot into a DOCX document."""
+    import os
+    from docx.shared import Inches, Pt
+
+    if image_path and os.path.isfile(image_path):
+        try:
+            p = doc.add_paragraph()
+            p.alignment = 1
+            run = p.add_run()
+            width = Inches(5.0)
+            if layout_preference == "crop_fill":
+                width = Inches(6.0)
+            elif layout_preference == "letterbox":
+                width = Inches(4.5)
+            run.add_picture(image_path, width=width)
+            if intent_text:
+                cap = doc.add_paragraph(intent_text)
+                cap.alignment = 1
+                for r in cap.runs:
+                    r.font.size = Pt(9)
+            return
+        except Exception:
+            pass
+
+    status_label = "已上传" if image_status == "uploaded" else "待配图"
+    p = doc.add_paragraph(f"[配图·{status_label}] {intent_text}")
+    for r in p.runs:
+        r.font.color.rgb = __import__('docx.shared', fromlist=['RGBColor']).RGBColor(0x99, 0x99, 0x99)
+
+
 def _add_inline_content(paragraph, nodes: list[dict] | None) -> None:
     """段落内：text（含 marks）、hardBreak。"""
     if not nodes:
@@ -134,7 +193,8 @@ def _tiptap_nodes_to_docx(doc, nodes: list[dict]) -> None:
 
         elif ntype == "image":
             alt = (node.get("attrs") or {}).get("alt") or "图片"
-            doc.add_paragraph(f"[图片：{alt}]")
+            src = (node.get("attrs") or {}).get("src") or ""
+            _embed_image_or_placeholder(doc, src, alt)
 
         else:
             inner = node.get("content")
@@ -364,18 +424,78 @@ h1 {{ font-size: 1.5em; }}
 </html>"""
 
 
-def to_docx(article, parts: list[tuple[str, str]]) -> tuple[bytes, str]:
-    """纯文本兜底方案"""
+def to_docx(
+    article,
+    parts: list[tuple[str, str]],
+    font_config: dict | None = None,
+    image_slots: dict | None = None,
+    section_id_to_type: dict | None = None,
+    layout_preference: str | None = None,
+) -> tuple[bytes, str]:
+    """纯文本兜底方案，可选 font_config, image_slots (section_id -> slot list)"""
     from docx import Document
+    from docx.shared import Pt
+
+    type_to_section_id: dict[str, int] = {}
+    if section_id_to_type:
+        for sid, stype in section_id_to_type.items():
+            type_to_section_id.setdefault(stype, sid)
 
     doc = Document()
     doc.add_heading(article.title or article.topic or "未命名", 0)
-    for title, body in parts:
-        doc.add_heading(title, level=1)
+    for idx, (title, body) in enumerate(parts):
+        if title:
+            doc.add_heading(title, level=1)
         for para in body.split("\n\n"):
-            if para.strip():
-                doc.add_paragraph(para.strip())
+            stripped = para.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("[配图·"):
+                continue
+            doc.add_paragraph(stripped)
+
+        if image_slots:
+            for sid, slots in image_slots.items():
+                for sl in slots:
+                    embed_image_slot_in_docx(
+                        doc,
+                        image_path=getattr(sl, 'image_path', None),
+                        intent_text=getattr(sl, 'intent_text', '') or '',
+                        image_status=getattr(sl, 'image_status', '') or '',
+                        layout_preference=layout_preference,
+                    )
+            image_slots = None
+
+    if font_config:
+        _apply_font_config(doc, font_config)
+
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
     return buf.getvalue(), f"{(article.topic or 'article').replace('/', '-')}.docx"
+
+
+def _apply_font_config(doc: Any, font_config: dict) -> None:
+    """Apply contest font requirements to all body paragraphs in a DOCX document."""
+    from docx.shared import Pt
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+
+    font_name = font_config.get("font_name")
+    pt_size = font_config.get("pt_size")
+    if not font_name and not pt_size:
+        return
+    for para in doc.paragraphs:
+        if para.style and para.style.name and para.style.name.startswith("Heading"):
+            continue
+        for run in para.runs:
+            if font_name:
+                run.font.name = font_name
+                rpr = run._element.get_or_add_rPr()
+                rfonts = rpr.find(qn("w:rFonts"))
+                if rfonts is None:
+                    rfonts = OxmlElement("w:rFonts")
+                    rpr.insert(0, rfonts)
+                rfonts.set(qn("w:eastAsia"), font_name)
+            if pt_size:
+                run.font.size = Pt(pt_size)

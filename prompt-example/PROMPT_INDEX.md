@@ -9,7 +9,7 @@
 
 | 文件 | 代码 |
 |------|------|
-| `layer0/system.txt`（旧：`layer0_system.txt`） | `loader.load_layer0_system` → `system.py` `MEDCOMM_SYSTEM_PROMPT` |
+| `layer0/system.txt`（v2.0 读者向） | `system.py` → `_DEFAULT_SYSTEM_READER_FACING`（读者向版本） |
 | `layer0/writing_sop_core.txt`（旧：根目录同名） | `loader.load_writing_sop` |
 | `part1/writing_sop.txt`（旧：根目录同名） | `loader.load_full_writing_sop_document`（可选接入） |
 
@@ -23,7 +23,8 @@
 | `layer1/visual_anti.txt` | `load_layer1_visual_anti` |
 | `layer1/script_anti.txt` | `load_layer1_script_anti` |
 | `layer1/children_audience_patch.txt` | `load_children_audience_patch` → `audiences.py` |
-| `anti_hallucination.py` 内各形式族常量 | 形式专属规则仍以代码为主，可按需拆到 `layer1/formats/` 并接 loader |
+| `layer1/contest_article_rules.txt` | `anti_hallucination.py` → `_DEFAULT_CONTEST_ARTICLE_RULES`（参赛图文专属 C1-C10） |
+| `anti_hallucination.py` 内各形式族常量 | 其他形式专属规则仍以代码为主，可按需拆到 `layer1/formats/` 并接 loader |
 
 ---
 
@@ -50,6 +51,21 @@
 | `part3/task/platform_config.json` | `load_platform_config` |
 | `part3/format_section.json` | `load_format_section` → `format_section.py` |
 | `part3/format_section_default.txt` | `load_format_section_default` |
+
+### Part 3 — 参赛图文科普（contest_article）
+
+| 文件 | 章节 |
+|------|------|
+| `part3/task/contest_intro.txt` | 导言 |
+| `part3/task/contest_knowledge_1.txt` | 知识点一 |
+| `part3/task/contest_knowledge_2.txt` | 知识点二 |
+| `part3/task/contest_knowledge_3.txt` | 知识点三 |
+| `part3/task/contest_misconception.txt` | 常见误区 |
+| `part3/task/contest_advice.txt` | 实用建议 |
+| `part3/task/contest_conclusion.txt` | 总结 |
+| `part3/contest_prior_sections.txt` | 前序章节衔接规则 |
+| `part3/contest_constraints.txt` | 赛制约束模板 |
+| `imagegen/contest_painting_intent.txt` | 配图画意建议 + 双语 Prompt Schema |
 
 ---
 
@@ -78,7 +94,14 @@
 | 目录 | 代码 |
 |------|------|
 | `verification/*.txt` | `load_verification` |
-| `imagegen/*` | `load_imagegen_*` → `imagegen/prompt_builder.py` |
+| `imagegen/contest_painting_intent.txt` | `prompt_engine.py` → `_SUGGEST_INTENT_SYSTEM_PROMPT`（P1 画意建议 v2.0） |
+| `imagegen/orchestrator_system.txt` | `prompt_engine.py` → `_ORCHESTRATOR_SYSTEM_PROMPT`（P5 LLM 编排器） |
+| `imagegen/negative_library.yaml` | `prompt_engine.py` → `_load_negative_library`（四维分层负向词库 v1.0） |
+| `imagegen/style_presets/sd_tag.yaml` | `prompt_engine.py` → `_load_style_presets("sd_tag.yaml")`（A 族 SD-tag 风格预设） |
+| `imagegen/style_presets/natural_en.yaml` | `prompt_engine.py` → `_load_style_presets("natural_en.yaml")`（B 族英文风格预设） |
+| `imagegen/style_presets/natural_zh.yaml` | `prompt_engine.py` → `_load_style_presets("natural_zh.yaml")`（B 族中文风格预设） |
+| `imagegen/style_presets/gpt_image.yaml` | `prompt_engine.py` → `_load_style_presets("gpt_image.yaml")`（C 族 GPT Image 风格预设） |
+| `imagegen/*`（其他） | `load_imagegen_*` → `imagegen/prompt_builder.py` |
 | `comic/`、`handbook/`、`polish/` | `load_comic_guideline`、`load_handbook_guideline`、`load_polish` |
 
 ---

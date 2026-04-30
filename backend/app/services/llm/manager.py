@@ -196,6 +196,81 @@ SAAS_TASK_ROUTES: dict[str, dict] = {
     },
 }
 
+# ── 工作流分组（SaaS 用户选择 provider 的粒度）─────────────────────
+TASK_TYPE_TO_WORKFLOW: dict[str, str] = {
+    "generation_round1": "writing",
+    "deai_rewrite_round2": "writing",
+    "optimization_round3": "writing",
+    "verification": "writing",
+    "polish": "polish",
+    "literature_analysis_abstract": "literature",
+    "literature_analysis_fulltext": "literature",
+    "literature_filter": "literature",
+    "keyword_generation": "auxiliary",
+    "translation": "translation",
+    "quality_check": "auxiliary",
+    "aigc_detection": "auxiliary",
+}
+
+WORKFLOW_DEFAULTS: dict[str, str] = {
+    "writing": "deepseek",
+    "polish": "deepseek",
+    "literature": "deepseek",
+    "translation": "deepseek",
+    "auxiliary": "deepseek",
+}
+
+WORKFLOW_LABELS: dict[str, str] = {
+    "writing": "文章写作",
+    "polish": "内容润色 / AI 助手",
+    "literature": "文献研究",
+    "translation": "翻译",
+    "auxiliary": "辅助功能",
+}
+
+PROVIDER_LABELS: dict[str, str] = {
+    "deepseek": "DeepSeek",
+    "openai": "OpenAI",
+    "gemini": "Google Gemini",
+    "qwen": "通义千问",
+    "moonshot": "Moonshot / Kimi",
+    "zhipu": "智谱 GLM",
+    "siliconflow": "硅基流动",
+    "qiniu": "七牛 MaaS",
+    "openrouter": "OpenRouter",
+    "anthropic": "Anthropic / Claude",
+}
+
+
+def _get_provider_models_for_tier(provider: str, tier: TaskTier) -> list[str]:
+    """从 PROVIDER_MODEL_TIERS 中按 provider + tier 返回有 key 的模型列表。"""
+    info = PROVIDER_MODEL_TIERS.get(provider)
+    if not info:
+        return []
+    env_key = info.get("env_key", "")
+    if not os.environ.get(env_key, "").strip():
+        return []
+    models = info.get(tier.value, [])
+    return [m for m in models if _model_has_key(m)]
+
+
+def get_available_providers() -> list[dict]:
+    """返回 SaaS 可选项内全部服务商（含中文名），无论是否已配置 API Key。"""
+    out: list[dict] = []
+    for p in SAAS_PROVIDER_PRIORITY:
+        info = PROVIDER_MODEL_TIERS.get(p)
+        if not info:
+            continue
+        env_key = info.get("env_key", "")
+        configured = bool(os.environ.get(env_key, "").strip())
+        out.append({
+            "id": p,
+            "label": PROVIDER_LABELS.get(p, p),
+            "configured": configured,
+        })
+    return out
+
+
 # env_key → provider 名反查表
 _ENV_KEY_TO_PROVIDER: dict[str, str] = {
     v["env_key"]: k for k, v in PROVIDER_MODEL_TIERS.items()
@@ -923,14 +998,51 @@ def should_downgrade_to_budget(user) -> bool:
     return paid <= Decimal("0")
 
 
-def resolve_model_for_saas_task_with_budget(task_type: str, user=None) -> list[str]:
+def resolve_model_for_saas_task_with_budget(
+    task_type: str, user=None, preferred_provider: str | None = None,
+) -> list[str]:
     """与 resolve_model_for_saas_task 相同，但额外检查用户积分类型。
     若用户无充值积分（仅赠送/推广积分），强制使用 deepseek-chat。
+    preferred_provider 允许用户指定首选服务商，其模型排在候选列表最前。
     """
     if user and should_downgrade_to_budget(user):
         if _model_has_key(BUDGET_MODEL):
             return [BUDGET_MODEL]
+
+    prov = preferred_provider
+    if not prov:
+        prov = _get_contextvar_preferred_provider(task_type)
+
+    if prov:
+        tier = (SAAS_TASK_ROUTES.get(task_type) or {}).get(
+            "task_tier", TaskTier.BALANCED
+        )
+        pref_models = _get_provider_models_for_tier(prov, tier)
+        fallbacks = resolve_model_for_saas_task(task_type)
+        if pref_models:
+            return pref_models + [m for m in fallbacks if m not in pref_models]
+
     return resolve_model_for_saas_task(task_type)
+
+
+def _get_contextvar_preferred_provider(task_type: str) -> str | None:
+    """从 contextvar 读取当前请求的用户 provider 偏好。"""
+    try:
+        from app.services.llm.provider_preference import (
+            current_preferred_provider,
+        )
+        overrides = current_preferred_provider.get(None)
+        if not overrides:
+            return None
+        if isinstance(overrides, str):
+            return overrides
+        if isinstance(overrides, dict):
+            workflow = TASK_TYPE_TO_WORKFLOW.get(task_type)
+            if workflow:
+                return overrides.get(workflow)
+        return None
+    except Exception:
+        return None
 
 
 def _pick_saas_model_from_providers(task: TaskTier) -> str | None:

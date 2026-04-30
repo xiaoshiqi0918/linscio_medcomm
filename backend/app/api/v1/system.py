@@ -121,6 +121,71 @@ async def set_default_model(body: SetDefaultModelRequest, user: User = Depends(g
     return {"ok": True, "model": model}
 
 
+# ── 模型偏好（SaaS）──────────────────────────────────────────
+
+class SetModelPreferencesRequest(BaseModel):
+    preferences: dict[str, str] = {}
+
+
+@router.get("/user-settings/model-preferences")
+async def get_model_preferences(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """返回用户的 LLM 服务商偏好 + 可选 provider 列表 + 各组推荐默认值。"""
+    from app.services.llm.manager import (
+        WORKFLOW_LABELS, WORKFLOW_DEFAULTS, get_available_providers,
+    )
+    import json as _json
+
+    raw = await UserSettingService.get(db, user.id, "model_preferences", "")
+    prefs: dict[str, str] = {}
+    if raw:
+        try:
+            prefs = _json.loads(raw)
+        except Exception:
+            pass
+
+    workflows = []
+    for wf_id, label in WORKFLOW_LABELS.items():
+        workflows.append({
+            "id": wf_id,
+            "label": label,
+            "recommended": WORKFLOW_DEFAULTS.get(wf_id, "deepseek"),
+            "current": prefs.get(wf_id, ""),
+        })
+
+    return {
+        "workflows": workflows,
+        "available_providers": get_available_providers(),
+        "preferences": prefs,
+    }
+
+
+@router.put("/user-settings/model-preferences")
+async def set_model_preferences(
+    body: SetModelPreferencesRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """更新用户的 LLM 服务商偏好。"""
+    import json as _json
+    from app.services.llm.manager import WORKFLOW_LABELS
+    from app.services.llm.provider_preference_loader import invalidate_cache
+
+    valid = {}
+    for wf_id in WORKFLOW_LABELS:
+        val = (body.preferences.get(wf_id) or "").strip()
+        if val:
+            valid[wf_id] = val
+
+    await UserSettingService.set(
+        db, user.id, "model_preferences", _json.dumps(valid, ensure_ascii=False),
+    )
+    invalidate_cache(user.id)
+    return {"ok": True, "preferences": valid}
+
+
 class TestApiKeyRequest(BaseModel):
     api_key: str = ""
     provider: str = "openai"
@@ -179,6 +244,7 @@ async def connection_self_check():
         ),
     }
     image_keys: dict[str, bool] = {
+        "GPT_IMAGE_API_KEY": bool(os.environ.get("GPT_IMAGE_API_KEY", "").strip()),
         "OPENAI_API_KEY": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
         "STABILITY_API_KEY": bool(os.environ.get("STABILITY_API_KEY", "").strip()),
         "REPLICATE_API_TOKEN": bool(os.environ.get("REPLICATE_API_TOKEN", "").strip()),

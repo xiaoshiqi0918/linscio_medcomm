@@ -3,7 +3,30 @@
     <AppTitleBar />
     <LicenseBanner v-if="isElectron" />
     <div class="app-body">
-      <AppSidebar />
+      <transition name="slide-nav">
+        <AppSidebar v-if="sidebarVisible" />
+      </transition>
+      <button
+        class="sidebar-toggle"
+        :class="{ collapsed: !sidebarVisible }"
+        :title="sidebarVisible ? '隐藏导航栏' : '展开导航栏'"
+        @click="toggleSidebar"
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14">
+          <path
+            v-if="sidebarVisible"
+            d="M6.5 3L2 8l4.5 5"
+            stroke="currentColor" stroke-width="1.5" fill="none"
+            stroke-linecap="round" stroke-linejoin="round"
+          />
+          <path
+            v-else
+            d="M9.5 3L14 8l-4.5 5"
+            stroke="currentColor" stroke-width="1.5" fill="none"
+            stroke-linecap="round" stroke-linejoin="round"
+          />
+        </svg>
+      </button>
       <div class="main-wrapper">
         <main class="main-content">
           <router-view />
@@ -14,7 +37,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AppTitleBar from './AppTitleBar.vue'
 import AppSidebar from './AppSidebar.vue'
@@ -29,6 +52,15 @@ const settingsStore = useSettingsStore()
 const licenseStore = useMedcommLicenseStore()
 const authStore = useAuthStore()
 const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.isElectron
+
+const STORAGE_KEY_SIDEBAR = 'app_sidebar_visible'
+const sidebarVisible = ref(
+  localStorage.getItem(STORAGE_KEY_SIDEBAR) !== 'false'
+)
+function toggleSidebar() {
+  sidebarVisible.value = !sidebarVisible.value
+  localStorage.setItem(STORAGE_KEY_SIDEBAR, String(sidebarVisible.value))
+}
 
 let startupCheckDone = false
 async function checkUninstalledPacks(list: Array<{ id: string; name: string; local_version?: string | null }>) {
@@ -150,6 +182,7 @@ onMounted(async () => {
   flex: 1;
   display: flex;
   overflow: hidden;
+  position: relative;
 }
 
 .main-wrapper {
@@ -163,5 +196,45 @@ onMounted(async () => {
   flex: 1;
   overflow: auto;
   background: #f5f5f7;
+}
+
+.sidebar-toggle {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 30;
+  width: 20px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e5e7eb;
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  background: #fff;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 0;
+  transition: left 0.25s ease, background 0.15s, color 0.15s;
+}
+.sidebar-toggle:not(.collapsed) {
+  left: 240px;
+}
+.sidebar-toggle:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.slide-nav-enter-active,
+.slide-nav-leave-active {
+  transition: all 0.25s ease;
+}
+.slide-nav-enter-from,
+.slide-nav-leave-to {
+  width: 0 !important;
+  min-width: 0 !important;
+  overflow: hidden;
+  opacity: 0;
 }
 </style>

@@ -281,6 +281,7 @@ _PLATFORM_DEFAULT_WORD_COUNT = {
     "douyin": 300,
     "journal": 3000,
     "offline": 2000,
+    "contest": 2500,
 }
 
 
@@ -296,6 +297,9 @@ class CreateArticleRequest(BaseModel):
     target_word_count: int | None = None
     skip_sections: list[str] = []
     analysis_report: dict | None = None
+    contest_pack_id: int | None = None
+    contest_rule_source: str | None = None
+    contest_custom_rules: dict | None = None
 
 
 class UpdateArticleContentRequest(BaseModel):
@@ -384,9 +388,60 @@ async def create_article(
             target_word_count=twc,
             skip_sections=req.skip_sections or None,
             analysis_report=req.analysis_report,
+            contest_pack_id=req.contest_pack_id,
+            contest_rule_source=req.contest_rule_source,
+            contest_custom_rules=req.contest_custom_rules,
             status="draft",
             current_stage="outline",
         )
+
+        if req.contest_pack_id:
+            try:
+                from app.models.contest import ContestPack
+                _cp_result = await db.execute(
+                    select(ContestPack).where(ContestPack.id == req.contest_pack_id)
+                )
+                _cp = _cp_result.scalar_one_or_none()
+                # 赛事包 word_limit 优先级最高，覆盖前端传来的 target_word_count
+                _pack_wl = getattr(_cp, "word_limit", None) if _cp else None
+                if _pack_wl and (not article.target_word_count or article.target_word_count > _pack_wl):
+                    article.target_word_count = _pack_wl
+                _disclosure = getattr(_cp, "ai_disclosure", None) if _cp else None
+                if _disclosure == "required":
+                    article.ai_declaration = {
+                        "ai_text": True,
+                        "ai_image": True,
+                        "human_reviewed": True,
+                        "image_tools": "",
+                        "_disclosure_level": "required",
+                    }
+                elif _disclosure == "recommended":
+                    article.ai_declaration = {
+                        "ai_text": True,
+                        "ai_image": False,
+                        "human_reviewed": True,
+                        "image_tools": "",
+                        "_disclosure_level": "recommended",
+                    }
+            except Exception:
+                pass
+        elif req.contest_custom_rules and req.contest_custom_rules.get("ai_disclosure") == "required":
+            article.ai_declaration = {
+                "ai_text": True,
+                "ai_image": True,
+                "human_reviewed": True,
+                "image_tools": "",
+                "_disclosure_level": "required",
+            }
+        elif req.contest_custom_rules and req.contest_custom_rules.get("ai_disclosure") == "recommended":
+            article.ai_declaration = {
+                "ai_text": True,
+                "ai_image": False,
+                "human_reviewed": True,
+                "image_tools": "",
+                "_disclosure_level": "recommended",
+            }
+
         db.add(article)
         await db.flush()
 
@@ -582,10 +637,24 @@ async def export_article_route(
         "如有健康问题，请及时就医。\n"
     )
 
-    def _merged_export(article, parts, export_fmt: str, refs_text: str = "") -> tuple[bytes, str, str]:
+    def _merged_export(
+        article,
+        parts,
+        export_fmt: str,
+        refs_text: str = "",
+        image_slots: list | None = None,
+        section_id_to_type: dict | None = None,
+        contest_pack: object | None = None,
+    ) -> tuple[bytes, str, str]:
         """各章节合并后的通用导出"""
-        base_name = (article.topic or "article").replace("/", "-")
         cf = getattr(article, "content_format", None) or "article"
+
+        if cf == "contest_article":
+            from app.services.export.contest_export import get_contest_filename
+            base_name = get_contest_filename(article, contest_pack=contest_pack)
+        else:
+            base_name = (article.topic or "article").replace("/", "-")
+
         hide_headings = cf == "article"
 
         filtered = [
@@ -593,7 +662,31 @@ async def export_article_route(
             if not _skip_article_legacy_intro(cf, st) and b.strip()
         ]
 
+        if image_slots and section_id_to_type:
+            type_to_slots: dict[str, list] = {}
+            for sl in image_slots:
+                stype = section_id_to_type.get(sl.section_id, "__article__") if sl.section_id else "__article__"
+                type_to_slots.setdefault(stype, []).append(sl)
+            new_filtered = []
+            for t, b, st in filtered:
+                slots_here = type_to_slots.get(st, [])
+                if slots_here:
+                    img_lines = []
+                    for sl in slots_here:
+                        status = "已上传" if sl.image_status == "uploaded" else "待配图"
+                        desc = sl.intent_text or "（未填写画意）"
+                        img_lines.append(f"\n[配图·{status}] {desc}")
+                    b = b.rstrip() + "\n\n" + "\n".join(img_lines)
+                new_filtered.append((t, b, st))
+            filtered = new_filtered
+
         disclaimer = _DISCLAIMER_TEXT if (is_saas() and watermark) else ""
+
+        if cf == "contest_article":
+            from app.services.export.contest_export import build_ai_declaration_text as _build_ai_decl
+            _ai_decl_text = _build_ai_decl(getattr(article, 'ai_declaration', None))
+            if _ai_decl_text:
+                disclaimer = f"\n\n---\n\n{_ai_decl_text}" + disclaimer
 
         if hide_headings:
             md_body = "\n\n".join(b for _, b, _ in filtered) + (refs_text or "") + disclaimer
@@ -626,7 +719,35 @@ async def export_article_route(
                     docx_parts = [(t, strip_markdown(b)) for t, b, _ in filtered]
                 if refs_text:
                     docx_parts.append(("参考文献", strip_markdown(refs_text)))
-                buf, fn = html_docx.to_docx(article, docx_parts)
+
+                font_cfg = None
+                layout_pref = None
+                if cf == "contest_article":
+                    from app.services.export.contest_export import (
+                        build_ai_declaration_text,
+                        get_contest_font_config,
+                    )
+                    ai_decl = build_ai_declaration_text(getattr(article, 'ai_declaration', None))
+                    if ai_decl:
+                        docx_parts.append(("", ai_decl))
+                    font_cfg = get_contest_font_config(article, contest_pack=contest_pack)
+                    if contest_pack:
+                        layout_pref = getattr(contest_pack, 'layout_preference', None)
+
+                _docx_image_map: dict[int, list] = {}
+                if image_slots and section_id_to_type:
+                    for sl in image_slots:
+                        idx_key = sl.section_id or 0
+                        _docx_image_map.setdefault(idx_key, []).append(sl)
+
+                buf, fn = html_docx.to_docx(
+                    article, docx_parts, font_config=font_cfg,
+                    image_slots=_docx_image_map if _docx_image_map else None,
+                    section_id_to_type=section_id_to_type if _docx_image_map else None,
+                    layout_preference=layout_pref,
+                )
+                if cf == "contest_article":
+                    fn = f"{base_name}.docx"
                 return buf, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fn
             except Exception:
                 txt = prepend_export_title_plain(article, plain_body)
@@ -681,13 +802,51 @@ async def export_article_route(
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+    # 参赛图文：预加载配图槽位与赛制包供导出使用
+    contest_image_slots: list = []
+    _contest_pack_obj = None
+    if normalized in ("docx", "html", "md", "txt"):
+        try:
+            _pre_art = await db.execute(select(Article).where(Article.id == article_id))
+            _pre_a = _pre_art.scalar_one_or_none()
+            _FORMATS_WITH_IMAGE_SLOTS = {"contest_article", "article", "patient_handbook"}
+            if _pre_a and getattr(_pre_a, "content_format", None) in _FORMATS_WITH_IMAGE_SLOTS:
+                from app.models.article_image_slot import ArticleImageSlot
+                _slot_result = await db.execute(
+                    select(ArticleImageSlot)
+                    .where(ArticleImageSlot.article_id == article_id)
+                    .order_by(ArticleImageSlot.section_id, ArticleImageSlot.order_num)
+                )
+                contest_image_slots = list(_slot_result.scalars().all())
+                _pack_id = getattr(_pre_a, "contest_pack_id", None)
+                if _pack_id:
+                    from app.models.contest import ContestPack
+                    _pack_result = await db.execute(
+                        select(ContestPack).where(ContestPack.id == _pack_id)
+                    )
+                    _contest_pack_obj = _pack_result.scalar_one_or_none()
+        except Exception:
+            pass
+
     # docx/html/md/txt：不经过 export.router 的形式分发，避免个别导出器异常导致 404/500
     if normalized != "pdf":
         try:
             article, parts = await load_article_sections(article_id, db)
             refs_text = await _build_reference_text(article_id)
             use_fmt = normalized if normalized in ("html", "docx", "md") else "txt"
-            content, media_type, filename = _merged_export(article, parts, use_fmt, refs_text=refs_text)
+            sec_id_to_type: dict[int, str] = {}
+            if contest_image_slots:
+                _sec_rows = await db.execute(
+                    select(ArticleSection.id, ArticleSection.section_type)
+                    .where(ArticleSection.article_id == article_id)
+                )
+                sec_id_to_type = {r[0]: r[1] for r in _sec_rows.fetchall()}
+            content, media_type, filename = _merged_export(
+                article, parts, use_fmt, refs_text=refs_text,
+                image_slots=contest_image_slots,
+                section_id_to_type=sec_id_to_type,
+                contest_pack=_contest_pack_obj,
+            )
             return Response(content=content, media_type=media_type, headers={
                 "Content-Disposition": attachment_content_disposition(filename),
             })
@@ -994,15 +1153,37 @@ async def patch_article_visual_continuity(
 @router.post("/articles/{article_id}/generate-title")
 async def generate_article_title_route(
     article_id: int,
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
     """全文各章节有内容后，用模型总结一条发布用标题并写入 articles.title"""
     from app.services.export.utils import load_article_sections
     from app.services.medcomm.title_generator import generate_article_title as gen_title
 
+    _title_billing_sid: str | None = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user as _get_title_user
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.pricing import calc_title_generation_cost
+        from app.services.credit.service import InsufficientCreditsError
+        _tu = await _get_title_user(request, db)
+        _tc = calc_title_generation_cost()
+        try:
+            _title_billing_sid = await open_billing_session(
+                _tu.id, "title_generation", _tc, db,
+                business_ref={"article_id": article_id},
+            )
+            await db.commit()
+        except InsufficientCreditsError as e:
+            raise HTTPException(status_code=402, detail=str(e))
+
     result = await db.execute(select(Article).where(Article.id == article_id, Article.deleted_at.is_(None)))
     article = result.scalar_one_or_none()
     if not article:
+        if _title_billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(_title_billing_sid, db, success=False)
+            await db.commit()
         raise HTTPException(status_code=404, detail="Article not found")
     _art, parts = await load_article_sections(article_id, db)
     title = await gen_title(
@@ -1014,6 +1195,13 @@ async def generate_article_title_route(
         parts=parts,
         article_default_model=article.default_model,
     )
+
+    if _title_billing_sid and is_saas():
+        from app.services.billing.dependency import close_billing_session
+        await close_billing_session(_title_billing_sid, db, success=bool(title),
+                                    override_cost=_tc if title else None)
+        await db.commit()
+
     if not title:
         raise HTTPException(status_code=400, detail="正文为空，请先生成或填写各章节内容后再总结标题")
     article.title = title[:500]
@@ -1038,6 +1226,25 @@ async def patch_article_title_route(
     await db.commit()
     await db.refresh(article)
     return article_to_dict(article)
+
+
+class UpdateSubmissionInfoRequest(BaseModel):
+    submission_info: dict
+
+
+@router.patch("/articles/{article_id}/submission-info")
+async def update_submission_info(
+    article_id: int,
+    req: UpdateSubmissionInfoRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Article).where(Article.id == article_id, Article.deleted_at.is_(None)))
+    article = result.scalar_one_or_none()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    article.submission_info = req.submission_info
+    await db.commit()
+    return {"ok": True}
 
 
 @router.patch("/articles/{article_id}/image-stage")
@@ -1555,6 +1762,7 @@ async def generate_section(
         await check_generate_rate(user.id)
 
         sec_target_wc = getattr(article, "target_word_count", None) or 2000
+        _sec_cf = article.content_format or "article"
         total_sections = await db.execute(
             select(func.count(ArticleSection.id)).where(ArticleSection.article_id == article.id)
         )
@@ -1567,7 +1775,10 @@ async def generate_section(
         )).scalar() or 0
         _pri_model = get_primary_model_for_task("generation_round1") or "gpt-4o"
         _pri_tier = get_model_tier(_pri_model)
-        sec_estimated_cost = (calc_generation_cost(sec_target_wc, model_tier=_pri_tier, include_embedding=_has_lit > 0) / Decimal(num_sections)).quantize(Decimal("0.01"))
+        sec_estimated_cost = (calc_generation_cost(
+            sec_target_wc, model_tier=_pri_tier, include_embedding=_has_lit > 0,
+            content_format=_sec_cf, section_count=num_sections,
+        ) / Decimal(num_sections)).quantize(Decimal("0.01"))
         sec_estimated_cost = max(sec_estimated_cost, Decimal("1"))
 
         if not user.free_generation_used:
@@ -1795,7 +2006,13 @@ async def generate_all_sections(
         )).scalar() or 0
         _pri_model_all = get_primary_model_for_task("generation_round1") or "gpt-4o"
         _pri_tier_all = get_model_tier(_pri_model_all)
-        estimated_cost = calc_generation_cost(target_wc, model_tier=_pri_tier_all, include_embedding=_has_lit_all > 0)
+        _all_cf = article.content_format or "article"
+        from app.services.format_router import SECTION_TYPES_BY_FORMAT as _STBF
+        _all_sec_count = len(_STBF.get(_all_cf, [])) or 1
+        estimated_cost = calc_generation_cost(
+            target_wc, model_tier=_pri_tier_all, include_embedding=_has_lit_all > 0,
+            content_format=_all_cf, section_count=_all_sec_count,
+        )
         if not user.free_generation_used:
             is_free_gen = True
             _log.info("[generate-all] 用户 %d 首次免费生成，跳过扣费", user.id)
@@ -2365,6 +2582,11 @@ def article_to_dict(a: Article) -> dict:
         "visual_continuity_prompt": a.visual_continuity_prompt or "",
         "image_series_seed_base": a.image_series_seed_base,
         "analysis_report": a.analysis_report,
+        "contest_pack_id": getattr(a, "contest_pack_id", None),
+        "contest_rule_source": getattr(a, "contest_rule_source", None),
+        "contest_custom_rules": getattr(a, "contest_custom_rules", None),
+        "ai_declaration": getattr(a, "ai_declaration", None),
+        "submission_info": getattr(a, "submission_info", None),
         "created_at": a.created_at.isoformat() if a.created_at else None,
         "updated_at": a.updated_at.isoformat() if a.updated_at else None,
     }

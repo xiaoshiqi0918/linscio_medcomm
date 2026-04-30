@@ -24,6 +24,24 @@
         <FormatBadge :format-id="article?.content_format || 'article'" />
         <PlatformBadge v-if="article?.platform" :platform-id="article.platform" />
       </div>
+      <div v-if="hasContestRules" class="contest-status-bar">
+        <div class="contest-status-left">
+          <el-tag
+            :type="article.contest_rule_source ? 'success' : 'warning'"
+            size="small"
+            effect="plain"
+          >{{ contestStatusText }}</el-tag>
+          <span v-if="contestWordLimit" class="contest-word-progress">
+            字数：{{ article.word_count || 0 }} / {{ contestWordLimit }}
+            <el-tag
+              v-if="(article.word_count || 0) > contestWordLimit"
+              type="danger"
+              size="small"
+              effect="dark"
+            >已超出</el-tag>
+          </span>
+        </div>
+      </div>
       <StageProgressBar
         :current-stage="article?.current_stage"
         :image-stage="article?.image_stage"
@@ -58,9 +76,21 @@
             <el-dropdown-item @click="router.push('/personal-corpus')">个人语料</el-dropdown-item>
             <el-dropdown-item divided :disabled="!currentSectionId" @click="openPolishDialog('language')">语言润色</el-dropdown-item>
             <el-dropdown-item :disabled="!currentSectionId" @click="openPolishDialog('platform')">平台适配</el-dropdown-item>
+            <el-dropdown-item v-if="hasContestRules" divided @click="aiDeclDialogVisible = true">AI 使用声明</el-dropdown-item>
+            <el-dropdown-item v-if="hasContestRules" @click="submissionInfoVisible = true">投稿信息（命名）</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
+      <el-button
+        type="primary"
+        size="small"
+        plain
+        :loading="generating"
+        :disabled="!currentSectionId || fullDocGenerating"
+        @click="handleGenerate"
+      >
+        {{ generating ? 'AI 写作中…' : '生成本章' }}
+      </el-button>
       <el-button
         type="primary"
         size="small"
@@ -70,6 +100,26 @@
       >
         {{ fullDocGenerating ? `生成中 ${fullDocDoneCount}/${fullDocTotalCount}` : '一键生成全文' }}
       </el-button>
+      <ProviderHint workflow="writing" />
+    </div>
+    <div v-if="article?.sections?.length && article.sections.length > 1" class="section-strip">
+      <span class="section-strip-label">当前章节</span>
+      <el-select
+        class="section-strip-select"
+        :model-value="currentSectionId"
+        filterable
+        placeholder="选择章节"
+        size="small"
+        @update:model-value="onPickSection($event)"
+      >
+        <el-option
+          v-for="s in sortedSectionsForStrip"
+          :key="s.id"
+          :label="sectionStripLabel(s)"
+          :value="s.id"
+        />
+      </el-select>
+      <span v-if="currentSectionTitleHint" class="section-strip-meta">{{ currentSectionTitleHint }}</span>
     </div>
     <el-collapse v-model="activeCollapseItems" class="bindings-panel">
       <el-collapse-item name="refs">
@@ -470,6 +520,27 @@
         </div>
       </el-collapse-item>
     </el-collapse>
+    <el-collapse v-if="hasImageSlotCapability" v-model="contestCollapseItems" class="bindings-panel">
+      <el-collapse-item name="painting">
+        <template #title>
+          <span>配图管理</span>
+          <el-tag v-if="contestImageSlotCount > 0" size="small" type="success" style="margin-left: 0.5rem;">
+            {{ contestImageUploadedCount }}/{{ contestImageSlotCount }} 已上传
+          </el-tag>
+        </template>
+        <PaintingIntentPanel
+          v-if="articleId && currentSectionId"
+          :article-id="articleId"
+          :section-id="currentSectionId"
+          :section-text="currentSectionText"
+          :topic="article?.topic"
+          :section-type="currentSectionType"
+          :required-image-format="contestRequiredImageFormat"
+          @slot-updated="onImageSlotUpdated"
+        />
+        <div v-else class="painting-empty">请先选中一个章节</div>
+      </el-collapse-item>
+    </el-collapse>
     <div v-if="streamedText || streamPhase === 'rewriting'" class="stream-preview">
       <div class="stream-preview-header">
         <span class="stream-preview-icon">{{ streamPhase === 'rewriting' ? '🔄' : '✍️' }}</span>
@@ -538,6 +609,63 @@
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="aiDeclDialogVisible"
+      title="AI 使用声明配置"
+      width="480px"
+      destroy-on-close
+    >
+      <div style="margin-bottom: 1rem;">
+        <el-button
+          size="small"
+          :loading="aiDeclLastLoading"
+          @click="loadLastAiDeclaration"
+        >套用上次配置</el-button>
+      </div>
+      <el-form label-width="120px" size="small">
+        <el-form-item label="AI 辅助配图">
+          <el-switch v-model="aiDeclForm.ai_image" />
+        </el-form-item>
+        <el-form-item v-if="aiDeclForm.ai_image" label="绘图工具">
+          <el-input v-model="aiDeclForm.image_tools" placeholder="如：Midjourney、DALL-E" />
+        </el-form-item>
+        <el-form-item label="AI 辅助撰文">
+          <el-switch v-model="aiDeclForm.ai_text" />
+        </el-form-item>
+        <el-form-item label="已人工审校">
+          <el-switch v-model="aiDeclForm.human_reviewed" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="aiDeclDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveAiDeclaration">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-if="hasContestRules"
+      v-model="submissionInfoVisible"
+      title="投稿信息（用于导出文件命名）"
+      width="420px"
+      destroy-on-close
+    >
+      <el-form label-width="80px" size="small">
+        <el-form-item label="单位">
+          <el-input v-model="submissionInfoForm.unit" placeholder="如：XX人民医院" />
+        </el-form-item>
+        <el-form-item label="科室">
+          <el-input v-model="submissionInfoForm.department" placeholder="如：心内科" />
+        </el-form-item>
+        <el-form-item label="第一作者">
+          <el-input v-model="submissionInfoForm.author" placeholder="如：张三" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="submissionInfoVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveSubmissionInfo">保存</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="polishDialogVisible" :title="polishDialogTitle" width="620px" destroy-on-close>
       <div v-if="polishLoading" style="text-align:center;padding:2em 0;">
         <el-icon class="is-loading" style="font-size:1.5rem;"><Loading /></el-icon>
@@ -595,6 +723,8 @@ import { useRoute, useRouter } from 'vue-router'
 import MedCommEditor from '@/components/editor/MedCommEditor.vue'
 import FormatBadge from '@/components/common/FormatBadge.vue'
 import PlatformBadge from '@/components/common/PlatformBadge.vue'
+import PaintingIntentPanel from '@/components/contest/PaintingIntentPanel.vue'
+import ProviderHint from '@/components/common/ProviderHint.vue'
 import StageProgressBar from '@/components/layout/StageProgressBar.vue'
 import { ArrowDown, ArrowLeft, Loading } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -606,6 +736,9 @@ import { useSettingsStore } from '@/stores/settings'
 import { buildImageGenBackendOptions } from '@/composables/useImageGenerate'
 import { AUTH_USER_CHANGED_EVENT } from '@/stores/auth'
 import { extractPlainFromTiptapJson, stripOrphanCitationMarks } from '@/utils/tiptapPlainText'
+
+const FORMATS_WITH_IMAGE_SLOTS = new Set(['contest_article', 'article', 'patient_handbook'])
+const FORMATS_WITH_CONTEST_RULES = new Set(['contest_article'])
 
 const route = useRoute()
 const router = useRouter()
@@ -655,6 +788,77 @@ const showSeriesVisualPanel = computed(() => {
 const VISUAL_EXPORT_FORMATS = ['comic_strip', 'card_series', 'poster', 'picture_book', 'long_image', 'storyboard']
 const isVisualExportFormat = computed(() => VISUAL_EXPORT_FORMATS.includes(article.value?.content_format))
 
+// ── Contest article state ──
+const contestCollapseItems = ref<string[]>(['painting'])
+const contestImageSlots = ref<any[]>([])
+
+const hasImageSlotCapability = computed(() =>
+  FORMATS_WITH_IMAGE_SLOTS.has(article.value?.content_format || '')
+)
+const hasContestRules = computed(() =>
+  FORMATS_WITH_CONTEST_RULES.has(article.value?.content_format || '')
+)
+
+const contestImageSlotCount = computed(() => contestImageSlots.value.length)
+const contestImageUploadedCount = computed(() =>
+  contestImageSlots.value.filter((s: any) => s.image_status === 'uploaded').length
+)
+
+const contestWordLimit = computed(() => {
+  const a = article.value
+  if (!a || !FORMATS_WITH_CONTEST_RULES.has(a.content_format)) return 0
+  if (a.contest_custom_rules?.word_limit) return parseInt(a.contest_custom_rules.word_limit)
+  return a.target_word_count || 0
+})
+
+const contestRequiredImageFormat = computed(() => {
+  const a = article.value
+  if (!a) return undefined
+  return a.contest_custom_rules?.image_format || undefined
+})
+
+const contestStatusText = computed(() => {
+  const a = article.value
+  if (!a) return '未绑定赛制'
+  if (a.contest_rule_source === 'pack') return '已绑定赛制包'
+  if (a.contest_rule_source === 'parsed') return '已配置（公告解析）'
+  if (a.contest_rule_source === 'manual') return '已配置（手工）'
+  return '未绑定赛制'
+})
+
+const currentSectionText = computed(() => {
+  if (!contentJson.value) return ''
+  const doc = typeof contentJson.value === 'string' ? JSON.parse(contentJson.value) : contentJson.value
+  if (!doc?.content) return ''
+  return doc.content
+    .filter((n: any) => n.type === 'paragraph' || n.type === 'heading')
+    .map((n: any) => (n.content || []).map((c: any) => c.text || '').join(''))
+    .join('\n')
+})
+
+const currentSectionType = computed(() => {
+  if (!currentSectionId.value || !article.value?.sections) return ''
+  const sec = article.value.sections.find((s: any) => s.id === currentSectionId.value)
+  return sec?.section_type || ''
+})
+
+async function loadContestImageSlots() {
+  if (!articleId.value || !FORMATS_WITH_IMAGE_SLOTS.has(article.value?.content_format || '')) return
+  try {
+    const res = await api.imageIntent.getImageSlots(articleId.value)
+    contestImageSlots.value = res.data?.items || []
+  } catch { /* ignore */ }
+}
+
+function onImageSlotUpdated(slot: any) {
+  const idx = contestImageSlots.value.findIndex((s: any) => s.id === slot.id)
+  if (idx >= 0) {
+    contestImageSlots.value[idx] = slot
+  } else {
+    contestImageSlots.value.push(slot)
+  }
+}
+
 const batchGenerating = ref(false)
 const batchTotalCount = ref(0)
 const batchDoneCount = ref(0)
@@ -667,6 +871,33 @@ const fullDocDoneCount = ref(0)
 
 
 const currentSectionId = ref<number | null>(null)
+
+/** 程序化切章（已含 loadArticle）时避免 watch 再拉一次同一章 */
+let suppressSectionChangeReload = false
+
+const sortedSectionsForStrip = computed(() => {
+  const list = article.value?.sections
+  if (!list?.length) return []
+  return [...list].sort((a: any, b: any) => Number(a.order_num || 0) - Number(b.order_num || 0))
+})
+
+const currentSectionTitleHint = computed(() => {
+  if (!currentSectionId.value || !article.value?.sections) return ''
+  const sec = article.value.sections.find((s: any) => s.id === currentSectionId.value)
+  const t = sec?.title?.trim()
+  return t && sec?.section_type ? `${t} · ${sec.section_type}` : t || sec?.section_type || ''
+})
+
+function sectionStripLabel(s: { id: number; title?: string; section_type?: string; has_content?: boolean }) {
+  const title = (s.title || s.section_type || '章节').trim()
+  return s.has_content ? title : `${title}（空）`
+}
+
+function onPickSection(id: number | null) {
+  if (id == null || id === currentSectionId.value) return
+  currentSectionId.value = id
+}
+
 const { generating, streamedText, streamPhase, generateSection } = useStreamGenerate()
 
 const MANDATORY_SECTIONS_MAP: Record<string, Set<string>> = {
@@ -743,6 +974,78 @@ async function handleUnskipSection(sec: any) {
     ElMessage.error(await axiosErrorDetail(e) || '操作失败')
   }
 }
+const aiDeclDialogVisible = ref(false)
+const aiDeclLastLoading = ref(false)
+const aiDeclForm = reactive({
+  ai_image: false,
+  image_tools: '',
+  ai_text: true,
+  human_reviewed: true,
+})
+
+async function loadLastAiDeclaration() {
+  aiDeclLastLoading.value = true
+  try {
+    const res = await api.contest.getLastAiDeclaration()
+    const last = res.data?.ai_declaration
+    if (last) {
+      aiDeclForm.ai_image = !!last.ai_image
+      aiDeclForm.image_tools = last.image_tools || ''
+      aiDeclForm.ai_text = last.ai_text !== false
+      aiDeclForm.human_reviewed = last.human_reviewed !== false
+      ElMessage.success('已套用上次 AI 声明配置')
+    } else {
+      ElMessage.info('暂无历史配置')
+    }
+  } catch {
+    ElMessage.error('加载失败')
+  } finally {
+    aiDeclLastLoading.value = false
+  }
+}
+
+async function saveAiDeclaration() {
+  if (!articleId.value) return
+  try {
+    const decl = { ...aiDeclForm }
+    await api.contest.updateAiDeclaration(articleId.value, { ai_declaration: decl })
+    if (article.value) {
+      article.value = { ...article.value, ai_declaration: decl }
+      articleStore.setCurrent(article.value)
+    }
+    aiDeclDialogVisible.value = false
+    ElMessage.success('AI 使用声明已保存')
+  } catch (e: any) {
+    ElMessage.error(await axiosErrorDetail(e) || '保存失败')
+  }
+}
+
+const submissionInfoVisible = ref(false)
+const submissionInfoForm = reactive({ unit: '', department: '', author: '' })
+
+watch(() => article.value, (a) => {
+  if (a?.submission_info) {
+    submissionInfoForm.unit = a.submission_info.unit || ''
+    submissionInfoForm.department = a.submission_info.department || ''
+    submissionInfoForm.author = a.submission_info.author || ''
+  }
+}, { immediate: true })
+
+async function saveSubmissionInfo() {
+  if (!articleId.value) return
+  try {
+    const info = { ...submissionInfoForm }
+    await api.medcomm.updateSubmissionInfo(articleId.value, { submission_info: info })
+    if (article.value) {
+      article.value = { ...article.value, submission_info: info }
+    }
+    submissionInfoVisible.value = false
+    ElMessage.success('投稿信息已保存')
+  } catch (e: any) {
+    ElMessage.error(await axiosErrorDetail(e) || '保存失败')
+  }
+}
+
 const exportCheckDialogVisible = ref(false)
 const exportCheckMessage = ref('')
 const exportDataWarnings = ref<Array<{ text: string; message?: string }>>([])
@@ -816,8 +1119,14 @@ const aiFilterCostHint = ref<{ cost: number; sufficient: boolean } | null>(null)
 
 const articleId = computed(() => Number(route.params.id))
 
-watch(currentSectionId, (id) => {
+watch(currentSectionId, async (id, prev) => {
   articleStore.setSectionId(id)
+  if (suppressSectionChangeReload) return
+  if (!articleId.value || id == null) return
+  if (prev == null || id === prev || fullDocGenerating.value) return
+  await loadArticle(id)
+  await loadBindings()
+  articleStore.setAigcCheckResult(null)
 })
 
 const indexedBindings = computed(() => {
@@ -982,6 +1291,7 @@ async function loadArticle(sectionId?: number) {
         }
       }).catch(() => {})
     }
+    void loadContestImageSlots()
   } catch {
     article.value = null
   }
@@ -2296,6 +2606,37 @@ async function handleGenerateAll() {
 async function handleExport(format: string) {
   if (!articleId.value) return
   await saveBeforeExport()
+
+  if (FORMATS_WITH_CONTEST_RULES.has(article.value?.content_format || '')) {
+    try {
+      const confirmRes = await api.contest.getExportConfirmation(articleId.value)
+      const confirm = confirmRes.data
+      if (confirm?.confirmation_message) {
+        const { ElMessageBox } = await import('element-plus')
+        await ElMessageBox.confirm(
+          confirm.confirmation_message,
+          '导出前确认',
+          { confirmButtonText: '确认导出', cancelButtonText: '取消', type: 'warning' }
+        )
+      }
+      if (confirm?.ai_disclosure_requirement === 'required' && !article.value?.ai_declaration) {
+        const { ElMessageBox } = await import('element-plus')
+        try {
+          await ElMessageBox.confirm(
+            '本赛事要求声明 AI 使用情况。是否配置 AI 使用声明后再导出？',
+            'AI 声明提醒',
+            { confirmButtonText: '继续导出', cancelButtonText: '去配置', type: 'info' }
+          )
+        } catch {
+          aiDeclDialogVisible.value = true
+          return
+        }
+      }
+    } catch (e: any) {
+      if (e === 'cancel' || e?.message === 'cancel') return
+    }
+  }
+
   try {
     const checkRes = await api.medcomm.exportCheck(articleId.value)
     const check = checkRes.data
@@ -2378,8 +2719,14 @@ async function locateIssueText(text: string) {
   }
 
   if (targetSectionId !== curId) {
-    currentSectionId.value = targetSectionId
-    await loadArticle(targetSectionId)
+    suppressSectionChangeReload = true
+    try {
+      currentSectionId.value = targetSectionId
+      await loadArticle(targetSectionId)
+      await loadBindings()
+    } finally {
+      suppressSectionChangeReload = false
+    }
     await nextTick()
     await nextTick()
   }
@@ -2392,8 +2739,14 @@ async function locateIssueText(text: string) {
 async function locateOrphanCitation(item: { section_id: number; section_title: string; text: string }) {
   if (!item?.section_id || !item?.text?.trim()) return
   if (currentSectionId.value !== item.section_id) {
-    currentSectionId.value = item.section_id
-    await loadArticle(item.section_id)
+    suppressSectionChangeReload = true
+    try {
+      currentSectionId.value = item.section_id
+      await loadArticle(item.section_id)
+      await loadBindings()
+    } finally {
+      suppressSectionChangeReload = false
+    }
     await nextTick()
     await nextTick()
   }
@@ -2518,10 +2871,44 @@ async function handleRejectChange(c: any) {
   } catch { /* ignore */ }
 }
 
+async function runExportCheck(): Promise<boolean> {
+  if (!articleId.value) return false
+  try {
+    const checkRes = await api.medcomm.exportCheck(articleId.value)
+    const check = checkRes.data
+    if (!check?.can_export) {
+      const warnings: string[] = []
+      if (Array.isArray(check?.data_warnings) && check.data_warnings.length) {
+        warnings.push(`${check.data_warnings.length} 处 [DATA:] 占位符`)
+      }
+      if (Array.isArray(check?.absolute_terms) && check.absolute_terms.length) {
+        warnings.push(`${check.absolute_terms.length} 处绝对化表述`)
+      }
+      if (Array.isArray(check?.orphan_citations) && check.orphan_citations.length) {
+        warnings.push(`${check.orphan_citations.length} 处孤儿引用`)
+      }
+      const detail = warnings.length ? `发现：${warnings.join('、')}` : (check?.message || '内容存在问题')
+      try {
+        await ElMessageBox.confirm(
+          `${detail}。仍要复制吗？`,
+          '内容检查提醒',
+          { confirmButtonText: '仍要复制', cancelButtonText: '取消', type: 'warning' }
+        )
+      } catch {
+        return false
+      }
+    }
+    return true
+  } catch {
+    return true
+  }
+}
+
 async function copyPlainTextExport() {
   if (!articleId.value) return
   copyTxtLoading.value = true
   try {
+    if (!await runExportCheck()) return
     const res = await api.medcomm.exportArticle(articleId.value, 'txt')
     const blob = res.data as Blob
     const text = await blob.text()
@@ -2538,6 +2925,7 @@ async function copyMarkdownExport() {
   if (!articleId.value) return
   copyMdLoading.value = true
   try {
+    if (!await runExportCheck()) return
     const res = await api.medcomm.exportArticle(articleId.value, 'md')
     const blob = res.data as Blob
     const text = await blob.text()
@@ -2642,6 +3030,7 @@ onUnmounted(() => {
   articleStore.clear()
 })
 watch(articleId, () => {
+  currentSectionId.value = null
   loadArticle()
   loadBindings()
 })
@@ -2708,9 +3097,7 @@ watch(
     const qid = getSectionIdFromQuery()
     if (!qid || qid === currentSectionId.value) return
     currentSectionId.value = qid
-    loadArticle(qid)
-    loadBindings()
-  }
+  },
 )
 
 async function handleAuthUserChanged() {
@@ -2903,6 +3290,29 @@ async function handleAuthUserChanged() {
   background: #fafafa;
 }
 
+.section-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  padding: 0.35rem 1rem 0.65rem;
+  border-bottom: 1px solid #eee;
+  background: #fafafa;
+}
+.section-strip-label {
+  font-size: 0.8rem;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+.section-strip-select {
+  flex: 1;
+  min-width: 180px;
+  max-width: min(100%, 420px);
+}
+.section-strip-meta {
+  font-size: 0.75rem;
+  color: #9ca3af;
+}
 
 .claim-evidence-body {
   font-size: 0.875rem;
@@ -3086,5 +3496,34 @@ async function handleAuthUserChanged() {
 .auto-ref-item {
   display: flex;
   align-items: baseline;
+}
+
+.contest-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.75rem;
+  background: #fef9c3;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  margin-top: 0.5rem;
+}
+
+.contest-status-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.contest-word-progress {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.painting-empty {
+  text-align: center;
+  color: #999;
+  padding: 1rem;
+  font-size: 0.85rem;
 }
 </style>

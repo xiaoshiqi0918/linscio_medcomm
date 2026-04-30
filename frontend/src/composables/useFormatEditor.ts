@@ -64,6 +64,8 @@ const FORMAT_EXTENSIONS: Record<string, Extension[]> = {
   patient_handbook: [StarterKit.configure({ heading: { levels: [1, 2, 3] } }), Placeholder.configure({ placeholder: '患者手册...' }), HandbookSection, MedClaim, PendingClaim, FactWarning, MedTerm, LocateHit, CitationRef],
   quiz_article: [StarterKit.configure({ heading: { levels: [1, 2] } }), Placeholder.configure({ placeholder: '自测科普...' }), QuizBlock, MedClaim, PendingClaim, FactWarning, MedTerm, LocateHit, CitationRef],
   h5_outline: baseExtensions,
+  /** 与同类型 narrative 形式一致：[共识]/[[待核实]] 等语义节点与核实联动 */
+  contest_article: narrativeExt,
 }
 
 export function useFormatEditor(contentFormat?: string): Extension[] {

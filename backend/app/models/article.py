@@ -25,6 +25,11 @@ class Article(Base):
     image_series_seed_base = Column(Integer, nullable=True)
     skip_sections = Column(JSON, nullable=True)
     analysis_report = Column(JSON, nullable=True)
+    contest_pack_id = Column(Integer, nullable=True)
+    contest_rule_source = Column(String(20), nullable=True)  # pack / parsed / manual
+    contest_custom_rules = Column(JSON, nullable=True)
+    ai_declaration = Column(JSON, nullable=True)
+    submission_info = Column(JSON, nullable=True)  # {"unit": "XX医院", "department": "XX科", "author": "张三"}
     deleted_at = Column(DateTime, nullable=True)  # 软删除
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())

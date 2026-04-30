@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { api } from '@/api'
+import { api, setTempProviderOverride as setApiTempProvider } from '@/api'
 
 export interface PresetDoc {
   specialty: string
@@ -184,6 +184,34 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
+  // ── LLM provider 偏好（SaaS）──────────────────────────────
+  const modelPreferences = ref<Record<string, string>>({})
+  const modelPrefsWorkflows = ref<Array<{ id: string; label: string; recommended: string; current: string }>>([])
+  const modelPrefsProviders = ref<Array<{ id: string; label: string; configured?: boolean }>>([])
+  const tempProviderOverride = ref<string>('')
+
+  async function loadModelPreferences() {
+    try {
+      const res = await api.system.getModelPreferences()
+      const d = res.data
+      modelPreferences.value = d.preferences || {}
+      modelPrefsWorkflows.value = d.workflows || []
+      modelPrefsProviders.value = d.available_providers || []
+    } catch { /* ignore */ }
+  }
+
+  async function saveModelPreferences(prefs: Record<string, string>) {
+    try {
+      const res = await api.system.setModelPreferences(prefs)
+      modelPreferences.value = res.data.preferences || prefs
+    } catch { /* ignore */ }
+  }
+
+  function setTempProviderOverride(provider: string) {
+    tempProviderOverride.value = provider
+    setApiTempProvider(provider)
+  }
+
   return {
     defaultModel,
     setDefaultModel,
@@ -215,5 +243,12 @@ export const useSettingsStore = defineStore('settings', () => {
     hasCustomSpecialty,
     loadLicense,
     loadDefaultModelFromServer,
+    modelPreferences,
+    modelPrefsWorkflows,
+    modelPrefsProviders,
+    tempProviderOverride,
+    loadModelPreferences,
+    saveModelPreferences,
+    setTempProviderOverride,
   }
 })

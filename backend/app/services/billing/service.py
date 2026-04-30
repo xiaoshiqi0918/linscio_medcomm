@@ -193,6 +193,8 @@ async def estimate_cost_for_task(
     business_type: str,
     input_chars: int = 0,
     target_word_count: int = 0,
+    content_format: str = "article",
+    section_count: int = 1,
 ) -> Decimal:
     """根据业务类型预估费用，用于前端展示和余额预检。
     这里保留简单的阶梯预估，实际结算以 token 用量为准。"""
@@ -200,10 +202,16 @@ async def estimate_cost_for_task(
         calc_generation_cost, calc_literature_cost, calc_optimization_cost,
         calc_translation_cost, calc_ai_assist_cost, calc_literature_filter_cost,
         calc_medpic_prompt_cost, calc_keyword_design_cost,
+        calc_image_gen_cost, calc_contest_llm_cost, calc_title_generation_cost,
+        calc_imagegen_prompt_cost,
         LiteratureAnalysisMode,
     )
     if business_type == "generation":
-        return calc_generation_cost(target_word_count or 2000)
+        return calc_generation_cost(
+            target_word_count or 2000,
+            content_format=content_format,
+            section_count=section_count,
+        )
     elif business_type == "literature_analyze":
         return calc_literature_cost(input_chars, LiteratureAnalysisMode.ABSTRACT)
     elif business_type == "translation":
@@ -218,6 +226,15 @@ async def estimate_cost_for_task(
         return calc_medpic_prompt_cost()
     elif business_type == "keyword_design":
         return calc_keyword_design_cost()
+    elif business_type == "image_generation":
+        batch = max(target_word_count, 1)
+        return calc_image_gen_cost(batch)
+    elif business_type == "contest_llm":
+        return calc_contest_llm_cost("generate_prompt")
+    elif business_type == "title_generation":
+        return calc_title_generation_cost()
+    elif business_type == "imagegen_prompt":
+        return calc_imagegen_prompt_cost()
     return Decimal("1")
 
 

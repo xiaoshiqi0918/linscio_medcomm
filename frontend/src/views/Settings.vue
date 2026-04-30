@@ -428,6 +428,56 @@
       </div>
     </el-card>
 
+    <!-- SaaS 模式：AI 模型偏好 -->
+    <el-card v-if="!isElectronEnv && saasLoggedIn" class="settings-card">
+      <template #header>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span>AI 模型偏好</span>
+          <el-button text size="small" @click="loadModelPrefs" :loading="loadingModelPrefs">刷新</el-button>
+        </div>
+      </template>
+      <div v-if="modelPrefsWorkflows.length === 0 && !loadingModelPrefs" style="color: #9ca3af; font-size: 0.85rem; padding: 8px 0;">
+        加载中...
+      </div>
+      <div v-else class="model-prefs-list">
+        <div v-for="wf in modelPrefsWorkflows" :key="wf.id" class="model-pref-row">
+          <div class="model-pref-label">
+            <span class="model-pref-name">{{ wf.label }}</span>
+          </div>
+          <div class="model-pref-select">
+            <el-select
+              :model-value="modelPrefsValues[wf.id] || ''"
+              @update:model-value="(v: string) => onModelPrefChange(wf.id, v)"
+              placeholder="使用平台推荐"
+              size="small"
+              clearable
+              style="width: 200px;"
+            >
+              <el-option value="" label="使用平台推荐" />
+              <el-option
+                v-for="p in modelPrefsProviders"
+                :key="p.id"
+                :value="p.id"
+                :label="providerPrefCollapsedLabel(p)"
+              >
+                <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; gap: 6px;">
+                  <span style="flex: 1; min-width: 0;">{{ p.label }}</span>
+                  <span style="flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;">
+                    <el-tag v-if="p.configured === false" size="small" type="info" effect="plain">未接入</el-tag>
+                    <el-tag v-if="p.id === wf.recommended" size="small" type="success">推荐</el-tag>
+                  </span>
+                </div>
+              </el-option>
+            </el-select>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top: 12px; padding: 8px 12px; background: #f0f9ff; border-radius: 6px; border: 1px solid #bae6fd; font-size: 0.8rem; color: #0c4a6e; line-height: 1.6;">
+        不同服务商的模型质量和积分消耗有差异。未选择时使用平台推荐的服务商（当前推荐 DeepSeek，性价比最优）。标注「未接入」的提供商为平台将陆续开放的服务，可先保存偏好待 Key 就绪后生效。<br/>
+        您也可以在各功能页面临时切换服务商，不影响此处的默认配置。
+      </div>
+    </el-card>
+
     <!-- SaaS 模式：客户端下载 -->
     <el-card v-if="!isElectronEnv" class="settings-card client-promo-card">
       <template #header>下载客户端</template>
@@ -633,6 +683,14 @@
           <el-input v-model="dashscopeKey" type="password" placeholder="DashScope Key（同时用于通义万相生图）" show-password />
           <a class="apply-link" href="https://bailian.console.aliyun.com/?apiKey=1" target="_blank">申请 ↗</a>
         </el-form-item>
+
+        <div class="api-group-title">图像生成（可选）</div>
+        <el-form-item label="GPT Image API Key">
+          <el-input v-model="gptImageKey" type="password" placeholder="GPT Image 专用 Key（gpt-image-2-plus）" show-password />
+        </el-form-item>
+        <div class="api-group-note">
+          GPT Image 使用独立 API Key，支持 gpt-image-2-plus（¥0.14/张）和 gpt-image-1.5 等模型。未配置时将使用 OpenAI Key 调用 DALL·E 3。
+        </div>
 
         <div class="api-group-title">文献翻译（可选）</div>
         <el-form-item label="DeepL API Key">
@@ -1356,6 +1414,42 @@ function withdrawStatusType(status: string): string {
   return map[status] || ''
 }
 
+// ── 模型偏好 ──────────────────────────────────────────────
+const loadingModelPrefs = ref(false)
+const modelPrefsWorkflows = ref<Array<{ id: string; label: string; recommended: string; current: string }>>([])
+const modelPrefsProviders = ref<Array<{ id: string; label: string; configured?: boolean }>>([])
+const modelPrefsValues = ref<Record<string, string>>({})
+
+function providerPrefCollapsedLabel(p: { label: string; configured?: boolean }) {
+  return p.configured === false ? `${p.label}（未接入）` : p.label
+}
+
+async function loadModelPrefs() {
+  loadingModelPrefs.value = true
+  try {
+    const res = await api.system.getModelPreferences()
+    const d = res.data
+    modelPrefsWorkflows.value = d.workflows || []
+    modelPrefsProviders.value = d.available_providers || []
+    modelPrefsValues.value = d.preferences || {}
+    settingsStore.modelPrefsWorkflows = d.workflows || []
+    settingsStore.modelPrefsProviders = d.available_providers || []
+    settingsStore.modelPreferences = d.preferences || {}
+  } catch { /* ignore */ }
+  finally { loadingModelPrefs.value = false }
+}
+
+async function onModelPrefChange(workflowId: string, provider: string) {
+  const newPrefs = { ...modelPrefsValues.value }
+  if (provider) {
+    newPrefs[workflowId] = provider
+  } else {
+    delete newPrefs[workflowId]
+  }
+  modelPrefsValues.value = newPrefs
+  await settingsStore.saveModelPreferences(newPrefs)
+}
+
 async function saasLogout() {
   try {
     await ElMessageBox.confirm('确认退出当前账号？', '退出登录', {
@@ -1580,6 +1674,7 @@ const googleAiKey = ref('')
 const openrouterKey = ref('')
 const qiniuMaasKey = ref('')
 const anthropicKey = ref('')
+const gptImageKey = ref('')
 const deeplKey = ref('')
 const googleTranslateKey = ref('')
 const azureTranslateKey = ref('')
@@ -1749,6 +1844,7 @@ onMounted(async () => {
     loadReferralInfo()
     loadReferralDetails()
     loadWithdrawals()
+    loadModelPrefs()
   }
   await authStore.refreshMe()
   await settingsStore.loadDefaultModelFromServer()
@@ -1790,7 +1886,7 @@ onMounted(async () => {
   }
   if (hasElectronKeychain) {
     const api = (window as any).electronAPI
-    const [openai, dashscope, siliconflow, deepseek, zhipu, moonshot, googleAi, openrouter, qiniuMaas, anthropic, deepl, googleTrans, azureTrans, azureTransRegion] = await Promise.all([
+    const [openai, dashscope, siliconflow, deepseek, zhipu, moonshot, googleAi, openrouter, qiniuMaas, anthropic, gptImage, deepl, googleTrans, azureTrans, azureTransRegion] = await Promise.all([
       api.getApiKey('openai'),
       api.getApiKey('dashscope'),
       api.getApiKey('siliconflow'),
@@ -1801,6 +1897,7 @@ onMounted(async () => {
       api.getApiKey('openrouter'),
       api.getApiKey('qiniu_maas'),
       api.getApiKey('anthropic'),
+      api.getApiKey('gpt_image'),
       api.getApiKey('deepl'),
       api.getApiKey('google_translate'),
       api.getApiKey('azure_translate'),
@@ -1816,6 +1913,7 @@ onMounted(async () => {
     if (openrouter) openrouterKey.value = openrouter
     if (qiniuMaas) qiniuMaasKey.value = qiniuMaas
     if (anthropic) anthropicKey.value = anthropic
+    if (gptImage) gptImageKey.value = gptImage
     if (deepl) deeplKey.value = deepl
     if (googleTrans) googleTranslateKey.value = googleTrans
     if (azureTrans) azureTranslateKey.value = azureTrans
@@ -1962,6 +2060,7 @@ async function saveApiKeys() {
       { account: 'openrouter', label: 'OpenRouter API Key', value: openrouterKey.value.trim() },
       { account: 'qiniu_maas', label: '七牛 MaaS API Key', value: qiniuMaasKey.value.trim() },
       { account: 'anthropic', label: 'Anthropic API Key', value: anthropicKey.value.trim() },
+      { account: 'gpt_image', label: 'GPT Image API Key', value: gptImageKey.value.trim() },
       { account: 'deepl', label: 'DeepL API Key', value: deeplKey.value.trim() },
       { account: 'google_translate', label: 'Google 翻译 API Key', value: googleTranslateKey.value.trim() },
       { account: 'azure_translate', label: 'Azure 翻译 Key', value: azureTranslateKey.value.trim() },
@@ -2203,6 +2302,31 @@ h2 { margin-bottom: 1rem; }
   flex-direction: column;
   align-items: center;
   gap: 6px;
+}
+.model-prefs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.model-pref-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+.model-pref-row:last-child { border-bottom: none; }
+.model-pref-label {
+  flex: 1;
+  min-width: 0;
+}
+.model-pref-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #374151;
+}
+.model-pref-select {
+  flex-shrink: 0;
 }
 .redeem-title { font-weight: 600; color: #374151; font-size: 0.9rem; }
 .redeem-price { font-size: 1.3rem; font-weight: 700; color: #1e40af; }

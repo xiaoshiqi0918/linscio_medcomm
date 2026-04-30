@@ -2,7 +2,7 @@
 import asyncio
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -200,8 +200,9 @@ def _graph_payload_from_task_kwargs(
     }
 
 
-async def _run_task(task_id: str, **kwargs) -> None:
+async def _run_task(task_id: str, *, _billing_sid: str | None = None, _billing_cost=None, **kwargs) -> None:
     """走图像生成图：build_med_prompt → safety_check → generate → postprocess → save"""
+    success = False
     try:
         if _tasks.get(task_id, {}).get("_cancelled"):
             _tasks[task_id]["status"] = "cancelled"
@@ -216,6 +217,7 @@ async def _run_task(task_id: str, **kwargs) -> None:
             _tasks[task_id]["status"] = "failed"
             _tasks[task_id]["error"] = err
         else:
+            success = True
             _tasks[task_id]["status"] = "done"
             _tasks[task_id]["images"] = [{"path": u} for u in urls]
             meta = state.get("gen_meta") or {}
@@ -226,6 +228,18 @@ async def _run_task(task_id: str, **kwargs) -> None:
         if task_id in _tasks and not _tasks[task_id].get("_cancelled"):
             _tasks[task_id]["status"] = "failed"
             _tasks[task_id]["error"] = str(e)
+    finally:
+        if _billing_sid:
+            try:
+                from app.services.billing.dependency import close_billing_session
+                async with AsyncSessionLocal() as sdb:
+                    await close_billing_session(
+                        _billing_sid, sdb, success=success,
+                        override_cost=_billing_cost if success else None,
+                    )
+                    await sdb.commit()
+            except Exception:
+                pass
 
 
 @router.get("/prompt-templates")
@@ -293,8 +307,28 @@ async def serve_image(path: str):
 
 
 @router.post("/tasks")
-async def create_task(req: CreateTaskRequest):
+async def create_task(req: CreateTaskRequest, request: Request = None):
     """创建图像生成任务，支持 content_format/image_type（条漫 style=comic, image_type=comic_panel）"""
+    from app.core.config import is_saas
+    billing_sid: str | None = None
+    _cost = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user_or_default
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.pricing import calc_image_gen_cost
+        from app.services.credit.service import InsufficientCreditsError
+        async with AsyncSessionLocal() as db:
+            user = await get_current_user_or_default(request, db)
+            _cost = calc_image_gen_cost(req.batch_count)
+            try:
+                billing_sid = await open_billing_session(
+                    user.id, "image_generation", _cost, db,
+                    business_ref={"batch_count": req.batch_count},
+                )
+                await db.commit()
+            except InsufficientCreditsError as e:
+                raise HTTPException(status_code=402, detail=str(e))
+
     task_id = str(uuid.uuid4())
     _tasks[task_id] = {
         "status": "pending",
@@ -315,6 +349,8 @@ async def create_task(req: CreateTaskRequest):
     )
     asyncio.create_task(_run_task(
         task_id,
+        _billing_sid=billing_sid,
+        _billing_cost=_cost,
         prompt=req.prompt,
         style=req.style,
         width=req.width,
@@ -370,8 +406,27 @@ async def cancel_task(task_id: str):
 
 
 @router.post("/generate")
-async def post_generate(req: GenerateRequest):
+async def post_generate(req: GenerateRequest, request: Request = None):
     """生成图像（走图像生成图：prompt 增强 + safety_check + 生成 + 保存）"""
+    from app.core.config import is_saas
+    billing_sid: str | None = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user_or_default
+        from app.services.billing.dependency import open_billing_session, close_billing_session
+        from app.services.credit.pricing import calc_image_gen_cost
+        from app.services.credit.service import InsufficientCreditsError
+        async with AsyncSessionLocal() as db:
+            user = await get_current_user_or_default(request, db)
+            _cost = calc_image_gen_cost(req.batch_count)
+            try:
+                billing_sid = await open_billing_session(
+                    user.id, "image_generation", _cost, db,
+                    business_ref={"batch_count": req.batch_count},
+                )
+                await db.commit()
+            except InsufficientCreditsError as e:
+                raise HTTPException(status_code=402, detail=str(e))
+
     db_v, db_s = "", None
     if req.article_id:
         db_v, db_s = await _load_article_series_fields(req.article_id)
@@ -381,40 +436,57 @@ async def post_generate(req: GenerateRequest):
         db_visual=db_v,
         db_seed=db_s,
     )
-    state = await run_image_gen_graph(
-        _graph_payload_from_task_kwargs(
-            prompt=req.prompt,
-            style=req.style,
-            width=req.width,
-            height=req.height,
-            content_format=req.content_format,
-            image_type=req.image_type,
-            user_positive_prompt=req.user_positive_prompt,
-            user_negative_prompt=req.user_negative_prompt,
-            batch_count=req.batch_count,
-            seed=req.seed,
-            steps=req.steps,
-            cfg_scale=req.cfg_scale,
-            sampler_name=req.sampler_name,
-            specialty=req.specialty,
-            target_audience=req.target_audience,
-            preferred_provider=req.preferred_provider,
-            siliconflow_image_model=req.siliconflow_image_model,
-            comfy_workflow_path=req.comfy_workflow_path,
-            comfy_mode=req.comfy_mode,
-            comfy_base_url=req.comfy_base_url,
-            comfy_prompt_node_id=req.comfy_prompt_node_id,
-            comfy_prompt_input_key=req.comfy_prompt_input_key,
-            comfy_negative_node_id=req.comfy_negative_node_id,
-            comfy_negative_input_key=req.comfy_negative_input_key,
-            comfy_ksampler_node_id=req.comfy_ksampler_node_id,
-            visual_continuity_prompt=vc,
-            seed_base=sb,
-            panel_index=req.panel_index,
-            article_id=req.article_id,
-            loras=req.loras,
+    try:
+        state = await run_image_gen_graph(
+            _graph_payload_from_task_kwargs(
+                prompt=req.prompt,
+                style=req.style,
+                width=req.width,
+                height=req.height,
+                content_format=req.content_format,
+                image_type=req.image_type,
+                user_positive_prompt=req.user_positive_prompt,
+                user_negative_prompt=req.user_negative_prompt,
+                batch_count=req.batch_count,
+                seed=req.seed,
+                steps=req.steps,
+                cfg_scale=req.cfg_scale,
+                sampler_name=req.sampler_name,
+                specialty=req.specialty,
+                target_audience=req.target_audience,
+                preferred_provider=req.preferred_provider,
+                siliconflow_image_model=req.siliconflow_image_model,
+                comfy_workflow_path=req.comfy_workflow_path,
+                comfy_mode=req.comfy_mode,
+                comfy_base_url=req.comfy_base_url,
+                comfy_prompt_node_id=req.comfy_prompt_node_id,
+                comfy_prompt_input_key=req.comfy_prompt_input_key,
+                comfy_negative_node_id=req.comfy_negative_node_id,
+                comfy_negative_input_key=req.comfy_negative_input_key,
+                comfy_ksampler_node_id=req.comfy_ksampler_node_id,
+                visual_continuity_prompt=vc,
+                seed_base=sb,
+                panel_index=req.panel_index,
+                article_id=req.article_id,
+                loras=req.loras,
+            )
         )
-    )
+    except Exception:
+        if billing_sid and is_saas():
+            async with AsyncSessionLocal() as sdb:
+                from app.services.billing.dependency import close_billing_session
+                await close_billing_session(billing_sid, sdb, success=False)
+                await sdb.commit()
+        raise
+
+    success = not state.get("error")
+    if billing_sid and is_saas():
+        async with AsyncSessionLocal() as sdb:
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, sdb, success=success,
+                                        override_cost=_cost if success else None)
+            await sdb.commit()
+
     if state.get("error"):
         raise HTTPException(status_code=400, detail=state["error"])
     meta = state.get("gen_meta") or {}
@@ -428,16 +500,52 @@ async def post_generate(req: GenerateRequest):
 
 
 @router.post("/ai-prompts")
-async def post_ai_image_prompts(req: AiImagePromptsRequest):
+async def post_ai_image_prompts(req: AiImagePromptsRequest, request: Request = None):
     """AI 生成正/负向提示词（每次覆盖，由前端写入输入框）"""
-    pos, neg, used_template_fallback = await ai_generate_image_prompts(
-        scene_idea=req.scene_idea,
-        style=req.style,
-        image_type=req.image_type,
-        target_audience=req.target_audience,
-        content_format=req.content_format,
-        provider=req.provider,
-    )
+    from app.core.config import is_saas
+    billing_sid: str | None = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user_or_default
+        from app.services.billing.dependency import open_billing_session, close_billing_session
+        from app.services.credit.pricing import calc_imagegen_prompt_cost
+        from app.services.credit.service import InsufficientCreditsError
+        async with AsyncSessionLocal() as db:
+            user = await get_current_user_or_default(request, db)
+            _cost = calc_imagegen_prompt_cost()
+            try:
+                billing_sid = await open_billing_session(
+                    user.id, "imagegen_prompt", _cost, db,
+                    business_ref={"action": "ai_prompts"},
+                )
+                await db.commit()
+            except InsufficientCreditsError as e:
+                raise HTTPException(status_code=402, detail=str(e))
+
+    try:
+        pos, neg, used_template_fallback = await ai_generate_image_prompts(
+            scene_idea=req.scene_idea,
+            style=req.style,
+            image_type=req.image_type,
+            target_audience=req.target_audience,
+            content_format=req.content_format,
+            provider=req.provider,
+        )
+    except Exception:
+        if billing_sid and is_saas():
+            async with AsyncSessionLocal() as sdb:
+                from app.services.billing.dependency import close_billing_session
+                await close_billing_session(billing_sid, sdb, success=False)
+                await sdb.commit()
+        raise
+
+    success = bool(pos)
+    if billing_sid and is_saas():
+        async with AsyncSessionLocal() as sdb:
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, sdb, success=success,
+                                        override_cost=_cost if success else None)
+            await sdb.commit()
+
     if not pos:
         raise HTTPException(status_code=502, detail="AI 提示词生成失败，请重试或手写提示词")
     return {
@@ -562,8 +670,37 @@ class ComicBatchRequest(BaseModel):
 
 
 @router.post("/comic/batch")
-async def comic_batch(req: ComicBatchRequest, db=Depends(get_db)):
+async def comic_batch(req: ComicBatchRequest, request: Request = None, db=Depends(get_db)):
     """条漫批量生成：多格一次提交；继承文章级连贯文案与系列种子基准"""
+    from app.core.config import is_saas
+    panel_billing: list[tuple[str | None, object]] = []
+    if is_saas() and request:
+        from app.core.deps import get_current_user_or_default
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.pricing import calc_image_gen_cost
+        from app.services.credit.service import InsufficientCreditsError
+        total_cost = calc_image_gen_cost(len(req.panels))
+        async with AsyncSessionLocal() as bdb:
+            user = await get_current_user_or_default(request, bdb)
+            for _pi in range(len(req.panels)):
+                _pc = calc_image_gen_cost(1)
+                try:
+                    _psid = await open_billing_session(
+                        user.id, "image_generation", _pc, bdb,
+                        business_ref={"action": "comic_panel", "panel": _pi},
+                    )
+                    panel_billing.append((_psid, _pc))
+                except InsufficientCreditsError as e:
+                    for _prev_sid, _ in panel_billing:
+                        if _prev_sid:
+                            from app.services.billing.dependency import close_billing_session
+                            await close_billing_session(_prev_sid, bdb, success=False)
+                    await bdb.commit()
+                    raise HTTPException(status_code=402, detail=str(e))
+            await bdb.commit()
+    else:
+        panel_billing = [(None, None)] * len(req.panels)
+
     tasks_created = []
     db_v, db_s = await _load_article_series_fields(req.article_id)
     vc, sb = _resolve_continuity_and_seed(
@@ -588,8 +725,11 @@ async def comic_batch(req: ComicBatchRequest, db=Depends(get_db)):
                 panel_off = max(0, int(p.panel_index) - 1)
             except (TypeError, ValueError):
                 panel_off = i
+        _b_sid, _b_cost = panel_billing[i]
         asyncio.create_task(_run_task(
             task_id,
+            _billing_sid=_b_sid,
+            _billing_cost=_b_cost,
             prompt=f"{p.scene_desc}\n{p.dialogue or ''}".strip(),
             style=req.style,
             width=1024,

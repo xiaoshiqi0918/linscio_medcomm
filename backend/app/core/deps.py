@@ -95,6 +95,20 @@ async def get_current_user_or_default(
     return user
 
 
+def _extract_user_id_from_token(request: Request) -> int | None:
+    """从 Request 中提取 user_id（仅解码 JWT，不查 DB），供中间件等轻量场景使用。"""
+    from app.core.security import decode_token
+    token = _extract_token(request)
+    if not token:
+        return None
+    try:
+        payload = decode_token(token)
+        uid = int(payload.get("sub", 0))
+        return uid if uid else None
+    except Exception:
+        return None
+
+
 async def get_admin_user(user: User = Depends(get_current_user)) -> User:
     if not getattr(user, "is_admin", False):
         raise HTTPException(

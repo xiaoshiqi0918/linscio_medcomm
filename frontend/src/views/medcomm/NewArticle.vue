@@ -296,6 +296,17 @@
         <p class="step-desc" v-else>配置科普写作参数</p>
       </div>
 
+      <el-alert
+        v-if="form.content_format === 'contest_article' && !selectedPapers.length"
+        type="info"
+        show-icon
+        :closable="true"
+        style="margin-bottom: 1rem; max-width: 720px;"
+      >
+        <template #title>参赛投稿建议绑定至少 1 篇支撑文献，以提升学术可信度与评审得分</template>
+        <el-button size="small" type="primary" text @click="currentStep = 0">返回选择文献</el-button>
+      </el-alert>
+
       <el-form :model="form" label-width="100px" style="max-width: 720px;">
         <el-form-item label="科普形式" required>
           <div class="format-mode">
@@ -404,6 +415,14 @@
             已跳过 {{ skipSections.join('、') }}，字数将重分配给其余章节
           </span>
         </el-form-item>
+        <el-form-item v-if="form.content_format === 'contest_article'" label="赛制配置">
+          <ContestConfigPanel
+            v-model:contest-pack-id="contestPackId"
+            v-model:contest-rule-source="contestRuleSource"
+            v-model:contest-custom-rules="contestCustomRules"
+            @word-limit-change="onContestWordLimitChange"
+          />
+        </el-form-item>
         <el-form-item label="模板">
           <el-select v-model="form.template_id" placeholder="选择模板（可选）" clearable style="width: 100%;">
             <el-option
@@ -435,6 +454,7 @@ import { useRouter } from 'vue-router'
 import { Close, Loading, DataAnalysis, CircleCheckFilled, Promotion, Document, TrendCharts, Connection } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import FormatPicker from '@/components/common/FormatPicker.vue'
+import ContestConfigPanel from '@/components/contest/ContestConfigPanel.vue'
 import { api, API_BASE, getLocalApiKeyHeaderForFetch } from '@/api'
 import { useAuthGuard } from '@/composables/useAuthGuard'
 import { useSettingsStore } from '@/stores/settings'
@@ -678,6 +698,8 @@ const PLATFORM_DEFAULT_WORD_COUNT: Record<string, number> = {
   douyin: 300,
   journal: 3000,
   offline: 2000,
+  contest: 1000,
+  contest: 2500,
 }
 
 const form = reactive({
@@ -692,6 +714,23 @@ const form = reactive({
 })
 
 const customWordCount = ref(1500)
+
+// ── Contest state ──
+const contestPackId = ref<number | null>(null)
+const contestRuleSource = ref<string | null>(null)
+const contestCustomRules = ref<Record<string, any> | null>(null)
+
+function onContestWordLimitChange(limit: number) {
+  if (limit > 0) {
+    const presets = [800, 1200, 2000, 3000]
+    if (presets.includes(limit)) {
+      form.target_word_count = limit
+    } else {
+      form.target_word_count = 0
+      customWordCount.value = limit
+    }
+  }
+}
 
 const FORMAT_SECTION_CONFIGS: Record<string, { sections: { value: string; label: string; required: boolean }[]; optionalKeys: string[] }> = {
   article: {
@@ -878,6 +917,18 @@ const FORMAT_SECTION_CONFIGS: Record<string, { sections: { value: string; label:
     ],
     optionalKeys: [],
   },
+  contest_article: {
+    sections: [
+      { value: 'intro', label: '导言', required: true },
+      { value: 'knowledge_1', label: '知识点一', required: true },
+      { value: 'knowledge_2', label: '知识点二', required: true },
+      { value: 'knowledge_3', label: '知识点三', required: true },
+      { value: 'misconception', label: '常见误区', required: false },
+      { value: 'advice', label: '实用建议', required: true },
+      { value: 'conclusion', label: '总结', required: true },
+    ],
+    optionalKeys: ['misconception'],
+  },
 }
 
 const sectionOptions = computed(() => {
@@ -928,6 +979,7 @@ const FORMAT_WORD_RATIOS: Record<string, Record<string, number>> = {
   debunk: { rumor_present: 0.11, verdict: 0.05, debunk_1: 0.15, debunk_2: 0.15, debunk_3: 0.15, correct_practice: 0.18, anti_fraud: 0.09 },
   qa_article: { qa_intro: 0.03, qa_1: 0.18, qa_2: 0.18, qa_3: 0.18, qa_4: 0.18, qa_5: 0.18, qa_summary: 0.07 },
   research_read: { one_liner: 0.03, study_card: 0.05, why_matters: 0.15, methods: 0.20, findings: 0.27, implication: 0.18, limitation: 0.12 },
+  contest_article: { intro: 0.12, knowledge_1: 0.22, knowledge_2: 0.22, knowledge_3: 0.18, misconception: 0.10, advice: 0.10, conclusion: 0.06 },
 }
 
 const FORMAT_HINT_SECTIONS: Record<string, { key: string; label: string }[]> = {
@@ -961,6 +1013,14 @@ const FORMAT_HINT_SECTIONS: Record<string, { key: string; label: string }[]> = {
     { key: 'findings', label: '发现' },
     { key: 'implication', label: '意义' },
     { key: 'limitation', label: '局限' },
+  ],
+  contest_article: [
+    { key: 'intro', label: '导言' },
+    { key: 'knowledge_1', label: '知识点一' },
+    { key: 'knowledge_2', label: '知识点二' },
+    { key: 'knowledge_3', label: '知识点三' },
+    { key: 'advice', label: '实用建议' },
+    { key: 'conclusion', label: '总结' },
   ],
 }
 
@@ -1001,6 +1061,10 @@ watch(() => form.content_format, async (fmt, oldFmt) => {
     form.template_id = null
   }
   if (fmt === 'picture_book') form.target_audience = 'children'
+  if (fmt === 'contest_article') {
+    form.platform = 'contest'
+    form.target_word_count = 1000
+  }
   const res = await api.templates.getTemplates(form.content_format)
   templates.value = res.data?.items || []
 }, { immediate: true })
@@ -1063,8 +1127,14 @@ async function handleCreate() {
   creating.value = true
   try {
     const finalWordCount = form.target_word_count === 0 ? customWordCount.value : form.target_word_count
+    const contestFields = form.content_format === 'contest_article' ? {
+      contest_pack_id: contestPackId.value,
+      contest_rule_source: contestRuleSource.value,
+      contest_custom_rules: contestCustomRules.value,
+    } : {}
     const res = await api.medcomm.createArticle({
       ...form,
+      ...contestFields,
       target_word_count: finalWordCount,
       skip_sections: skipSectionTypes.value.length ? skipSectionTypes.value : undefined,
       default_model: settingsStore.defaultModel,
@@ -1082,7 +1152,24 @@ async function handleCreate() {
         }
       }
       router.push(`/medcomm/article/${id}`)
+    } else {
+      ElMessage.error('服务器未返回文章 ID')
     }
+  } catch (e: unknown) {
+    const ax = e as { response?: { data?: { detail?: unknown } } }
+    const detail = ax?.response?.data?.detail
+    let msg = '创建文章失败'
+    if (typeof detail === 'string') {
+      msg = detail
+    } else if (Array.isArray(detail)) {
+      msg = detail
+        .map((d: unknown) =>
+          typeof d === 'object' && d !== null && 'msg' in d
+            ? String((d as { msg: unknown }).msg)
+            : String(d))
+        .join('；')
+    }
+    ElMessage.error(msg)
   } finally {
     creating.value = false
   }

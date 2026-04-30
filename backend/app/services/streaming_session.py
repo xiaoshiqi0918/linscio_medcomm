@@ -120,6 +120,8 @@ async def complete_streaming_session(
     actual_word_count: int | None = None,
     model_tier: str | None = None,
     include_embedding: bool = False,
+    content_format: str = "article",
+    section_count: int = 1,
 ) -> Decimal:
     """流正常完成：按实际产出字数 + 实际模型档位扣费，否则按预估全额扣费。"""
     if not is_saas():
@@ -136,7 +138,10 @@ async def complete_streaming_session(
     if actual_word_count is not None and actual_word_count > 0:
         from app.services.credit.pricing import calc_generation_cost
         tier = model_tier or "standard"
-        actual_cost = calc_generation_cost(actual_word_count, model_tier=tier, include_embedding=include_embedding)
+        actual_cost = calc_generation_cost(
+            actual_word_count, model_tier=tier, include_embedding=include_embedding,
+            content_format=content_format, section_count=section_count,
+        )
         actual_cost = min(actual_cost, session.estimated_cost)
     else:
         actual_cost = session.estimated_cost

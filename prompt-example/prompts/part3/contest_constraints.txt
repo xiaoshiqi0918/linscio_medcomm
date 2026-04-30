@@ -1,0 +1,30 @@
+## 赛制约束（投稿要求，优先级见末尾）
+
+> **装配位置**：User Message Part 3-C
+> **对应代码**：`prompt_builder.py` → `_build_contest_constraints_block`
+
+---
+
+本文将提交至「{contest_name}」（赛制包版本：{contest_pack_version}，最后更新：{contest_pack_updated_at}）。
+
+【硬约束】
+- 全文字数上限：{word_limit} 字（{wc_scope}）
+- 配图数量：{image_count_min} - {image_count_max} 张
+- 配图格式：{image_format}（如 JPG）
+- 配图分辨率：{image_resolution}
+- 提交文件格式：{file_format}（如 Word + PDF）
+- 字体要求：{font}（仅影响导出排版，不影响正文写作）
+- 文件命名规则：{naming_template}
+- 截止日期：{deadline}
+
+【AI 使用披露】
+该赛事的 AI 披露要求等级：{ai_disclosure_level}（强制 / 建议 / 无说明）
+处理方式：声明文本由系统在导出时统一插入，正文中**不要**自行书写"本文使用了 AI 辅助"等声明语句。
+
+【优先级裁决】
+本块约束的优先级：
+- 高于：Layer 0 输出格式（R12-R14）、风格偏好
+- 低于：Layer 0 安全红线（R7-R11）、事实准确（R1-R6）、Layer 1 身份匿名（C1-C2）
+
+【责任边界提示】
+本赛制包整理自{contest_source}，请在投递前对照官方最新通知核对。如赛事方临时调整规则，以官方通知为准。

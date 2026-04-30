@@ -144,6 +144,12 @@ const formatGroups = [
       { id: 'patient_handbook', name: '患者手册' },
     ],
   },
+  {
+    name: '规范投稿类',
+    formats: [
+      { id: 'contest_article', name: '参赛图文科普' },
+    ],
+  },
 ]
 
 const platforms = [
@@ -154,6 +160,7 @@ const platforms = [
   { id: 'journal', name: '期刊' },
   { id: 'offline', name: '线下' },
   { id: 'universal', name: '通用' },
+  { id: 'contest', name: '参赛投稿' },
 ]
 
 function platformScore(platformId: string): number {

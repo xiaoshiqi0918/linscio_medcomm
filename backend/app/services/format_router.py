@@ -22,6 +22,7 @@ FORMAT_CONFIG = {
     "patient_handbook": {"agent": "HandbookAgents", "exporter": "PdfExporter"},
     "quiz_article": {"agent": "QuizAgents", "exporter": "HtmlDocxExporter"},
     "h5_outline": {"agent": "H5Agents", "exporter": "TxtExporter"},
+    "contest_article": {"agent": "ContestArticleAgents", "exporter": "HtmlDocxExporter"},
 }
 
 # 形式 × 平台推荐矩阵  3=强推荐 2=推荐 0=不推荐
@@ -43,6 +44,7 @@ FORMAT_PLATFORM_MATRIX = {
     "patient_handbook": {"offline": 3, "universal": 3},
     "quiz_article": {"wechat": 3, "xiaohongshu": 3, "universal": 2},
     "h5_outline": {"wechat": 3},
+    "contest_article": {"journal": 3, "offline": 3, "universal": 3, "wechat": 2, "contest": 3},
 }
 
 # 各形式字段可见性（False=隐藏，不校验必填）
@@ -57,6 +59,7 @@ FIELD_VISIBILITY = {
     "long_image": {"reading_level": False},
     "h5_outline": {"reading_level": False},
     "picture_book": {"target_audience": False},
+    "contest_article": {"reading_level": False},
 }
 
 # 各形式 section_type 枚举
@@ -78,6 +81,7 @@ SECTION_TYPES_BY_FORMAT = {
     "patient_handbook": ["handbook_plan", "cover", "disease_know", "treatment", "daily_care", "followup", "emergency", "faq", "back_cover"],
     "quiz_article": ["quiz_intro", "q_1", "q_2", "q_3", "q_4", "q_5", "summary"],
     "h5_outline": ["page_cover", "page_1", "page_2", "page_3", "page_end"],
+    "contest_article": ["intro", "knowledge_1", "knowledge_2", "knowledge_3", "misconception", "advice", "conclusion"],
 }
 
 # 字数统计口径：各形式参与统计的字段（v6.0）
@@ -99,6 +103,7 @@ WORD_COUNT_FIELDS = {
     "patient_handbook": ["content_text"],
     "quiz_article": ["content_text", "explanation"],
     "h5_outline": ["content_text"],
+    "contest_article": ["content_text"],
 }
 
 
@@ -146,6 +151,7 @@ FORMAT_NAMES = {
     "patient_handbook": "患者教育手册",
     "quiz_article": "自测科普",
     "h5_outline": "H5 互动大纲",
+    "contest_article": "参赛图文科普",
 }
 
 
@@ -181,6 +187,7 @@ SECTION_TITLES: dict[str, dict[str, str]] = {
     "patient_handbook": {"handbook_plan": "手册信息", "cover": "封面", "disease_know": "认识疾病", "treatment": "治疗方案", "daily_care": "日常管理", "followup": "复诊与随访", "emergency": "紧急情况", "faq": "常见问题", "back_cover": "封底"},
     "quiz_article": {"quiz_intro": "自测引入", "q_1": "题目1", "q_2": "题目2", "q_3": "题目3", "q_4": "题目4", "q_5": "题目5", "summary": "总结"},
     "h5_outline": {"page_cover": "封面页", "page_1": "第1页", "page_2": "第2页", "page_3": "第3页", "page_end": "结束页"},
+    "contest_article": {"intro": "导言", "knowledge_1": "知识点一", "knowledge_2": "知识点二", "knowledge_3": "知识点三", "misconception": "常见误区", "advice": "实用建议", "conclusion": "总结"},
 }
 
 

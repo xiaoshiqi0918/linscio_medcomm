@@ -47,6 +47,16 @@ _SECTION_WORD_RATIOS: dict[str, dict[str, float]] = {
         "implication": 0.18,     # 对普通人意味着什么 150-200字
         "limitation": 0.12,      # 注意事项·研究局限 100-200字
     },
+    # 参赛图文科普：与各节前端比例一致；总长为文章 target_word_count，避免每节都像独立短文
+    "contest_article": {
+        "intro": 0.12,
+        "knowledge_1": 0.22,
+        "knowledge_2": 0.22,
+        "knowledge_3": 0.18,
+        "misconception": 0.10,
+        "advice": 0.10,
+        "conclusion": 0.06,
+    },
 }
 
 _PLATFORM_DEFAULT_WORD_COUNT = {
@@ -55,19 +65,28 @@ _PLATFORM_DEFAULT_WORD_COUNT = {
     "douyin": 300,
     "journal": 3000,
     "offline": 2000,
+    "contest": 1000,
 }
 
 _SECTION_MAX_WC: dict[str, dict[str, int]] = {
     "article": {"body": 2200, "case": 1000, "qa": 900, "summary": 500},
+    "contest_article": {
+        "intro": 150,
+        "knowledge_1": 260,
+        "knowledge_2": 260,
+        "knowledge_3": 220,
+        "misconception": 130,
+        "advice": 130,
+        "conclusion": 80,
+    },
 }
 
 
 def _section_word_target(state: dict) -> str:
     """根据全文目标字数和章节类型，返回当前章节的字数指引字符串。
 
-    重分配策略（方向 B + cap 保护）：
-      跳过章节的字数预算全部追加给 body（弹性最大的章节），
-      其他 section 保持自然 ratio。body 有上限保护，超出部分直接丢弃。
+    图文文章 article：跳过章节的预算追加给正文 body（弹性最大）。
+    其他形式（含参赛图文）：跳过章节后，剩余章节按比例重分配至总和为 100%。
     """
     total = state.get("target_word_count")
     platform = state.get("platform", "wechat")
@@ -79,20 +98,30 @@ def _section_word_target(state: dict) -> str:
     skip = set(state.get("skip_sections") or [])
 
     ratios = _SECTION_WORD_RATIOS.get(fmt, {})
-    ratio = ratios.get(st, 0.0)
+    if not ratios or st not in ratios:
+        ratio = 0.0
+    else:
+        ratio = ratios.get(st, 0.0)
 
     if ratio <= 0 or st in skip:
         return ""
 
-    total_positive = sum(v for v in ratios.values() if v > 0)
-    if total_positive <= 0:
-        return ""
+    if fmt == "article":
+        total_positive = sum(v for v in ratios.values() if v > 0)
+        if total_positive <= 0:
+            return ""
 
-    if st == "body" and st not in skip:
-        skipped_budget = sum(ratios[k] for k in skip if k in ratios and ratios[k] > 0)
-        adjusted_ratio = (ratio + skipped_budget) / total_positive
+        if st == "body" and st not in skip:
+            skipped_budget = sum(ratios[k] for k in skip if k in ratios and ratios[k] > 0)
+            adjusted_ratio = (ratio + skipped_budget) / total_positive
+        else:
+            adjusted_ratio = ratio / total_positive
     else:
-        adjusted_ratio = ratio / total_positive
+        active_ratios = {k: v for k, v in ratios.items() if k not in skip and v > 0}
+        s_act = sum(active_ratios.values())
+        if st not in active_ratios or s_act <= 0:
+            return ""
+        adjusted_ratio = active_ratios[st] / s_act
 
     target = int(total * adjusted_ratio)
 
@@ -2750,6 +2779,183 @@ def get_fallback_prompt(state: dict, section_type: str) -> str:
 """
 
 
+# ═══ 参赛图文科普（contest_article）章节指令 ═══
+
+def _contest_section_word_target(state: dict) -> str:
+    """返回当前章节的字数目标数字（纯数字字符串），用于嵌入自检项。"""
+    wt = _section_word_target(state)
+    return wt if wt else "按全文预算分配"
+
+
+def get_contest_intro(state: dict) -> str:
+    wt = _contest_section_word_target(state)
+    return f"""## 本章节指令：导言
+
+【一句话定位】
+用一个具体场景或一个真实疑问把读者带进来，让他知道"接下来这篇要解决我哪个困惑"。
+
+✅ 本节职责
+- 用一个生活场景、新闻片段、或常见疑问开场（择一即可）
+- 一两句话点明本文要解决的认知问题
+- 自然过渡到正文，但不剧透三个知识点
+
+❌ 本节禁止
+- 不讲解疾病机制、流行病学数据等"应在知识点章节展开"的内容
+- 不写"本文将从三个方面……"这类小结式预告（参见 C4）
+- 不堆砌套话（"健康是人生最大的财富"等）
+
+【硬约束自检】
+□ 本节字数预算 {wt}，写完即止，宁短勿长
+□ 没有出现"我"、"笔者"等第一人称（参见 C1）
+□ 段落数 ≤ 2 段，每段 ≤ 4 句（参见 C5）
+□ 没有出现 [N] 角标（导言通常无需引用，除非数据是钩子本身）"""
+
+
+def get_contest_knowledge_1(state: dict) -> str:
+    wt = _contest_section_word_target(state)
+    return f"""## 本章节指令：知识点一
+
+【一句话定位】
+只写一个独立子主题（一个现象、一个概念、或一条机制），精炼讲清。
+
+✅ 本节职责
+- 锁定一个子主题，配 1 个极简例子或类比
+- 必要的术语解释，按 R12 标注英文对照
+- 关键数据按 R1 标注 [N] 角标
+
+❌ 本节禁止
+- 不复述导言已铺垫的内容
+- 不预先涉及知识点二/三的核心子主题
+- 不把这一节写成可独立成篇的完整科普（参见 C3）
+
+【硬约束自检】
+□ 本节字数预算 {wt}，写完即止，宁短勿长
+□ 本节聚焦一个子主题，未跨界
+□ 单段 [N] 角标 ≤ 3（参见 R2）
+□ 段落数 ≤ 3，每段 ≤ 4 句
+□ 涉及用药剂量/症状自查/方案选择时已按 R7-R9 处理"""
+
+
+def get_contest_knowledge_2(state: dict) -> str:
+    wt = _contest_section_word_target(state)
+    return f"""## 本章节指令：知识点二
+
+【一句话定位】
+写第二个子主题，与知识点一形成"角度递进"或"层次递进"，不是同义换说法。
+
+✅ 本节职责
+- 锁定与知识点一明显不同的子主题
+- 首句用一句话承接知识点一的某个信息或留下的问题（参见 D4 裁决：承接信息，不承接句式）
+- 必要时可与知识点一做横向对比
+
+❌ 本节禁止
+- 不重复知识点一的定义、例证、类比
+- 不使用知识点一已用过的小节标题套路、顺口溜、统计数据
+- 不写误区纠正与建议清单（留给 misconception/advice）
+
+【硬约束自检】
+□ 本节字数预算 {wt}，写完即止，宁短勿长
+□ 本节子主题与知识点一明显不同（自我对照：能否用一句话说清"本节比上节多讲了什么"）
+□ 首句承接了上文，但未抄袭上文句式
+□ 段落数 ≤ 3，每段 ≤ 4 句"""
+
+
+def get_contest_knowledge_3(state: dict) -> str:
+    wt = _contest_section_word_target(state)
+    return f"""## 本章节指令：知识点三
+
+【一句话定位】
+写第三个子主题，或为后文的误区/建议章节做必要的概念铺垫。仍然"一节一事"。
+
+✅ 本节职责
+- 锁定第三个子主题，或写一个与后文衔接的过渡性概念
+- 首句承接知识点一/二（参见 D4）
+- 如本节为后文铺垫，可在末段用一句话引出"接下来要谈的认知误区"——但只引出，不展开
+
+❌ 本节禁止
+- 不与前两节同属一块知识、只是换说法
+- 不写误区纠正与清单（留给后文）
+- 不写完整的"建议-总结"段落
+
+【硬约束自检】
+□ 本节字数预算 {wt}，写完即止，宁短勿长
+□ 本节内容在前两节中均未出现
+□ 段落数 ≤ 3，每段 ≤ 4 句
+□ 末句若涉及后文预告，仅一句话，不展开"""
+
+
+def get_contest_misconception(state: dict) -> str:
+    wt = _contest_section_word_target(state)
+    return f"""## 本章节指令：常见误区
+
+【一句话定位】
+集中写 1-2 个读者最容易踩的认知陷阱，每个都要"指出错点 + 说明原因 + 给出正确理解"。
+
+✅ 本节职责
+- 选 1-2 个最有代表性的误区（不贪多）
+- 每个误区按"误区描述 → 为什么错 → 正确理解一句落地"的微结构写
+- 误区描述要用读者熟悉的语言（"很多人以为……"），而不是教科书语言
+
+❌ 本节禁止
+- 不重新讲解前三节已讲过的机制（如需引用，一句话带过）
+- 不堆砌超过 2 个误区——参赛稿评审时长不足以读完更多
+- 不用"千万不要"、"绝对错误"这类绝对化表述（参见 R5 证据强度匹配）
+
+【硬约束自检】
+□ 本节字数预算 {wt}，写完即止，宁短勿长
+□ 误区数量 ≤ 2
+□ 每个误区都包含"错点 + 原因 + 正确理解"三要素
+□ 涉及替代医学时按 R11 处理"""
+
+
+def get_contest_advice(state: dict) -> str:
+    wt = _contest_section_word_target(state)
+    return f"""## 本章节指令：实用建议
+
+【一句话定位】
+2-3 条可执行的行动建议，按"日常监测 / 生活方式 / 就医指征"的层级排列。
+
+✅ 本节职责
+- 给出 2-3 条建议，条目化呈现（字数有限，精选最重要的）
+- 每条建议是一个具体动作（"每周测 2 次空腹血糖"），而不是一个原则（"注意监测血糖"）
+- 涉及就医指征的条目，明确"出现什么症状时应该去医院"
+- 末尾按 R7-R9 附加合规提示
+
+❌ 本节禁止
+- 不再从零解释疾病机制
+- 不重复前几节的知识点段落
+- 不给出超出循证范围的建议（如食疗能治愈、保健品替代药物）
+
+【硬约束自检】
+□ 本节字数预算 {wt}，写完即止，宁短勿长
+□ 建议条目数在 2-3 条之间
+□ 每条都是具体动作，而非抽象原则
+□ 涉及用药/症状/方案选择的已按 R7-R9 加合规提示"""
+
+
+def get_contest_conclusion(state: dict) -> str:
+    wt = _contest_section_word_target(state)
+    return f"""## 本章节指令：总结
+
+【一句话定位】
+2-3 句收束全文：一条核心 takeaway + 一句行动提醒。
+
+✅ 本节职责
+- 提炼一条全文最重要的认知（不超过一句话）
+- 给一句行动层面的提醒
+- 如适用，用一句话明确就医边界
+
+❌ 本节禁止
+- 不引入新数据、新概念、新论据
+- 不复述前文章节的内容（哪怕换说法）
+- 不写"通过本文我们了解了……"这类元叙述
+
+【硬约束自检】
+□ 本节字数预算 {wt}，写完即止，宁短勿长
+□ 总句数 2-3 句
+□ 没有出现前文未提及的新名词或新数据"""
+
+
 # 路由表：content_format -> section_type -> 函数
 TASK_PROMPT_FUNCS = {
     "article": {
@@ -2904,6 +3110,15 @@ TASK_PROMPT_FUNCS = {
         "emergency": lambda s: _get_handbook_prompt(s, "emergency"),
         "faq": lambda s: _get_handbook_prompt(s, "faq"),
         "back_cover": lambda s: _get_handbook_prompt(s, "back_cover"),
+    },
+    "contest_article": {
+        "intro": get_contest_intro,
+        "knowledge_1": get_contest_knowledge_1,
+        "knowledge_2": get_contest_knowledge_2,
+        "knowledge_3": get_contest_knowledge_3,
+        "misconception": get_contest_misconception,
+        "advice": get_contest_advice,
+        "conclusion": get_contest_conclusion,
     },
 }
 

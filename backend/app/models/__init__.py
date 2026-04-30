@@ -21,6 +21,9 @@ from app.models.specialty_package import SpecialtyPackage
 from app.models.article_snapshot import ArticleSnapshot
 from app.models.personal_corpus import PersonalCorpusEntry
 from app.models.medpic_generation import MedPicGeneration
+from app.models.contest import ContestPack, ContestRule, UserContestRule
+from app.models.painting_intent import StylePreset, PaintingIntentExample, NegativeWordSet
+from app.models.article_image_slot import ArticleImageSlot
 
 # SaaS 独有模型 — 桌面端打包时这些文件会被排除，条件导入避免 ImportError
 try:
@@ -45,4 +48,7 @@ __all__ = [
     "ArticleSnapshot",
     "PersonalCorpusEntry",
     "MedPicGeneration",
+    "ContestPack", "ContestRule", "UserContestRule",
+    "StylePreset", "PaintingIntentExample", "NegativeWordSet",
+    "ArticleImageSlot",
 ]

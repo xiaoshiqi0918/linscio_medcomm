@@ -1,0 +1,59 @@
+# B 族中文：自然语言系风格预设 v1.0
+# 用于即梦 / 可灵 / 文心一格 / 通义万相等中文系引擎
+# 中文自然语言叙事，主体前置
+
+infographic:
+  style_clause: "信息图风格，扁平色块，简洁几何形状"
+  medium_clause: "矢量插画质感，适合健康科普传播"
+  default_lighting_clause: "均匀照明，无明显阴影"
+  default_color_clause: "和谐的有限配色"
+  quality_clause: "高分辨率，层次清晰"
+
+flat_illustration:
+  style_clause: "扁平 2D 插画风格，极简阴影"
+  medium_clause: "现代矢量插画"
+  default_lighting_clause: "平面环境光"
+  default_color_clause: "柔和的莫兰迪色调"
+  quality_clause: "线条干净，构图清晰"
+
+photorealistic:
+  style_clause: "真实感的科普纪实摄影"
+  medium_clause: "50mm 镜头，浅景深"
+  default_lighting_clause: "自然日光，柔和阴影"
+  default_color_clause: "自然色调，无浓重调色"
+  quality_clause: "对焦清晰，专业摄影质感"
+
+comic_narrative:
+  style_clause: "轻松活泼的国风漫画插画"
+  medium_clause: "干净线条，赛璐珞上色"
+  default_lighting_clause: "温暖的风格化光线"
+  default_color_clause: "友善的暖色调"
+  quality_clause: "构图清晰，角色生动"
+
+mechanism_diagram:
+  style_clause: "简洁的医学机制示意图"
+  medium_clause: "科学插画风格"
+  default_lighting_clause: "均匀的图解式照明"
+  default_color_clause: "中性色调配合重点高亮"
+  quality_clause: "解剖准确，标注清晰"
+
+metaphor_scene:
+  style_clause: "概念性隐喻插画"
+  medium_clause: "数字绘画风格"
+  default_lighting_clause: "戏剧性定向光线"
+  default_color_clause: "饱和的象征性色彩"
+  quality_clause: "富有表现力，视觉冲击"
+
+watercolor:
+  style_clause: "细腻水彩插画风格"
+  medium_clause: "柔和水色渲染，边缘自然过渡"
+  default_lighting_clause: "漫射自然光"
+  default_color_clause: "透明柔和的水彩色调"
+  quality_clause: "画意盎然，纸张纹理自然"
+
+minimalist_line:
+  style_clause: "极简线描风格"
+  medium_clause: "干净精确的笔触"
+  default_lighting_clause: "平面均匀光"
+  default_color_clause: "黑白为主，局部点缀一种彩色"
+  quality_clause: "线条利落，背景简洁"

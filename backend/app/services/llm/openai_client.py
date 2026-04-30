@@ -270,6 +270,7 @@ async def call_llm_with_fallback(
     stream: bool = False,
     temperature: float | None = None,
     user=None,
+    preferred_provider: str | None = None,
 ) -> str | AsyncIterator[str]:
     """带三级降级的 LLM 调用（SaaS 模式专用）。
 
@@ -277,6 +278,7 @@ async def call_llm_with_fallback(
     依次尝试调用，成功则记录埋点返回，全部失败则抛出 AllModelsFailedError。
 
     若传入 user 且用户充值积分不足，自动降级为 deepseek-chat。
+    preferred_provider: 用户偏好的服务商，传入后其模型优先尝试。
     """
     from app.services.llm.manager import (
         resolve_model_for_saas_task_with_budget,
@@ -284,7 +286,9 @@ async def call_llm_with_fallback(
         AllModelsFailedError,
     )
 
-    candidates = resolve_model_for_saas_task_with_budget(task_type, user=user)
+    candidates = resolve_model_for_saas_task_with_budget(
+        task_type, user=user, preferred_provider=preferred_provider,
+    )
     last_error: Exception | None = None
 
     for model_key in candidates:

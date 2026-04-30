@@ -12,22 +12,38 @@
         <router-view />
       </div>
       <div
+        v-if="rightPanelVisible"
         class="resize-handle"
         @mousedown="onResizeStart"
       />
-      <RightPanel
-        :article="currentArticle"
-        :verification-report="articleStore.verificationReport"
-        :ollama-warning="articleStore.ollamaWarning"
-        :image-suggestions="articleStore.imageSuggestions"
-        :refreshing-suggestions="refreshingSuggestions"
-        :style="{ width: rightPanelWidth + 'px', minWidth: rightPanelWidth + 'px' }"
-        @locate-suggestion="onLocateSuggestion"
-        @generate-from-suggestion="onGenerateFromSuggestion"
-        @refresh-suggestions="onRefreshSuggestions"
-        @ai-replace="onAiReplace"
-        @ai-insert="onAiInsert"
-      />
+      <transition name="slide-right">
+        <RightPanel
+          v-if="rightPanelVisible"
+          :article="currentArticle"
+          :verification-report="articleStore.verificationReport"
+          :ollama-warning="articleStore.ollamaWarning"
+          :image-suggestions="articleStore.imageSuggestions"
+          :refreshing-suggestions="refreshingSuggestions"
+          :style="{ width: rightPanelWidth + 'px', minWidth: rightPanelWidth + 'px' }"
+          @locate-suggestion="onLocateSuggestion"
+          @generate-from-suggestion="onGenerateFromSuggestion"
+          @refresh-suggestions="onRefreshSuggestions"
+          @ai-replace="onAiReplace"
+          @ai-insert="onAiInsert"
+        />
+      </transition>
+      <button
+        class="right-panel-toggle"
+        :class="{ collapsed: !rightPanelVisible }"
+        :style="{ right: rightPanelVisible ? (rightPanelWidth + 5) + 'px' : '0' }"
+        :title="rightPanelVisible ? '隐藏右侧面板' : '展开右侧面板'"
+        @click="toggleRightPanel"
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+          <path v-if="rightPanelVisible" d="M9.5 3L14 8l-4.5 5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          <path v-else d="M6.5 3L2 8l4.5 5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </div>
   </div>
 </template>
@@ -49,10 +65,19 @@ const listRef = ref<{ load?: () => void } | null>(null)
 const RIGHT_PANEL_MIN = 280
 const RIGHT_PANEL_MAX = 640
 const RIGHT_PANEL_DEFAULT = 380
+const STORAGE_KEY_RIGHT_VISIBLE = 'medcomm_right_panel_visible'
 const rightPanelWidth = ref(RIGHT_PANEL_DEFAULT)
+const rightPanelVisible = ref(
+  localStorage.getItem(STORAGE_KEY_RIGHT_VISIBLE) !== 'false'
+)
 let resizing = false
 let startX = 0
 let startWidth = 0
+
+function toggleRightPanel() {
+  rightPanelVisible.value = !rightPanelVisible.value
+  localStorage.setItem(STORAGE_KEY_RIGHT_VISIBLE, String(rightPanelVisible.value))
+}
 
 function onResizeStart(e: MouseEvent) {
   e.preventDefault()
@@ -215,5 +240,50 @@ watch(() => route.name, (name, prev) => {
 }
 .resize-handle:hover::after {
   opacity: 1;
+}
+
+.right-panel-toggle {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  width: 20px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #e5e7eb;
+  border-right: none;
+  border-radius: 6px 0 0 6px;
+  background: #fff;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.2s;
+}
+.right-panel-toggle:hover {
+  background: #f3f4f6;
+  color: #374151;
+}
+.right-panel-toggle.collapsed {
+  right: 0;
+}
+
+.medcomm-body {
+  position: relative;
+}
+
+.slide-right-enter-active,
+.slide-right-leave-active {
+  transition: all 0.25s ease;
+}
+.slide-right-enter-from,
+.slide-right-leave-to {
+  opacity: 0;
+  transform: translateX(30px);
+  width: 0 !important;
+  min-width: 0 !important;
+  overflow: hidden;
 }
 </style>

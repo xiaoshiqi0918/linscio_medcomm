@@ -1,0 +1,153 @@
+# 健康科普配图负向词库 v1.0
+# 四维分层：universal / health_compliance / by_style / by_scene
+# 英文分 en_tag（SD tag 列表）和 en_natural（自然语言正向反义，FLUX/MJ 用）
+# 修改记录请附"为什么加"说明
+
+universal:
+  zh:
+    - 畸形
+    - 多余手指
+    - 变形身体
+    - 错误解剖结构
+    - 模糊
+    - 低质量
+    - 水印
+    - 文字乱码
+    - 签名
+  en_tag:
+    - deformed
+    - extra fingers
+    - mutated hands
+    - bad anatomy
+    - blurry
+    - low quality
+    - worst quality
+    - watermark
+    - text artifacts
+    - signature
+  en_natural:
+    - anatomically correct
+    - sharp focus
+    - high quality
+    - no watermarks or text artifacts
+
+health_compliance:
+  medical_attire:
+    zh:
+      - 不规范着装
+      - 未戴口罩（在诊疗场景中）
+      - 未戴手套（在操作场景中）
+      - 未穿白大褂（在诊室场景中）
+    en_tag:
+      - incorrect medical attire
+      - unmasked in clinical setting
+      - ungloved during procedure
+    en_natural:
+      - medical staff in proper attire with mask and gloves as appropriate
+
+  aesthetic_safety:
+    zh:
+      - 血腥
+      - 血液飞溅
+      - 伤口特写
+      - 脏器暴露
+      - 注射针头特写
+      - 尸体
+      - 恐怖
+      - 惊悚
+    en_tag:
+      - gore
+      - blood splatter
+      - wound close-up
+      - exposed organs
+      - needle close-up
+      - corpse
+      - horror
+      - disturbing
+    en_natural:
+      - clean and reassuring imagery, no graphic medical content
+
+  scientific_accuracy:
+    zh:
+      - 错误解剖位置
+      - 违反生理常识
+      - 器官位置错误
+    en_tag:
+      - incorrect organ placement
+      - anatomically implausible
+      - violates physiology
+    en_natural:
+      - medically and anatomically accurate
+
+  brand_privacy:
+    zh:
+      - 可识别的药品包装
+      - 医院 logo
+      - 医疗器械品牌标识
+      - 可识别真实人脸
+      - 二维码
+    en_tag:
+      - recognizable drug packaging
+      - hospital logo
+      - medical device brand
+      - identifiable real face
+      - QR code
+    en_natural:
+      - generic unbranded products and equipment, no recognizable real persons or logos
+
+  cultural_fit:
+    zh:
+      - 不符合中国医疗场景的元素
+      - 不合时宜的服饰
+    en_tag:
+      - culturally inappropriate elements
+      - anachronistic clothing
+    en_natural:
+      - culturally appropriate Chinese healthcare setting
+
+by_style:
+  infographic:
+    zh: [写实摄影感, 复杂背景, 凌乱构图]
+    en_tag: [photorealistic, busy background, cluttered]
+    en_natural: [clean flat infographic style with simple background]
+
+  flat_illustration:
+    zh: [写实摄影感, 3D 渲染感, 复杂阴影]
+    en_tag: [photorealistic, 3D render, complex shading]
+    en_natural: [flat 2D illustration with simple shapes and minimal shading]
+
+  photorealistic:
+    zh: [卡通, 插画感, 扁平化]
+    en_tag: [cartoon, illustration, flat design]
+    en_natural: [realistic photography, not illustrated]
+
+  comic_narrative:
+    zh: [写实摄影, 复杂光线, 电影感]
+    en_tag: [photorealistic, complex lighting, cinematic]
+    en_natural: [light-hearted comic illustration style]
+
+  watercolor:
+    zh: [写实摄影, 硬边线条, 3D 渲染]
+    en_tag: [photorealistic, hard edges, 3D render]
+    en_natural: [soft watercolor illustration with gentle edges]
+
+  minimalist_line:
+    zh: [复杂背景, 照片质感, 多色填充]
+    en_tag: [complex background, photographic, multicolor fill]
+    en_natural: [minimalist line art with clean background]
+
+by_scene:
+  scene:
+    zh: [抽象图形, 数据图表]
+    en_tag: [abstract shapes, data charts]
+    en_natural: [concrete real-world scene, not abstract]
+
+  mechanism:
+    zh: [真实人物, 复杂背景, 环境干扰元素]
+    en_tag: [real people, busy background, environmental distractions]
+    en_natural: [clean schematic illustration focused on the mechanism]
+
+  data:
+    zh: [人物, 场景, 环境元素]
+    en_tag: [people, scenes, environmental elements]
+    en_natural: [pure data visualization, no people or scenery]

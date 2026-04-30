@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings, is_desktop, is_saas
-from app.core.database import init_db, get_db_path, engine
+from app.core.database import init_db, get_db_path, engine, AsyncSessionLocal
 
 LOCAL_API_KEY = os.environ.get("LINSCIO_LOCAL_API_KEY")
 LOCAL_KEY_EXEMPT_EXACT = {"/health", "/openapi.json", "/api/v1/imagegen/serve"}
@@ -89,6 +89,13 @@ async def lifespan(app: FastAPI):
         await load_user_default_model_from_db()
     except Exception:
         pass
+
+    try:
+        from app.services.contest.seed_data import ensure_contest_seed_data
+        async with AsyncSessionLocal() as seed_db:
+            await ensure_contest_seed_data(seed_db)
+    except Exception as e:
+        logger.warning("Contest seed data init failed: %s", e)
 
     if is_saas():
         from app.tasks.periodic import start_periodic_tasks
@@ -182,6 +189,36 @@ if is_saas():
 
     app.add_middleware(PrometheusMiddleware)
 
+# ── SaaS: 用户 provider 偏好中间件 ─────────────────────────
+if is_saas():
+    class ProviderPreferenceMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            from app.services.llm.provider_preference import current_preferred_provider
+            header_prov = (request.headers.get("x-preferred-provider") or "").strip()
+            if header_prov:
+                token = current_preferred_provider.set(header_prov)
+            else:
+                token = None
+                try:
+                    from app.core.deps import _extract_user_id_from_token
+                    uid = _extract_user_id_from_token(request)
+                    if uid:
+                        from app.services.llm.provider_preference_loader import (
+                            load_user_provider_prefs,
+                        )
+                        prefs = await load_user_provider_prefs(uid)
+                        if prefs:
+                            token = current_preferred_provider.set(prefs)
+                except Exception:
+                    pass
+            try:
+                return await call_next(request)
+            finally:
+                if token is not None:
+                    current_preferred_provider.reset(token)
+
+    app.add_middleware(ProviderPreferenceMiddleware)
+
 # ══════════════════════════════════════════════════════════════
 #  路由注册 — 核心路由（两端共有）
 # ══════════════════════════════════════════════════════════════
@@ -189,6 +226,7 @@ from app.api.v1 import (
     medcomm, formats, literature, knowledge, templates,
     examples, terms, polish, imagegen, auth, tasks, data,
     translate, article_snapshots, personal_corpus, medpic,
+    contest,
 )
 from app.api import internal
 
@@ -208,6 +246,7 @@ app.include_router(translate.router, prefix="/api/v1/translate", tags=["translat
 app.include_router(article_snapshots.router, prefix="/api/v1/medcomm", tags=["snapshots"])
 app.include_router(personal_corpus.router, prefix="/api/v1/personal-corpus", tags=["personal-corpus"])
 app.include_router(medpic.router, prefix="/api/v1/medpic", tags=["medpic"])
+app.include_router(contest.router, prefix="/api/v1/contest", tags=["contest"])
 app.include_router(internal.router, prefix="/internal", tags=["internal"])
 
 # ── SaaS 独有路由 ─────────────────────────────────────────

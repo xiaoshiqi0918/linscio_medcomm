@@ -29,6 +29,9 @@ class CreateExampleRequest(BaseModel):
 
 
 class UpdateExampleRequest(BaseModel):
+    content_text: str | None = None
+    content_json: str | None = None
+    analysis_text: str | None = None
     source_doc: str | None = None
     medical_reviewed: bool | None = None
 
@@ -87,7 +90,10 @@ async def create_example(req: CreateExampleRequest, db: AsyncSession = Depends(g
     db.add(ex)
     await db.commit()
     await db.refresh(ex)
-    return {"id": ex.id, "content_format": ex.content_format, "section_type": ex.section_type}
+    resp: dict = {"id": ex.id, "content_format": ex.content_format, "section_type": ex.section_type}
+    if not req.analysis_text:
+        resp["hint"] = "建议补充 analysis_text（编辑点评），帮助 AI 更精准地提取写作风格特征"
+    return resp
 
 
 @router.patch("/{example_id}")
@@ -97,12 +103,21 @@ async def update_example(example_id: int, req: UpdateExampleRequest, db: AsyncSe
     ex = result.scalar_one_or_none()
     if not ex:
         raise HTTPException(status_code=404, detail="示例不存在")
+    if req.content_text is not None:
+        ex.content_text = req.content_text
+    if req.content_json is not None:
+        ex.content_json = req.content_json
+    if req.analysis_text is not None:
+        ex.analysis_text = req.analysis_text
     if req.source_doc is not None:
         ex.source_doc = req.source_doc
     if req.medical_reviewed is not None:
         ex.medical_reviewed = 1 if req.medical_reviewed else 0
     await db.commit()
-    return {"ok": True}
+    resp: dict = {"ok": True}
+    if not getattr(ex, "analysis_text", None):
+        resp["hint"] = "建议补充 analysis_text（编辑点评），帮助 AI 更精准地提取写作风格特征"
+    return resp
 
 
 @router.get("/{example_id}")

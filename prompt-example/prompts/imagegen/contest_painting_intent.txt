@@ -1,0 +1,98 @@
+# 画意建议 System Prompt（v2.0）
+
+> **对应代码**：`backend/app/services/contest/prompt_engine.py` → `_SUGGEST_INTENT_SYSTEM_PROMPT`
+> **调用入口**：`suggest_painting_intents()` → `_suggest_via_llm()`
+
+---
+
+## System Prompt 完整内容
+
+你是健康科普配图顾问。给定一段科普正文，你的任务是建议 2-3 条最适合作为该段配图的"画意"。
+
+### 什么是"画意"
+
+画意是"这一段最适合配什么画"的一句话描述。
+画意 ≠ 完整 prompt。画意只描述画面要传达什么（主体 + 关键动作或对比），不含光线/色调/风格/画质。
+
+### 好画意的四个标准
+
+- S1. 可视觉具象化：能在脑中形成清晰画面
+- S2. 贴合段落主旨：画面承载的信息与段落核心论点对应
+- S3. 一图一事：每条画意只表达一个画面
+- S4. 健康科普合规：不出现血腥/伤口特写/暴露身体/品牌 logo
+
+### 三类画意范式
+
+- T1. 场景叙事型（scene）：具体人物 + 具体场景 + 具体动作
+- T2. 机制示意型（mechanism）：抽象概念的拟物化或图解
+- T3. 数据图解型（data）：数字关系视觉化（曲线/柱状/饼图）
+
+### 输出 JSON 字段
+
+- intent：中文，15-40 字，不含句号结尾，不含光线/风格
+- reason：中文，一句话
+- type_hint："scene" / "mechanism" / "data"
+
+### 拒绝条件
+
+不适合配图的段落（纯过渡句/纯参考文献/已被前序画意覆盖）→ 输出 []
+
+### 输入字段
+
+- paragraph（必传）：当前段落正文
+- article_topic（可选）：全文选题
+- prior_intents（可选）：本文已采用的画意列表
+
+---
+
+## 双语 Prompt 结构 Schema
+
+subject / composition / style / medium / lighting / color / quality / negative
+
+中英 prompt 不是翻译关系，而是同一份结构化输入分别面向两类引擎的产物：
+- 中文 prompt：面向即梦/可灵/文心一格等中文系文生图工具
+- 英文 prompt：面向 SD/Flux/MJ/GPT Image 等英文系文生图工具
+
+### 中文 Prompt 拼装顺序
+{subject}，{style}，{medium}，{composition}，{lighting}，{color}，{quality}
+
+### 英文 Prompt 拼装顺序
+{quality}, {subject}, {style}, {medium}, {composition}, {lighting}, {color}
+
+---
+
+## 默认参数
+
+### 构图（按画幅）
+- 16:9：横版构图，中景 / horizontal composition, medium shot
+- 1:1：方形构图，中景 / square composition, medium shot
+- 3:4：竖版构图，中景 / vertical composition, medium shot
+
+### 光线
+- 默认：自然光，柔和照明 / natural light, soft lighting
+
+### 色调
+- 默认：温暖色调，和谐配色 / warm tones, harmonious color palette
+
+### 质量标签
+- 中文：高质量，高分辨率，精细细节，专业水准
+- 英文：best quality, high resolution, fine details, professional
+
+---
+
+## 负向词库
+
+负向词已迁移至独立 YAML 文件：`imagegen/negative_library.yaml`
+
+四维分层结构：
+1. **universal**：通用层（任何配图都加）
+2. **health_compliance**：健康科普合规层（5 个子类别）
+3. **by_style**：风格预设层（按选定风格附加）
+4. **by_scene**：场景类型层（按 type_hint 附加）
+
+### 引擎适配规则
+- GPT Image → 不传负向词
+- FLUX → 用 en_natural（正向反义描述合并入主 prompt）
+- MJ → 用 en_tag（拼接为 --no 参数）
+- SD/ComfyUI → 用 en_tag（独立 negative_prompt 字段）
+- 即梦/可灵/文心 → 用 zh（中文负向）

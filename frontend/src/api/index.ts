@@ -91,6 +91,15 @@ export async function getLocalApiKeyHeaderForFetch(): Promise<Record<string, str
   return getLocalApiKeyHeader()
 }
 
+// SaaS: 临时 provider 覆盖（由 ProviderHint 组件设置，拦截器自动注入到请求头）
+let _tempProviderOverride = ''
+export function setTempProviderOverride(provider: string) {
+  _tempProviderOverride = provider
+}
+export function getTempProviderOverride(): string {
+  return _tempProviderOverride
+}
+
 // Electron: X-Local-Api-Key; JWT Authorization
 http.interceptors.request.use(async (config) => {
   if (_authToken == null) {
@@ -108,6 +117,11 @@ http.interceptors.request.use(async (config) => {
   }
 
   if (_authToken) config.headers.set('Authorization', `Bearer ${_authToken}`)
+
+  // SaaS: inject temp provider override header
+  if (!_isElectron && _tempProviderOverride) {
+    config.headers.set('X-Preferred-Provider', _tempProviderOverride)
+  }
   return config
 })
 
@@ -204,6 +218,17 @@ export const api = {
     clearS2Key: () => http.delete("/api/v1/system/user-settings/s2-key"),
     getDefaultModel: () => http.get<{ model: string }>("/api/v1/system/user-settings/default-model"),
     setDefaultModel: (model: string) => http.put("/api/v1/system/user-settings/default-model", { model }),
+    getModelPreferences: () =>
+      http.get<{
+        workflows: Array<{ id: string; label: string; recommended: string; current: string }>;
+        available_providers: Array<{ id: string; label: string; configured?: boolean }>;
+        preferences: Record<string, string>;
+      }>("/api/v1/system/user-settings/model-preferences"),
+    setModelPreferences: (preferences: Record<string, string>) =>
+      http.put<{ ok: boolean; preferences: Record<string, string> }>(
+        "/api/v1/system/user-settings/model-preferences",
+        { preferences },
+      ),
   },
   tasks: {
     cancelTask: (taskId: string) => http.post(`/api/v1/tasks/${taskId}/cancel`),
@@ -260,6 +285,8 @@ export const api = {
       http.patch(`/api/v1/medcomm/articles/${id}`, { content_json: contentJson }, { params: { section_id: sectionId } }),
     saveFullContent: (id: number, contentJson: any) =>
       http.put<{ ok: boolean }>(`/api/v1/medcomm/articles/${id}/save-full-content`, { content_json: contentJson }),
+    updateSubmissionInfo: (id: number, data: { submission_info: Record<string, any> }) =>
+      http.patch(`/api/v1/medcomm/articles/${id}/submission-info`, data),
     recheckSection: (sectionId: number) =>
       http.post<{ ok: boolean; verify_report: any }>(`/api/v1/medcomm/sections/${sectionId}/recheck`),
     aigcCheckSection: (sectionId: number) =>
@@ -963,6 +990,154 @@ export const api = {
       params: { scene?: string; style?: string; aspect?: string; audience?: string; color_tone?: string }
       explanation?: string
     }>('/api/v1/medpic/ai-prompt/refine', data, { timeout: MEDPIC_LLM_TIMEOUT_MS }),
+  },
+
+  contest: {
+    // 赛制包
+    getPacks: (params?: { q?: string; level?: string }) =>
+      http.get('/api/v1/contest/packs', { params }),
+    getPack: (packId: number) =>
+      http.get(`/api/v1/contest/packs/${packId}`),
+    createPack: (data: any) =>
+      http.post('/api/v1/contest/packs', data),
+    updatePack: (packId: number, data: any) =>
+      http.put(`/api/v1/contest/packs/${packId}`, data),
+
+    // 风格预设
+    getStylePresets: () =>
+      http.get('/api/v1/contest/style-presets'),
+    getStylePreset: (presetId: number) =>
+      http.get(`/api/v1/contest/style-presets/${presetId}`),
+
+    // 画意范例
+    getIntentExamples: (params?: { topic?: string; style_preset_id?: number | null }) =>
+      http.get('/api/v1/contest/intent-examples', { params }),
+    suggestIntent: (data: { section_text: string; topic?: string; section_type?: string }) =>
+      http.post('/api/v1/contest/intent-examples/suggest', data, { timeout: 60000 }),
+
+    // 提示词生成
+    generatePrompt: (data: {
+      intent_text: string
+      style_preset_id?: number | null
+      aspect_ratio?: string
+      adjustments?: Record<string, any>
+      topic_category?: string
+    }) => http.post('/api/v1/contest/generate-prompt', data),
+
+    // 负向词
+    getNegativeWords: (params?: { style_preset_id?: number; topic?: string }) =>
+      http.get('/api/v1/contest/negative-words', { params }),
+
+    // 选题分类
+    getTopics: () =>
+      http.get('/api/v1/contest/topics'),
+
+    // 公告解析
+    parseAnnouncement: (formData: FormData) =>
+      http.post('/api/v1/contest/parse-announcement', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 120000,
+      }),
+
+    // 文章赛制绑定
+    bindContest: (articleId: number, data: {
+      contest_pack_id?: number | null
+      contest_rule_source?: string | null
+      contest_custom_rules?: Record<string, any> | null
+    }) => http.post(`/api/v1/contest/articles/${articleId}/bind-contest`, data),
+
+    updateAiDeclaration: (articleId: number, data: { ai_declaration: Record<string, any> }) =>
+      http.patch(`/api/v1/contest/articles/${articleId}/ai-declaration`, data),
+
+    getLastAiDeclaration: () =>
+      http.get<{ ai_declaration: Record<string, any> | null }>('/api/v1/contest/ai-declaration/last'),
+
+    getExportConfirmation: (articleId: number) =>
+      http.get(`/api/v1/contest/articles/${articleId}/export-confirmation`),
+
+    // 我的赛制
+    getMyRules: () =>
+      http.get('/api/v1/contest/my-rules'),
+    saveMyRules: (data: { name: string; rules: Record<string, any>; source: string }) =>
+      http.post('/api/v1/contest/my-rules', data),
+    deleteMyRule: (ruleId: number) =>
+      http.delete(`/api/v1/contest/my-rules/${ruleId}`),
+    contributeMyRule: (ruleId: number) =>
+      http.post('/api/v1/contest/my-rules/contribute', { user_rule_id: ruleId }),
+
+    // 反馈缺失赛事
+    reportMissing: (data: { contest_name: string; description?: string }) =>
+      http.post('/api/v1/contest/report-missing', data),
+
+    // 配图槽位
+    getImageSlots: (articleId: number) =>
+      http.get(`/api/v1/contest/articles/${articleId}/image-slots`),
+    createImageSlot: (articleId: number, data: {
+      section_id?: number | null
+      order_num?: number
+      intent_text?: string
+      aspect_ratio?: string
+      style_preset_id?: number | null
+    }) => http.post(`/api/v1/contest/articles/${articleId}/image-slots`, data),
+    updateImageSlot: (slotId: number, data: Record<string, any>) =>
+      http.put(`/api/v1/contest/image-slots/${slotId}`, data),
+    deleteImageSlot: (slotId: number) =>
+      http.delete(`/api/v1/contest/image-slots/${slotId}`),
+    generateSlotPrompt: (slotId: number) =>
+      http.post(`/api/v1/contest/image-slots/${slotId}/generate-prompt`, {}, { timeout: 60000 }),
+    generateSlotImage: (slotId: number, data?: { preferred_provider?: string }) =>
+      http.post(`/api/v1/contest/image-slots/${slotId}/generate-image`, data || {}, { timeout: 90000 }),
+    getImageProviders: () =>
+      http.get<{ providers: Record<string, boolean>; any_available: boolean }>('/api/v1/contest/image-providers'),
+    uploadSlotImage: (slotId: number, formData: FormData) =>
+      http.post(`/api/v1/contest/image-slots/${slotId}/upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
+  },
+
+  imageIntent: {
+    getStylePresets: () =>
+      http.get('/api/v1/contest/style-presets'),
+    getStylePreset: (presetId: number) =>
+      http.get(`/api/v1/contest/style-presets/${presetId}`),
+    getIntentExamples: (params?: { topic?: string; style_preset_id?: number | null }) =>
+      http.get('/api/v1/contest/intent-examples', { params }),
+    suggestIntent: (data: { section_text: string; topic?: string; section_type?: string }) =>
+      http.post('/api/v1/contest/intent-examples/suggest', data, { timeout: 60000 }),
+    generatePrompt: (data: {
+      intent_text: string
+      style_preset_id?: number | null
+      aspect_ratio?: string
+      adjustments?: Record<string, any>
+      topic_category?: string
+    }) => http.post('/api/v1/contest/generate-prompt', data),
+    getNegativeWords: (params?: { style_preset_id?: number; topic?: string }) =>
+      http.get('/api/v1/contest/negative-words', { params }),
+    getTopics: () =>
+      http.get('/api/v1/contest/topics'),
+    getImageSlots: (articleId: number) =>
+      http.get(`/api/v1/contest/articles/${articleId}/image-slots`),
+    createImageSlot: (articleId: number, data: {
+      section_id?: number | null
+      order_num?: number
+      intent_text?: string
+      aspect_ratio?: string
+      style_preset_id?: number | null
+    }) => http.post(`/api/v1/contest/articles/${articleId}/image-slots`, data),
+    updateImageSlot: (slotId: number, data: Record<string, any>) =>
+      http.put(`/api/v1/contest/image-slots/${slotId}`, data),
+    deleteImageSlot: (slotId: number) =>
+      http.delete(`/api/v1/contest/image-slots/${slotId}`),
+    generateSlotPrompt: (slotId: number) =>
+      http.post(`/api/v1/contest/image-slots/${slotId}/generate-prompt`, {}, { timeout: 60000 }),
+    generateSlotImage: (slotId: number, data?: { preferred_provider?: string }) =>
+      http.post(`/api/v1/contest/image-slots/${slotId}/generate-image`, data || {}, { timeout: 90000 }),
+    getImageProviders: () =>
+      http.get<{ providers: Record<string, boolean>; any_available: boolean }>('/api/v1/contest/image-providers'),
+    uploadSlotImage: (slotId: number, formData: FormData) =>
+      http.post(`/api/v1/contest/image-slots/${slotId}/upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }),
   },
 
   referral: {

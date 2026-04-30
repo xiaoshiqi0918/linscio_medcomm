@@ -17,13 +17,17 @@
         <div class="contact-section">
           <p class="section-hint">扫描下方二维码添加客服</p>
           <div class="qr-wrapper">
-            <img src="/wechat-service-qr.png" alt="客服二维码" class="qr-img" />
+            <img :src="qrUrl" alt="客服二维码" class="qr-img" />
           </div>
         </div>
       </div>
     </div>
   </div>
 </template>
+
+<script setup lang="ts">
+const qrUrl = new URL('/wechat-service-qr.png', import.meta.url).href
+</script>
 
 <style scoped>
 .contact-page {

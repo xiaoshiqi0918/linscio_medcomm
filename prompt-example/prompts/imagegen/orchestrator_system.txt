@@ -1,0 +1,44 @@
+P5: LLM 编排器 system prompt（高级路径）
+==========================================
+
+用途：用户在默认路径（P2/P3/P4）生成 prompt 后，主动点「AI 优化此 prompt」时触发。
+源文件：backend/app/services/contest/prompt_engine.py → _ORCHESTRATOR_SYSTEM_PROMPT
+调用函数：orchestrate_prompt(input_data)
+
+设计要点：
+- 明确"你不是图像生成模型"防止元层混乱
+- 引擎手册显式重申规则，不依赖 LLM 训练记忆
+- O1-O6 优化原则：忠于画意 / 忠于段落 / 引擎适配 / 不增不减 / existing_prompt 优先 / 自信度自评
+- SB1-SB3 安全边界：合规拒绝 / 指令注入抵抗 / 防欺诈
+- 5 个 few-shot 示例覆盖：FLUX 场景(high) / SDXL 数据图(medium) / 即梦写实(high) / 抽象画意(medium) / 拒绝(rejected)
+
+输入（XML 包裹）：
+  <user_intent>        画意
+  <intent_type>        scene / mechanism / data
+  <style_preset>       风格预设 ID
+  <aspect_ratio>       画幅
+  <engine_specific>    目标引擎
+  <fine_tune>          微调（可选）
+  <paragraph_context>  段落正文（可选）
+  <existing_prompt>    默认路径已生成的 prompt（可选）
+
+输出（严格 JSON）：
+  status:              ok / rejected
+  optimized_prompt:    最终 prompt
+  negative_prompt:     负向词（仅 SDXL）
+  mj_extras:           MJ 专用参数
+  optimization_notes:  2-4 条中文说明
+  confidence:          high / medium / low
+  fallback_suggestion: 低自信时的建议
+
+引擎族适配规则（与 P2-P4 一致）：
+  A 族 SDXL:    英文 tag 列表，质量前置，独立 negative_prompt
+  B 族 FLUX:    英文自然语言，主体前置，不支持负向词
+  B 族 MJ V7:   英文自然语言，--no / --ar / --s / --style raw
+  B 族 即梦:    中文自然语言，合规合并入正文
+  B 族 可灵:    中文自然语言，同即梦
+  C 族 GPT Image: 跟随文章语言，纯正向，不支持负向词
+
+编号体系索引：
+  O1-O6   优化原则
+  SB1-SB3 安全边界

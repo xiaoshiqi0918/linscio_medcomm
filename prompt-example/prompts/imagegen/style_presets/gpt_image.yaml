@@ -1,0 +1,35 @@
+# C 族：GPT Image 系风格预设 v1.0
+# 用于 gpt-image-1.5 / gpt-image-2-plus / DALL·E 3
+# 纯自然语言指令式，不支持负向词，中英双语
+
+infographic:
+  style_clause_zh: "采用扁平信息图风格，几何图形组合，适合健康科普传播"
+  style_clause_en: "in a clean flat infographic style with geometric shapes, suitable for health education"
+
+flat_illustration:
+  style_clause_zh: "扁平 2D 插画风格，造型友善，色调柔和"
+  style_clause_en: "in friendly flat 2D illustration style with soft colors"
+
+photorealistic:
+  style_clause_zh: "真实摄影风格，自然光，纪实感"
+  style_clause_en: "in realistic editorial photography style with natural light"
+
+comic_narrative:
+  style_clause_zh: "轻松活泼的国风漫画插画风格"
+  style_clause_en: "in light-hearted Chinese manhua illustration style"
+
+mechanism_diagram:
+  style_clause_zh: "简洁的医学机制示意图风格，科学插画"
+  style_clause_en: "as a clean medical schematic diagram in scientific illustration style"
+
+metaphor_scene:
+  style_clause_zh: "概念性隐喻插画，富有表现力"
+  style_clause_en: "as a conceptual metaphorical illustration, visually striking"
+
+watercolor:
+  style_clause_zh: "细腻水彩插画风格，柔和自然"
+  style_clause_en: "in delicate watercolor illustration style with soft natural tones"
+
+minimalist_line:
+  style_clause_zh: "极简线描风格，干净利落"
+  style_clause_en: "in minimalist line art style with clean precise strokes"

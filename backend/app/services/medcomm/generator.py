@@ -409,12 +409,46 @@ async def generate_section_stream(
 
     # 读取文献分析报告（若存在）
     analysis_report = None
+    contest_constraints = None
     try:
         async with AsyncSessionLocal() as _db:
-            ar = await _db.execute(select(Article.analysis_report).where(Article.id == article_id))
+            ar = await _db.execute(
+                select(Article.analysis_report, Article.contest_custom_rules, Article.contest_pack_id)
+                .where(Article.id == article_id)
+            )
             arow = ar.first()
-            if arow and arow[0]:
-                analysis_report = arow[0]
+            if arow:
+                if arow[0]:
+                    analysis_report = arow[0]
+                _custom_rules = arow[1]
+                _pack_id = arow[2]
+                if content_format == "contest_article":
+                    _cc: dict = {}
+                    if _pack_id:
+                        from app.models.contest import ContestPack
+                        _cp_r = await _db.execute(select(ContestPack).where(ContestPack.id == _pack_id))
+                        _cp = _cp_r.scalar_one_or_none()
+                        if _cp:
+                            if _cp.word_limit:
+                                _cc["word_limit"] = _cp.word_limit
+                                # 参赛包的字数上限优先级最高，覆盖 target_word_count
+                                if not target_word_count or target_word_count > _cp.word_limit:
+                                    target_word_count = _cp.word_limit
+                                    state["target_word_count"] = target_word_count
+                            if _cp.image_format:
+                                _cc["image_format"] = _cp.image_format
+                            if _cp.file_format:
+                                _cc["file_format"] = _cp.file_format
+                            if _cp.ai_disclosure:
+                                _cc["ai_disclosure"] = _cp.ai_disclosure
+                            if _cp.font:
+                                _cc["font"] = _cp.font
+                    if isinstance(_custom_rules, dict):
+                        for k, v in _custom_rules.items():
+                            if v:
+                                _cc[k] = v
+                    if _cc:
+                        contest_constraints = _cc
     except Exception:
         pass
 
@@ -435,6 +469,7 @@ async def generate_section_stream(
         target_word_count=target_word_count,
         reading_level=reading_level,
         skip_sections=skip_sections,
+        contest_constraints=contest_constraints,
     )
 
     _use_saas_route = is_saas()
@@ -453,7 +488,7 @@ async def generate_section_stream(
         yield {"type": "error", "message": f"模型初始化失败：{e}"}
         return
 
-    _METADATA_FORMATS = {"article", "qa_article", "debunk", "story", "research_read"}
+    _METADATA_FORMATS = {"article", "qa_article", "debunk", "story", "research_read", "contest_article"}
     _need_metadata = content_format in _METADATA_FORMATS
     if _need_metadata:
         enhanced_prompt += _METADATA_OUTPUT_INSTRUCTION

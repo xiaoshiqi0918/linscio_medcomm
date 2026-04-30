@@ -1,0 +1,59 @@
+# A 族：SD-tag 系风格预设 v1.0
+# 用于 SD 1.5 / SDXL / Pony / Illustrious 等 SD 衍生引擎
+# 质量标签前置，逗号分隔 tag，支持 (word:1.X) 权重语法
+
+infographic:
+  quality_tags: ["masterpiece", "best quality", "high resolution", "sharp focus"]
+  style_tags: ["infographic style", "vector illustration", "clean design", "(flat color:1.2)"]
+  medium_tags: ["digital illustration"]
+  default_lighting: "even lighting, no harsh shadows"
+  default_color: "harmonious color palette, limited palette"
+
+flat_illustration:
+  quality_tags: ["masterpiece", "best quality"]
+  style_tags: ["(flat illustration:1.3)", "minimal shading", "simple shapes"]
+  medium_tags: ["vector art", "2D illustration"]
+  default_lighting: "flat lighting"
+  default_color: "muted pastel palette"
+
+photorealistic:
+  quality_tags: ["masterpiece", "best quality", "ultra detailed", "8k", "RAW photo"]
+  style_tags: ["(photorealistic:1.3)", "professional photography"]
+  medium_tags: ["DSLR photo"]
+  default_lighting: "natural lighting, soft shadows"
+  default_color: "natural color grading"
+
+comic_narrative:
+  quality_tags: ["best quality", "high detail"]
+  style_tags: ["comic illustration", "manhua style", "cel shading"]
+  medium_tags: ["ink and color"]
+  default_lighting: "stylized lighting"
+  default_color: "warm friendly palette"
+
+mechanism_diagram:
+  quality_tags: ["best quality", "sharp focus"]
+  style_tags: ["schematic diagram", "anatomical illustration style", "(labeled:0.8)"]
+  medium_tags: ["scientific illustration"]
+  default_lighting: "studio lighting"
+  default_color: "muted earth tones"
+
+metaphor_scene:
+  quality_tags: ["masterpiece", "best quality", "high detail"]
+  style_tags: ["(conceptual art:1.2)", "metaphorical composition", "symbolic"]
+  medium_tags: ["digital painting"]
+  default_lighting: "dramatic lighting"
+  default_color: "saturated palette"
+
+watercolor:
+  quality_tags: ["best quality", "high detail"]
+  style_tags: ["(watercolor:1.3)", "soft edges", "wet-on-wet technique"]
+  medium_tags: ["watercolor painting"]
+  default_lighting: "diffused natural light"
+  default_color: "soft transparent washes"
+
+minimalist_line:
+  quality_tags: ["best quality", "sharp focus"]
+  style_tags: ["(line art:1.3)", "minimalist", "clean lines"]
+  medium_tags: ["ink drawing", "pen illustration"]
+  default_lighting: "flat lighting"
+  default_color: "monochrome with selective color accent"

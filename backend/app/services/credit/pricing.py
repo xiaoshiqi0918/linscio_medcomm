@@ -121,23 +121,95 @@ _GENERATION_EXTRA_PER_1K_BY_MODEL: dict[str, Decimal] = {
 
 SAAS_EMBEDDING_SURCHARGE = Decimal("0.1")
 
+# ── 输入 prompt 成本估算 ──────────────────────────────────────
+
+_SYSTEM_PROMPT_TOKENS = 2500
+
+_PART1_TOKENS: dict[str, int] = {
+    "contest_article": 700,
+    "comic_strip": 800,
+    "storyboard": 800,
+    "card_series": 800,
+    "picture_book": 800,
+    "poster": 600,
+    "long_image": 600,
+    "oral_script": 1200,
+    "drama_script": 1200,
+    "patient_handbook": 1500,
+}
+_PART1_TOKENS_FULL = 3500
+
+_PART2_TOKENS_WITH_LIT = 2000
+_PART2_TOKENS_NO_LIT = 200
+_PART3_BASE_TOKENS = 500
+_PART3_PRIOR_TOKENS_PER_SECTION = 300
+
+_INPUT_COST_PER_1K_TOKENS: dict[str, Decimal] = {
+    "basic": Decimal("0.03"),
+    "standard": Decimal("0.06"),
+    "pro": Decimal("0.12"),
+}
+
+
+def estimate_prompt_overhead(
+    content_format: str = "article",
+    section_count: int = 1,
+    has_literature: bool = False,
+) -> int:
+    """估算全文所有章节的累计输入 token 总量（不含输出）。
+
+    Returns: 全部章节求和的总 input token 数。
+    """
+    if content_format in _PART1_TOKENS:
+        part1 = _PART1_TOKENS[content_format]
+    else:
+        part1 = _PART1_TOKENS_FULL
+
+    part2 = _PART2_TOKENS_WITH_LIT if has_literature else _PART2_TOKENS_NO_LIT
+
+    total = 0
+    for i in range(section_count):
+        per_section = _SYSTEM_PROMPT_TOKENS + part1 + part2 + _PART3_BASE_TOKENS
+        per_section += i * _PART3_PRIOR_TOKENS_PER_SECTION
+        total += per_section
+    return total
+
+
+def _generation_output_cost(target_word_count: int, model_tier: str) -> Decimal:
+    """按输出字数阶梯查价（原 calc_generation_cost 核心逻辑）"""
+    tier_key = model_tier if model_tier in _GENERATION_TIERS_BY_MODEL else "standard"
+    tiers = _GENERATION_TIERS_BY_MODEL[tier_key]
+    for threshold, price in tiers:
+        if target_word_count <= threshold:
+            return price
+    base = tiers[-1][1]
+    extra_words = target_word_count - tiers[-1][0]
+    extra_per_1k = _GENERATION_EXTRA_PER_1K_BY_MODEL.get(tier_key, Decimal("2"))
+    extra_cost = (Decimal(extra_words) / Decimal("1000")).quantize(Decimal("1"), rounding=ROUND_UP) * extra_per_1k
+    return base + extra_cost
+
 
 def calc_generation_cost(
     target_word_count: int,
     model_tier: str = "standard",
     include_embedding: bool = False,
+    content_format: str = "article",
+    section_count: int = 1,
 ) -> Decimal:
-    tier_key = model_tier if model_tier in _GENERATION_TIERS_BY_MODEL else "standard"
-    tiers = _GENERATION_TIERS_BY_MODEL[tier_key]
+    output_cost = _generation_output_cost(target_word_count, model_tier)
     surcharge = SAAS_EMBEDDING_SURCHARGE if include_embedding else Decimal("0")
-    for threshold, price in tiers:
-        if target_word_count <= threshold:
-            return price + surcharge
-    base = tiers[-1][1]
-    extra_words = target_word_count - tiers[-1][0]
-    extra_per_1k = _GENERATION_EXTRA_PER_1K_BY_MODEL.get(tier_key, Decimal("2"))
-    extra_cost = (Decimal(extra_words) / Decimal("1000")).quantize(Decimal("1"), rounding=ROUND_UP) * extra_per_1k
-    return base + extra_cost + surcharge
+
+    input_tokens = estimate_prompt_overhead(
+        content_format=content_format,
+        section_count=section_count,
+        has_literature=include_embedding,
+    )
+    input_rate = _INPUT_COST_PER_1K_TOKENS.get(model_tier, Decimal("0.06"))
+    input_cost = (Decimal(input_tokens) / Decimal("1000") * input_rate).quantize(
+        Decimal("0.01"), rounding=ROUND_UP,
+    )
+
+    return output_cost + input_cost + surcharge
 
 
 _OPTIMIZATION_INPUT_TIERS: list[tuple[int, Decimal]] = [
@@ -167,9 +239,15 @@ def _optimization_output_cost(output_chars: int) -> Decimal:
     )
 
 
+_POLISH_PROMPT_OVERHEAD_CHARS = 2000
+
+
 def calc_optimization_cost(char_count: int) -> Decimal:
-    """润色预估费用（输入+预估输出），用于余额预检。"""
-    input_cost = _optimization_input_cost(char_count)
+    """润色预估费用（输入+预估输出），用于余额预检。
+    char_count 额外计入系统 prompt 及格式指令开销。
+    """
+    effective_chars = char_count + _POLISH_PROMPT_OVERHEAD_CHARS
+    input_cost = _optimization_input_cost(effective_chars)
     est_output = max(int(Decimal(char_count) * _OPTIMIZATION_OUTPUT_RATIO), _OPTIMIZATION_OUTPUT_MIN)
     output_cost = _optimization_output_cost(est_output)
     return input_cost + output_cost
@@ -260,10 +338,14 @@ def calc_translation_cost_final(
     return total
 
 
+_AI_ASSIST_CONTEXT_OVERHEAD_CHARS = 8000
+
 _AI_ASSIST_INPUT_TIERS: list[tuple[int, Decimal]] = [
     (500, Decimal("0.1")),
     (1500, Decimal("0.2")),
     (3000, Decimal("0.3")),
+    (8000, Decimal("0.5")),
+    (15000, Decimal("0.8")),
 ]
 
 _AI_ASSIST_OUTPUT_PER_1K = Decimal("0.5")
@@ -285,8 +367,11 @@ def _ai_assist_output_cost(output_chars: int) -> Decimal:
 
 
 def calc_ai_assist_cost(input_chars: int) -> Decimal:
-    """AI 辅助写作预估费用（输入+预估输出），用于余额预检。"""
-    input_cost = _ai_assist_input_cost(input_chars)
+    """AI 辅助写作预估费用（输入+预估输出），用于余额预检。
+    input_chars 计入文章上下文开销（系统 prompt + 周边章节内容）。
+    """
+    effective_input = input_chars + _AI_ASSIST_CONTEXT_OVERHEAD_CHARS
+    input_cost = _ai_assist_input_cost(effective_input)
     est_output = max(int(Decimal(input_chars) * _AI_ASSIST_OUTPUT_RATIO), _AI_ASSIST_OUTPUT_MIN)
     output_cost = _ai_assist_output_cost(est_output)
     return input_cost + output_cost
@@ -330,6 +415,49 @@ KEYWORD_DESIGN_COST = Decimal("0.1")
 def calc_keyword_design_cost() -> Decimal:
     """检索词智能设计，固定费用（单次 FAST 模型调用量小）"""
     return KEYWORD_DESIGN_COST
+
+
+# ── 图像生成（外部 API） ──────────────────────────────────────
+IMAGE_GEN_COST_PER_IMAGE = Decimal("1.5")
+
+
+def calc_image_gen_cost(batch_count: int = 1) -> Decimal:
+    """图像生成固定费用，按张数计"""
+    return IMAGE_GEN_COST_PER_IMAGE * max(batch_count, 1)
+
+
+# ── 参赛 LLM 辅助 ─────────────────────────────────────────────
+CONTEST_SUGGEST_INTENT_COST = Decimal("0.15")
+CONTEST_GENERATE_PROMPT_COST = Decimal("0.2")
+CONTEST_PARSE_ANNOUNCEMENT_COST = Decimal("0.15")
+
+
+def calc_contest_llm_cost(action: str) -> Decimal:
+    """参赛相关 LLM 调用固定费用"""
+    costs = {
+        "suggest_intent": CONTEST_SUGGEST_INTENT_COST,
+        "generate_prompt": CONTEST_GENERATE_PROMPT_COST,
+        "parse_announcement": CONTEST_PARSE_ANNOUNCEMENT_COST,
+    }
+    return costs.get(action, Decimal("0.15"))
+
+
+# ── 标题生成 ───────────────────────────────────────────────────
+TITLE_GENERATION_COST = Decimal("0.1")
+
+
+def calc_title_generation_cost() -> Decimal:
+    """独立标题生成，固定费用（FAST 模型，小输入量）"""
+    return TITLE_GENERATION_COST
+
+
+# ── 图片 AI 提示词（imagegen 场景） ─────────────────────────────
+IMAGEGEN_AI_PROMPT_COST = Decimal("0.2")
+
+
+def calc_imagegen_prompt_cost() -> Decimal:
+    """imagegen AI 提示词生成，固定费用"""
+    return IMAGEGEN_AI_PROMPT_COST
 
 
 def calc_cost_from_token_ratio(

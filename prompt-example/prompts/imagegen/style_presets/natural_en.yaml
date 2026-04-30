@@ -1,0 +1,59 @@
+# B 族英文：自然语言系风格预设 v1.0
+# 用于 FLUX / MJ V6-V7 等英文自然语言引擎
+# 句号分隔自然语言叙事，主体前置，质量末尾，不前置 quality tag
+
+infographic:
+  style_clause: "in clean infographic style with flat colors and simple geometric shapes"
+  medium_clause: "designed as a vector illustration suitable for educational materials"
+  default_lighting_clause: "with even, shadow-free lighting"
+  default_color_clause: "using a harmonious limited color palette"
+  quality_clause: "high resolution and crisp visual hierarchy"
+
+flat_illustration:
+  style_clause: "in flat 2D illustration style with minimal shading"
+  medium_clause: "rendered as friendly modern vector art"
+  default_lighting_clause: "with flat ambient lighting"
+  default_color_clause: "in soft pastel tones"
+  quality_clause: "clean lines and clear composition"
+
+photorealistic:
+  style_clause: "as a realistic editorial photograph"
+  medium_clause: "shot with a 50mm lens, shallow depth of field"
+  default_lighting_clause: "with natural daylight, soft shadows"
+  default_color_clause: "with subtle natural color grading"
+  quality_clause: "sharp focus, professional photography quality"
+
+comic_narrative:
+  style_clause: "in light-hearted Chinese manhua illustration style"
+  medium_clause: "with clean ink lines and cel-shaded coloring"
+  default_lighting_clause: "with warm stylized lighting"
+  default_color_clause: "in friendly warm tones"
+  quality_clause: "clear composition with expressive characters"
+
+mechanism_diagram:
+  style_clause: "as a clean medical schematic diagram"
+  medium_clause: "in scientific illustration style"
+  default_lighting_clause: "with even diagrammatic lighting"
+  default_color_clause: "in muted neutral tones with selective color highlights"
+  quality_clause: "anatomically accurate and clearly labeled"
+
+metaphor_scene:
+  style_clause: "as a conceptual metaphorical illustration"
+  medium_clause: "in digital painting style"
+  default_lighting_clause: "with dramatic directional lighting"
+  default_color_clause: "in saturated symbolic colors"
+  quality_clause: "evocative and visually striking"
+
+watercolor:
+  style_clause: "in delicate watercolor illustration style"
+  medium_clause: "with soft wet-on-wet washes and gentle edges"
+  default_lighting_clause: "with diffused natural light"
+  default_color_clause: "in soft transparent color washes"
+  quality_clause: "painterly quality with natural paper texture"
+
+minimalist_line:
+  style_clause: "in minimalist line art style"
+  medium_clause: "drawn with clean precise pen strokes"
+  default_lighting_clause: "with flat even lighting"
+  default_color_clause: "monochrome with one selective color accent"
+  quality_clause: "crisp lines on clean background"
