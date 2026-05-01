@@ -200,11 +200,14 @@ export const useSettingsStore = defineStore('settings', () => {
     } catch { /* ignore */ }
   }
 
-  async function saveModelPreferences(prefs: Record<string, string>) {
+  async function saveModelPreferences(prefs: Record<string, string>): Promise<boolean> {
     try {
       const res = await api.system.setModelPreferences(prefs)
       modelPreferences.value = res.data.preferences || prefs
-    } catch { /* ignore */ }
+      return true
+    } catch {
+      return false
+    }
   }
 
   function setTempProviderOverride(provider: string) {

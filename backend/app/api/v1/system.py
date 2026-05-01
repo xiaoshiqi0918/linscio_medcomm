@@ -1,7 +1,7 @@
 """系统 API"""
 import os
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -124,7 +124,7 @@ async def set_default_model(body: SetDefaultModelRequest, user: User = Depends(g
 # ── 模型偏好（SaaS）──────────────────────────────────────────
 
 class SetModelPreferencesRequest(BaseModel):
-    preferences: dict[str, str] = {}
+    preferences: dict[str, str] = Field(default_factory=dict)
 
 
 @router.get("/user-settings/model-preferences")

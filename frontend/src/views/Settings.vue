@@ -1440,6 +1440,7 @@ async function loadModelPrefs() {
 }
 
 async function onModelPrefChange(workflowId: string, provider: string) {
+  const prev = { ...modelPrefsValues.value }
   const newPrefs = { ...modelPrefsValues.value }
   if (provider) {
     newPrefs[workflowId] = provider
@@ -1447,7 +1448,11 @@ async function onModelPrefChange(workflowId: string, provider: string) {
     delete newPrefs[workflowId]
   }
   modelPrefsValues.value = newPrefs
-  await settingsStore.saveModelPreferences(newPrefs)
+  const ok = await settingsStore.saveModelPreferences(newPrefs)
+  if (!ok) {
+    modelPrefsValues.value = prev
+    ElMessage.error('模型偏好保存失败，请确认已登录 SaaS 网页且网络正常')
+  }
 }
 
 async function saasLogout() {
