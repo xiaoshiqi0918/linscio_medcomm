@@ -211,6 +211,9 @@ async def generate_section_stream(
 
     agent = get_agent_for_section(content_format, section_type)
     skip_verify, skip_level = get_skip_flags(content_format)
+    from app.agents.registry import should_run_deai_rewrite, should_detect_ai_patterns
+    run_deai_rewrite = should_run_deai_rewrite(content_format)
+    run_ai_detection = should_detect_ai_patterns(content_format)
 
     reading_level = None
     try:
@@ -600,7 +603,10 @@ async def generate_section_stream(
             yield {"type": "claim_skipped", "reason": "图示类形式，跳过声明核实"}
         if skip_level:
             yield {"type": "reading_level_skipped", "reason": "脚本类/图示类形式，跳过阅读难度检查"}
-        else:
+
+        # ── verification：保留与原版一致的触发条件（只看 skip_level） ──
+        # run_verification 内部仍按 skip_verify / skip_level 做更细分支
+        if not skip_level:
             content, report = await run_verification(
                 content=full_content,
                 article_id=article_id,
@@ -610,7 +616,13 @@ async def generate_section_stream(
                 skip_level=skip_level,
             )
             full_content = content
+        else:
+            report = {}
 
+        # ── AIGC 痕迹检测：所有非大纲性质形式都跑，让用户能看到分数 ──
+        ai_patterns_result = None
+        ai_score = 100
+        if run_ai_detection and len(full_content.strip()) >= 50:
             from app.services.verification.pipeline import (
                 detect_ai_patterns,
                 extract_provenance_summary,
@@ -618,40 +630,54 @@ async def generate_section_stream(
             )
             ai_patterns_result = detect_ai_patterns(full_content)
             report["ai_patterns"] = ai_patterns_result
-            report["provenance"] = extract_provenance_summary(full_content)
-            report["uncited_facts"] = detect_uncited_medical_facts(full_content)
-
-            # ── 去AI化多轮自动改写：始终触发 ──
             ai_score = ai_patterns_result.get("score", 100)
-            if len(full_content.strip()) >= 100:
-                yield {"type": "rewriting", "message": "正在执行去AI化改写..."}
-                from app.services.enhancement.deai_rewriter import rewrite_multi_pass
+            # provenance / uncited_facts 仍然只在已经跑了完整 verification 时才补，
+            # 避免对图示类形式做不适用的引用核查
+            if not skip_level:
+                report["provenance"] = extract_provenance_summary(full_content)
+                report["uncited_facts"] = detect_uncited_medical_facts(full_content)
 
-                async def _on_rewrite_progress(msg: str):
-                    pass  # progress via SSE already sent above
+        # ── 去 AI 化改写：按 SKIP_DEAI_REWRITE_FORMATS 决定，与上面两件事解耦 ──
+        if run_deai_rewrite and len(full_content.strip()) >= 100:
+            yield {"type": "rewriting", "message": "正在执行去AI化改写..."}
+            from app.services.enhancement.deai_rewriter import rewrite_multi_pass
 
-                rewritten, was_rewritten, rewrite_stats = await rewrite_multi_pass(
-                    content=full_content,
-                    section_type=section_type,
-                    article_id=article_id,
-                    article_default_model=article_default_model,
-                    platform=platform,
-                    target_audience=target_audience,
-                )
-                if was_rewritten:
-                    full_content = rewritten
+            async def _on_rewrite_progress(msg: str):
+                pass  # progress via SSE already sent above
+
+            rewritten, was_rewritten, rewrite_stats = await rewrite_multi_pass(
+                content=full_content,
+                section_type=section_type,
+                article_id=article_id,
+                article_default_model=article_default_model,
+                platform=platform,
+                target_audience=target_audience,
+                content_format=content_format,
+                target_word_count=target_word_count,
+                skip_sections=skip_sections,
+            )
+            if was_rewritten:
+                full_content = rewritten
+                # 改写后再检测一次（仅当本形式开启了 AI 检测）
+                if run_ai_detection:
+                    from app.services.verification.pipeline import detect_ai_patterns
                     ai_patterns_after = detect_ai_patterns(full_content)
-                    report["ai_patterns_before_rewrite"] = ai_patterns_result
+                    if ai_patterns_result is not None:
+                        report["ai_patterns_before_rewrite"] = ai_patterns_result
                     report["ai_patterns"] = ai_patterns_after
-                    report["deai_rewrite"] = {
-                        "applied": True,
-                        "rounds": rewrite_stats.get("rounds", 1),
-                        "score_before": ai_score,
-                        "score_after": ai_patterns_after.get("score", 0),
-                        **{k: v for k, v in rewrite_stats.items() if k != "rounds"},
-                    }
-                    yield {"type": "rewritten_content", "content": full_content}
+                    score_after = ai_patterns_after.get("score", 0)
+                else:
+                    score_after = None
+                report["deai_rewrite"] = {
+                    "applied": True,
+                    "rounds": rewrite_stats.get("rounds", 1),
+                    "score_before": ai_score,
+                    "score_after": score_after,
+                    **{k: v for k, v in rewrite_stats.items() if k != "rounds"},
+                }
+                yield {"type": "rewritten_content", "content": full_content}
 
+        if report:
             yield {"type": "verify_report", "report": report}
 
         # 读者向格式：清理可能残留的内部标签、元数据泄露、空占位标题
