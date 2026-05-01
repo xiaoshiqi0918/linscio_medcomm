@@ -180,6 +180,7 @@ const providerToApiProvider: Record<string, string> = {
   dalle: 'openai',
   comfyui: 'comfyui',
   midjourney: 'midjourney',
+  kling: 'kling',
 }
 
 function handleFileChange(uploadFile: UploadFile) {

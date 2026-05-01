@@ -87,6 +87,16 @@
         <el-form-item label="张数">
           <el-input-number v-model="batchCount" :min="1" :max="4" />
         </el-form-item>
+        <el-form-item label="画图引擎">
+          <el-select v-model="engineOverride" style="width: 200px">
+            <el-option
+              v-for="opt in artgenEngineOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+        </el-form-item>
       </div>
 
       <el-button
@@ -164,6 +174,23 @@ const aspectPresets = [
 
 const aspectKey = ref<string>('16_9')
 
+// 画图引擎下拉（默认沿用 Midjourney，符合"创意绘图"模块定位）
+const engineOverride = ref<string>('midjourney')
+const artgenEngineOptions: Array<{ value: string; label: string }> = [
+  { value: '', label: '自动选择' },
+  { value: 'midjourney', label: 'Midjourney（默认）' },
+  { value: 'gpt_image', label: 'GPT Image' },
+  { value: 'openai', label: 'DALL·E 3 / ChatGPT' },
+  { value: 'gemini_image', label: 'Google Gemini 图像' },
+  { value: 'moonshot_image', label: 'Kimi（Moonshot）图像' },
+  { value: 'kling', label: '可灵 AI' },
+  { value: 'comfyui_local', label: 'ComfyUI（本地）' },
+  { value: 'comfyui_cloud', label: 'ComfyUI Cloud' },
+  { value: 'wanx', label: '通义万相' },
+  { value: 'siliconflow', label: '硅基流动' },
+  { value: 'wenxin', label: '文心一格' },
+]
+
 const { generating, images, error, isFallback, lastSeeds, generate, imageUrl } = useImageGenerate()
 
 const dims = computed(() => aspectPresets.find((a) => a.key === aspectKey.value) || aspectPresets[0])
@@ -238,7 +265,8 @@ async function handleGenerate() {
   const up = positivePrompt.value.trim()
   if (up) params.user_positive_prompt = up
 
-  await generate(params, undefined, { preferredProvider: 'midjourney' })
+  const preferred = (engineOverride.value || '').trim() || 'midjourney'
+  await generate(params, undefined, preferred ? { preferredProvider: preferred } : undefined)
 
   if (isFallback.value) {
     ElMessage.info({

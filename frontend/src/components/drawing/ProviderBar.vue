@@ -19,7 +19,27 @@
       destroy-on-close
     >
       <el-form label-position="top">
-        <el-form-item :label="`${editingProvider?.label} API Key`">
+        <!-- 双 Key 模式（如可灵 AI 的 AccessKey + SecretKey） -->
+        <template v-if="editingProvider?.dualKey">
+          <el-form-item :label="editingProvider.dualKey.firstLabel">
+            <el-input
+              v-model="editingKey"
+              type="password"
+              :placeholder="editingProvider.dualKey.firstPlaceholder"
+              show-password
+            />
+          </el-form-item>
+          <el-form-item :label="editingProvider.dualKey.secondLabel">
+            <el-input
+              v-model="editingKeySecondary"
+              type="password"
+              :placeholder="editingProvider.dualKey.secondPlaceholder"
+              show-password
+            />
+          </el-form-item>
+        </template>
+        <!-- 单 Key 模式 -->
+        <el-form-item v-else :label="`${editingProvider?.label} API Key`">
           <el-input
             v-model="editingKey"
             type="password"
@@ -43,6 +63,15 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 
+interface DualKeyDef {
+  firstLabel: string
+  firstAccount: string
+  firstPlaceholder: string
+  secondLabel: string
+  secondAccount: string
+  secondPlaceholder: string
+}
+
 interface ProviderDef {
   id: string
   label: string
@@ -50,6 +79,7 @@ interface ProviderDef {
   placeholder: string
   applyUrl: string
   configured: boolean
+  dualKey?: DualKeyDef
 }
 
 const props = defineProps<{
@@ -87,11 +117,29 @@ const providers = ref<ProviderDef[]>([
     applyUrl: 'https://platform.openai.com/api-keys',
     configured: false,
   },
+  {
+    id: 'kling',
+    label: '可灵 AI',
+    // keychainAccount 仅用作 configured 状态键，实际保存走 dualKey 字段
+    keychainAccount: 'kling_ak',
+    placeholder: '',
+    applyUrl: 'https://app.klingai.com/cn/dev/',
+    configured: false,
+    dualKey: {
+      firstLabel: 'AccessKey',
+      firstAccount: 'kling_ak',
+      firstPlaceholder: '可灵开放平台 AccessKey',
+      secondLabel: 'SecretKey',
+      secondAccount: 'kling_sk',
+      secondPlaceholder: '可灵开放平台 SecretKey',
+    },
+  },
 ])
 
 const dialogVisible = ref(false)
 const editingProvider = ref<ProviderDef | null>(null)
 const editingKey = ref('')
+const editingKeySecondary = ref('')
 const saving = ref(false)
 
 const electron = typeof window !== 'undefined' ? (window as any).electronAPI : null
@@ -103,34 +151,59 @@ function handleClick(p: ProviderDef) {
   } else {
     editingProvider.value = p
     editingKey.value = ''
+    editingKeySecondary.value = ''
     dialogVisible.value = true
   }
+}
+
+async function _saveSingleKey(account: string, key: string) {
+  if (electron?.saveApiKey) {
+    await electron.saveApiKey(account, key)
+  } else {
+    localStorage.setItem(`drawing_key_${account}`, key)
+  }
+}
+
+async function _readSingleKey(account: string): Promise<string> {
+  if (electron?.getApiKey) {
+    const v = await electron.getApiKey(account)
+    return v || ''
+  }
+  return localStorage.getItem(`drawing_key_${account}`) || ''
 }
 
 async function handleSave() {
   if (!editingProvider.value) return
   const key = editingKey.value.trim()
+  const dual = editingProvider.value.dualKey
   if (!key) {
-    ElMessage.warning('请输入 API Key')
+    ElMessage.warning(dual ? `请输入 ${dual.firstLabel}` : '请输入 API Key')
+    return
+  }
+  if (dual && !editingKeySecondary.value.trim()) {
+    ElMessage.warning(`请输入 ${dual.secondLabel}`)
     return
   }
   saving.value = true
   try {
-    if (electron?.saveApiKey) {
-      await electron.saveApiKey(editingProvider.value.keychainAccount, key)
+    if (dual) {
+      await _saveSingleKey(dual.firstAccount, key)
+      await _saveSingleKey(dual.secondAccount, editingKeySecondary.value.trim())
+    } else {
+      await _saveSingleKey(editingProvider.value.keychainAccount, key)
+    }
+    if (electron?.reloadApiKeys) {
       try {
-        const reloadRes = await electron.reloadApiKeys?.()
+        const reloadRes = await electron.reloadApiKeys()
         if (reloadRes && !reloadRes.ok) {
           console.warn('reloadApiKeys failed:', reloadRes.error)
         }
       } catch { /* ignore */ }
-    } else {
-      localStorage.setItem(`drawing_key_${editingProvider.value.keychainAccount}`, key)
     }
     editingProvider.value.configured = true
     activeProvider.value = editingProvider.value.id
     emit('update:modelValue', editingProvider.value.id)
-    ElMessage.success(`${editingProvider.value.label} API Key 已保存`)
+    ElMessage.success(`${editingProvider.value.label} 已保存`)
     dialogVisible.value = false
   } catch (e: any) {
     ElMessage.error(e?.message || '保存失败')
@@ -142,11 +215,13 @@ async function handleSave() {
 async function checkConfigured() {
   for (const p of providers.value) {
     try {
-      if (electron?.getApiKey) {
-        const val = await electron.getApiKey(p.keychainAccount)
-        p.configured = !!val
+      if (p.dualKey) {
+        const ak = await _readSingleKey(p.dualKey.firstAccount)
+        const sk = await _readSingleKey(p.dualKey.secondAccount)
+        p.configured = !!(ak && sk)
       } else {
-        p.configured = !!localStorage.getItem(`drawing_key_${p.keychainAccount}`)
+        const v = await _readSingleKey(p.keychainAccount)
+        p.configured = !!v
       }
     } catch {
       p.configured = false

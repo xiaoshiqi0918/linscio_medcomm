@@ -421,6 +421,19 @@
           <!-- 高级参数 -->
           <el-collapse v-model="advancedOpen" class="advanced-collapse">
             <el-collapse-item name="advanced" title="高级参数（可选）">
+              <el-form-item label="画图引擎">
+                <el-select v-model="form.engineOverride" style="width:100%;">
+                  <el-option
+                    v-for="opt in medpicEngineOptions"
+                    :key="opt.value"
+                    :label="opt.label"
+                    :value="opt.value"
+                  />
+                </el-select>
+                <span class="field-hint">
+                  留默认时按 ComfyUI 状态/场景类型自动选择；如需指定引擎请显式选择。
+                </span>
+              </el-form-item>
               <el-form-item label="画面主体描述">
                 <el-input
                   v-model="form.subject"
@@ -1044,7 +1057,24 @@ const form = ref({
   extraPrompt: '',
   seedMode: 'recommended' as 'recommended' | 'random' | 'custom',
   seed: 42,
+  engineOverride: '' as string,
 })
+
+// 画图引擎下拉选项（与 PaintingIntentPanel 保持一致）
+const medpicEngineOptions: Array<{ value: string; label: string }> = [
+  { value: '', label: '自动选择（推荐）' },
+  { value: 'gpt_image', label: 'GPT Image' },
+  { value: 'openai', label: 'DALL·E 3 / ChatGPT' },
+  { value: 'gemini_image', label: 'Google Gemini 图像' },
+  { value: 'moonshot_image', label: 'Kimi（Moonshot）图像' },
+  { value: 'midjourney', label: 'Midjourney' },
+  { value: 'kling', label: '可灵 AI' },
+  { value: 'comfyui_local', label: 'ComfyUI（本地）' },
+  { value: 'comfyui_cloud', label: 'ComfyUI Cloud' },
+  { value: 'wanx', label: '通义万相' },
+  { value: 'siliconflow', label: '硅基流动' },
+  { value: 'wenxin', label: '文心一格' },
+]
 
 const generating = ref(false)
 const genError = ref('')
@@ -1339,7 +1369,9 @@ async function generateSegmented() {
         specialty: form.value.specialty,
         target_audience: form.value.targetAudience,
         image_type: selectedScene.value?.id,
-        preferred_provider: comfyStatus.running ? 'comfyui_local' : 'auto',
+        preferred_provider:
+          (form.value.engineOverride || '').trim()
+          || (comfyStatus.running ? 'comfyui_local' : 'auto'),
         comfy_workflow_path: pp.workflow_path,
         loras: segLorasForComfy,
       })
@@ -1448,13 +1480,20 @@ async function generate() {
     const STRUCTURED_TYPES = new Set(['comparison', 'infographic', 'flowchart', 'data_viz'])
     const sceneId = selectedScene.value?.id || ''
     const isStructured = STRUCTURED_TYPES.has(sceneId)
-    let effectiveProvider = comfyStatus.running ? 'comfyui_local' : 'auto'
-    if (isStructured && comfyStatus.running) {
-      effectiveProvider = 'auto'
-      ElMessage.info({
-        message: '对比图/信息图/流程图类型已自动切换到 API 生成（DALL·E 3 等），效果更佳',
-        duration: 5000,
-      })
+    // 用户在高级参数显式选择引擎时优先生效；留默认时沿用现有自动选择策略
+    const userEngine = (form.value.engineOverride || '').trim()
+    let effectiveProvider: string
+    if (userEngine) {
+      effectiveProvider = userEngine
+    } else {
+      effectiveProvider = comfyStatus.running ? 'comfyui_local' : 'auto'
+      if (isStructured && comfyStatus.running) {
+        effectiveProvider = 'auto'
+        ElMessage.info({
+          message: '对比图/信息图/流程图类型已自动切换到 API 生成（DALL·E 3 等），效果更佳',
+          duration: 5000,
+        })
+      }
     }
 
     const res = await api.imagegen.generate({

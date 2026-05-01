@@ -685,6 +685,23 @@
         </el-form-item>
 
         <div class="api-group-title">图像生成（可选）</div>
+        <el-form-item label="默认画图引擎">
+          <el-select
+            :model-value="settingsStore.preferredImageProvider"
+            style="width: 280px"
+            @update:model-value="settingsStore.setPreferredImageProvider"
+          >
+            <el-option
+              v-for="opt in defaultImageEngineOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+          <div class="api-group-note" style="margin-top:0.35rem;">
+            未在画图入口显式指定引擎时，将以此为优先调用项；后端根据可用性进行 fallback。
+          </div>
+        </el-form-item>
         <el-form-item label="GPT Image API Key">
           <el-input v-model="gptImageKey" type="password" placeholder="GPT Image 专用 Key（gpt-image-2-plus）" show-password />
         </el-form-item>
@@ -1680,6 +1697,21 @@ const openrouterKey = ref('')
 const qiniuMaasKey = ref('')
 const anthropicKey = ref('')
 const gptImageKey = ref('')
+// 全局默认画图引擎下拉选项；与 PaintingIntentPanel/medpic/artgen 保持一致命名
+const defaultImageEngineOptions: Array<{ value: string; label: string }> = [
+  { value: 'auto', label: '自动选择（推荐）' },
+  { value: 'gpt_image', label: 'GPT Image' },
+  { value: 'openai', label: 'DALL·E 3 / ChatGPT' },
+  { value: 'gemini_image', label: 'Google Gemini 图像' },
+  { value: 'moonshot_image', label: 'Kimi（Moonshot）图像' },
+  { value: 'midjourney', label: 'Midjourney' },
+  { value: 'kling', label: '可灵 AI' },
+  { value: 'comfyui_local', label: 'ComfyUI（本地）' },
+  { value: 'comfyui_cloud', label: 'ComfyUI Cloud' },
+  { value: 'wanx', label: '通义万相' },
+  { value: 'siliconflow', label: '硅基流动' },
+  { value: 'wenxin', label: '文心一格' },
+]
 const deeplKey = ref('')
 const googleTranslateKey = ref('')
 const azureTranslateKey = ref('')
