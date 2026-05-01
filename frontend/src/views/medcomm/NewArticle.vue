@@ -1019,6 +1019,7 @@ const FORMAT_HINT_SECTIONS: Record<string, { key: string; label: string }[]> = {
     { key: 'knowledge_1', label: '知识点一' },
     { key: 'knowledge_2', label: '知识点二' },
     { key: 'knowledge_3', label: '知识点三' },
+    { key: 'misconception', label: '常见误区' },
     { key: 'advice', label: '实用建议' },
     { key: 'conclusion', label: '总结' },
   ],
