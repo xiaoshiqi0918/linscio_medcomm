@@ -1706,6 +1706,7 @@ const defaultImageEngineOptions: Array<{ value: string; label: string }> = [
   { value: 'moonshot_image', label: 'Kimi（Moonshot）图像' },
   { value: 'midjourney', label: 'Midjourney' },
   { value: 'kling', label: '可灵 AI' },
+  { value: 'jimeng', label: '即梦 AI（火山 Seedream）' },
   { value: 'comfyui_local', label: 'ComfyUI（本地）' },
   { value: 'comfyui_cloud', label: 'ComfyUI Cloud' },
   { value: 'wanx', label: '通义万相' },

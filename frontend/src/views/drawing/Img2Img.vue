@@ -181,6 +181,7 @@ const providerToApiProvider: Record<string, string> = {
   comfyui: 'comfyui',
   midjourney: 'midjourney',
   kling: 'kling',
+  jimeng: 'jimeng',
 }
 
 function handleFileChange(uploadFile: UploadFile) {

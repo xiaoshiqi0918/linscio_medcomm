@@ -67,6 +67,7 @@ _IMAGE_PROVIDER_KEYS: tuple[str, ...] = (
     "moonshot_image",
     "midjourney",
     "kling",
+    "jimeng",
     "wanx",
     "wenxin",
     "siliconflow",
@@ -105,6 +106,7 @@ async def detect_providers() -> dict:
         "moonshot_image": moonshot_img,
         "midjourney": bool(os.environ.get("MIDJOURNEY_PROXY_URL")),
         "kling": _kling_available(),
+        "jimeng": _jimeng_available(),
         "wanx": bool(os.environ.get("DASHSCOPE_API_KEY")),
         "wenxin": wenxin_key and wenxin_secret,
         "siliconflow": bool(os.environ.get("SILICONFLOW_API_KEY")),
@@ -723,6 +725,335 @@ async def _kling(
         return []
 
 
+# ── 即梦 AI（Jimeng / 火山引擎 Seedream）─────────────────────────────
+# 官方文档：https://www.volcengine.com/docs/85621/1616429
+# 鉴权：火山引擎签名 V4（HMAC-SHA256，与 AWS Sig V4 一致）
+# 异步任务：CVSync2AsyncSubmitTask 提交 → CVSync2AsyncGetResult 轮询
+
+_jimeng_semaphore = asyncio.Semaphore(2)
+
+_JIMENG_HOST = "visual.volcengineapi.com"
+_JIMENG_SERVICE = "cv"
+_JIMENG_VERSION = "2022-08-31"
+_JIMENG_REGION = "cn-north-1"
+# 文生图 3.0 默认模型；3.1 等可通过 JIMENG_REQ_KEY 切换
+_JIMENG_DEFAULT_REQ_KEY = "high_aes_general_v30l_zt2i"
+# 人像保持（Portrait Consistency）req_key（预留，前端 Img2Img 暂未对接）
+_JIMENG_AVATAR_REQ_KEY = "high_aes_ip_v20"
+
+# 推荐尺寸档（来自官方文档），用于把任意 width/height 映射到最近档位
+_JIMENG_RECOMMENDED_SIZES: tuple[tuple[int, int, float], ...] = (
+    (1328, 1328, 1.0),       # 1:1
+    (1472, 1104, 4 / 3),     # 4:3
+    (1104, 1472, 3 / 4),     # 3:4
+    (1584, 1056, 3 / 2),     # 3:2
+    (1056, 1584, 2 / 3),     # 2:3
+    (1664, 936, 16 / 9),     # 16:9
+    (936, 1664, 9 / 16),     # 9:16
+    (2016, 864, 21 / 9),     # 21:9
+)
+
+
+def _jimeng_credentials() -> tuple[str, str]:
+    """读取火山引擎 AK/SK"""
+    ak = os.environ.get("VOLCENGINE_AK", "").strip()
+    sk = os.environ.get("VOLCENGINE_SK", "").strip()
+    return ak, sk
+
+
+def _jimeng_available() -> bool:
+    ak, sk = _jimeng_credentials()
+    return bool(ak and sk)
+
+
+def _jimeng_resolve_size(width: int, height: int) -> tuple[int, int]:
+    """把任意 width/height 映射到即梦推荐尺寸档；保留比例最接近的档"""
+    if not width or not height:
+        return 1328, 1328
+    target = float(width) / float(height)
+    w, h, _ = min(_JIMENG_RECOMMENDED_SIZES, key=lambda s: abs(target - s[2]))
+    return w, h
+
+
+def _jimeng_sign_v4(
+    method: str,
+    path: str,
+    query: dict,
+    body: str,
+    ak: str,
+    sk: str,
+) -> dict[str, str]:
+    """生成火山引擎 V4 签名 headers（HMAC-SHA256）"""
+    import hashlib
+    import hmac
+    from datetime import datetime
+    from urllib.parse import quote as _q
+
+    now = datetime.utcnow()
+    x_date = now.strftime("%Y%m%dT%H%M%SZ")
+    short_date = now.strftime("%Y%m%d")
+
+    body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+    canonical_headers = (
+        f"content-type:application/json\n"
+        f"host:{_JIMENG_HOST}\n"
+        f"x-content-sha256:{body_hash}\n"
+        f"x-date:{x_date}\n"
+    )
+    signed_headers = "content-type;host;x-content-sha256;x-date"
+
+    sorted_query = sorted(query.items())
+    canonical_query = "&".join(
+        f"{k}={_q(str(v), safe='')}" for k, v in sorted_query
+    )
+
+    canonical_request = (
+        f"{method}\n{path}\n{canonical_query}\n"
+        f"{canonical_headers}\n{signed_headers}\n{body_hash}"
+    )
+
+    credential_scope = f"{short_date}/{_JIMENG_REGION}/{_JIMENG_SERVICE}/request"
+    string_to_sign = (
+        f"HMAC-SHA256\n{x_date}\n{credential_scope}\n"
+        f"{hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()}"
+    )
+
+    k_date = hmac.new(sk.encode("utf-8"), short_date.encode("utf-8"), hashlib.sha256).digest()
+    k_region = hmac.new(k_date, _JIMENG_REGION.encode("utf-8"), hashlib.sha256).digest()
+    k_service = hmac.new(k_region, _JIMENG_SERVICE.encode("utf-8"), hashlib.sha256).digest()
+    k_signing = hmac.new(k_service, b"request", hashlib.sha256).digest()
+    signature = hmac.new(k_signing, string_to_sign.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    authorization = (
+        f"HMAC-SHA256 Credential={ak}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    return {
+        "Authorization": authorization,
+        "X-Date": x_date,
+        "X-Content-Sha256": body_hash,
+        "Content-Type": "application/json",
+        "Host": _JIMENG_HOST,
+    }
+
+
+async def _jimeng_request(action: str, body: dict, ak: str, sk: str) -> dict:
+    """统一调用火山引擎 cv.* Action（POST 带 V4 签名）"""
+    import json as _json
+
+    query = {"Action": action, "Version": _JIMENG_VERSION}
+    body_str = _json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    headers = _jimeng_sign_v4("POST", "/", query, body_str, ak, sk)
+    url = f"https://{_JIMENG_HOST}/"
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(url, params=query, content=body_str.encode("utf-8"), headers=headers)
+        resp.raise_for_status()
+        return resp.json() or {}
+
+
+def _jimeng_pre_llm_default() -> bool:
+    raw = os.environ.get("JIMENG_USE_PRE_LLM", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _jimeng_scale_default() -> float:
+    raw = os.environ.get("JIMENG_SCALE", "").strip()
+    try:
+        v = float(raw) if raw else 2.5
+    except ValueError:
+        v = 2.5
+    return max(1.0, min(v, 10.0))
+
+
+async def _jimeng(
+    prompt: str,
+    style: str,
+    width: int,
+    height: int,
+    image_type: str = "generated",
+    *,
+    seed: int | None = None,
+) -> list[str]:
+    """
+    即梦 AI 文生图（Seedream 3.0 / 3.1 等）。
+
+    特性：
+    - 火山引擎 V4 签名鉴权
+    - 异步任务（CVSync2AsyncSubmitTask → CVSync2AsyncGetResult 轮询）
+    - 推荐尺寸档自动匹配（512-2048 范围内）
+    """
+    ak, sk = _jimeng_credentials()
+    if not (ak and sk):
+        return []
+
+    req_key = (os.environ.get("JIMENG_REQ_KEY", "").strip() or _JIMENG_DEFAULT_REQ_KEY)
+    w, h = _jimeng_resolve_size(width, height)
+
+    submit_body = {
+        "req_key": req_key,
+        "prompt": (prompt or "")[:2000],
+        "width": w,
+        "height": h,
+        "seed": int(seed) if seed is not None and seed >= 0 else -1,
+        "use_pre_llm": _jimeng_pre_llm_default(),
+        "scale": _jimeng_scale_default(),
+    }
+
+    async with _jimeng_semaphore:
+        # ── 1. 提交任务 ─────────────────────────────────
+        try:
+            data = await _jimeng_request("CVSync2AsyncSubmitTask", submit_body, ak, sk)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Jimeng submit error: %s", exc)
+            return []
+        # 火山返回 {"code": 10000, "data": {"task_id": "..."}}
+        if data.get("code") != 10000:
+            _log.warning("Jimeng submit failed: code=%s message=%s", data.get("code"), data.get("message"))
+            return []
+        task_id = (data.get("data") or {}).get("task_id")
+        if not task_id:
+            _log.warning("Jimeng submit returned no task_id: %s", data)
+            return []
+
+        # ── 2. 轮询任务结果 ──────────────────────────────
+        import json as _json
+        query_body = {
+            "req_key": req_key,
+            "task_id": task_id,
+            "req_json": _json.dumps({"return_url": True, "logo_info": {"add_logo": False}}),
+        }
+        max_wait, interval = 120, 3
+        elapsed = 0
+        image_url: str | None = None
+        try:
+            while elapsed < max_wait:
+                await asyncio.sleep(interval)
+                elapsed += interval
+                data = await _jimeng_request("CVSync2AsyncGetResult", query_body, ak, sk)
+                if data.get("code") != 10000:
+                    _log.warning("Jimeng poll error: code=%s message=%s", data.get("code"), data.get("message"))
+                    return []
+                task = data.get("data") or {}
+                status = (task.get("status") or "").lower()
+                if status == "done":
+                    urls = task.get("image_urls") or []
+                    if urls:
+                        image_url = urls[0]
+                    break
+                if status in ("failed", "expired", "not_found"):
+                    _log.warning("Jimeng task %s: %s", status, task)
+                    return []
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Jimeng poll error: %s", exc)
+            return []
+
+    if not image_url:
+        _log.warning("Jimeng task timed out after %ds (task_id=%s)", max_wait, task_id)
+        return []
+
+    # ── 3. 下载图片落地 ────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.get(image_url)
+            r.raise_for_status()
+        rel = _save_local(r.content, provider="jimeng", image_type=image_type)
+        return [f"medcomm-image://{rel}"]
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("Jimeng download error: %s", exc)
+        return []
+
+
+async def _jimeng_avatar(
+    face_image_b64: str,
+    prompt: str,
+    *,
+    style_image_b64: str | None = None,
+    use_face_v2: bool = True,
+    use_facestyle: bool = False,
+    width: int = 1000,
+    height: int = 1000,
+    image_type: str = "generated",
+) -> list[str]:
+    """
+    即梦 AI 人像保持（Portrait Consistency，预留接口，前端 Img2Img 暂未对接）。
+
+    需要传入 base64 编码的人脸图，可选风格参考图；
+    会基于 face image 保持人脸特征，prompt 控制场景/穿搭/姿势。
+    宽高范围：600-1500。
+    """
+    ak, sk = _jimeng_credentials()
+    if not (ak and sk):
+        return []
+    if not face_image_b64:
+        return []
+
+    body: dict = {
+        "req_key": _JIMENG_AVATAR_REQ_KEY,
+        "binary_data_base64": [face_image_b64],
+        "prompt": (prompt or "")[:1000],
+        "width": max(600, min(int(width or 1000), 1500)),
+        "height": max(600, min(int(height or 1000), 1500)),
+        "face_v2_switch": bool(use_face_v2),
+        "facestyle_switch": bool(use_facestyle),
+    }
+    if style_image_b64:
+        body["binary_data_base64"].append(style_image_b64)
+        body["style_switch"] = True
+
+    async with _jimeng_semaphore:
+        try:
+            data = await _jimeng_request("CVSync2AsyncSubmitTask", body, ak, sk)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Jimeng avatar submit error: %s", exc)
+            return []
+        if data.get("code") != 10000:
+            _log.warning("Jimeng avatar submit failed: %s", data)
+            return []
+        task_id = (data.get("data") or {}).get("task_id")
+        if not task_id:
+            return []
+
+        import json as _json
+        query_body = {
+            "req_key": _JIMENG_AVATAR_REQ_KEY,
+            "task_id": task_id,
+            "req_json": _json.dumps({"return_url": True, "logo_info": {"add_logo": False}}),
+        }
+        max_wait, interval = 120, 3
+        elapsed = 0
+        image_url: str | None = None
+        try:
+            while elapsed < max_wait:
+                await asyncio.sleep(interval)
+                elapsed += interval
+                data = await _jimeng_request("CVSync2AsyncGetResult", query_body, ak, sk)
+                task = data.get("data") or {}
+                status = (task.get("status") or "").lower()
+                if status == "done":
+                    urls = task.get("image_urls") or []
+                    if urls:
+                        image_url = urls[0]
+                    break
+                if status in ("failed", "expired", "not_found"):
+                    return []
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Jimeng avatar poll error: %s", exc)
+            return []
+
+    if not image_url:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.get(image_url)
+            r.raise_for_status()
+        rel = _save_local(r.content, provider="jimeng_avatar", image_type=image_type)
+        return [f"medcomm-image://{rel}"]
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("Jimeng avatar download error: %s", exc)
+        return []
+
+
 _log = logging.getLogger("linscio.imagegen")
 
 
@@ -913,6 +1244,9 @@ async def generate_image(
     # 这样能避免在不知情的情况下消耗 Kling 配额（异步任务且按张计费）。
     _kling_pref = (preferred_provider or "").strip().lower() == "kling"
     skip_kling = (not _kling_pref) or (not _kling_available())
+    # 即梦：与可灵同策略，仅 user_pref_only。火山引擎按张计费。
+    _jimeng_pref = (preferred_provider or "").strip().lower() == "jimeng"
+    skip_jimeng = (not _jimeng_pref) or (not _jimeng_available())
 
     async def gpt_image_fn(_iter_s: int) -> list[str]:
         return await _gpt_image(base_pos, style, width, height, it)
@@ -925,6 +1259,9 @@ async def generate_image(
 
     async def kling_fn(_iter_s: int) -> list[str]:
         return await _kling(api_merged, style, width, height, it)
+
+    async def jimeng_fn(iter_s: int) -> list[str]:
+        return await _jimeng(api_merged, style, width, height, it, seed=iter_s)
 
     async def wanx_fn(_iter_s: int) -> list[str]:
         return await _wanx(api_merged, style, width, height, it)
@@ -965,6 +1302,7 @@ async def generate_image(
         ("comfyui", comfy_fn, skip_comfy),
         ("midjourney", midjourney_fn, skip_mj),
         ("kling", kling_fn, skip_kling),
+        ("jimeng", jimeng_fn, skip_jimeng),
         ("openai", openai_fn, skip_openai),
         ("wanx", wanx_fn, skip_wanx),
         ("siliconflow", silicon_fn, skip_sf),

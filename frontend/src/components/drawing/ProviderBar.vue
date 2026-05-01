@@ -134,6 +134,22 @@ const providers = ref<ProviderDef[]>([
       secondPlaceholder: '可灵开放平台 SecretKey',
     },
   },
+  {
+    id: 'jimeng',
+    label: '即梦 AI',
+    keychainAccount: 'volcengine_ak',
+    placeholder: '',
+    applyUrl: 'https://www.volcengine.com/docs/85621/1616429',
+    configured: false,
+    dualKey: {
+      firstLabel: 'AccessKey ID',
+      firstAccount: 'volcengine_ak',
+      firstPlaceholder: '火山引擎 AccessKey ID（VOLCENGINE_AK）',
+      secondLabel: 'AccessKey Secret',
+      secondAccount: 'volcengine_sk',
+      secondPlaceholder: '火山引擎 AccessKey Secret（VOLCENGINE_SK）',
+    },
+  },
 ])
 
 const dialogVisible = ref(false)
