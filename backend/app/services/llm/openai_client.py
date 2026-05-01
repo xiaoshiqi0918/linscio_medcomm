@@ -44,7 +44,7 @@ def _strip_provider_prefix(model: str) -> str:
 
 
 def get_client(model: str | None = None) -> AsyncOpenAI:
-    """根据 model 选择 API 端点；None 时用默认 OpenAI"""
+    """根据 model 选择 API 端点；None 时用默认 OpenAI（或 OPENAI_BASE_URL 指定的代理）"""
     if model:
         base_url, api_key = get_domestic_base_url(model)
         if base_url and api_key:
@@ -64,6 +64,14 @@ def get_client(model: str | None = None) -> AsyncOpenAI:
             f"无法为模型 '{model or 'unknown'}' 创建 API 客户端：未找到匹配的 API Key。"
             f"请在设置中配置正确的默认模型，或设置对应的环境变量。"
         )
+    # OPENAI_BASE_URL 可指向第三方 OpenAI 兼容代理（如 GPTsAPI、One-API）
+    # 留空或等于官方端点时不传 base_url，让 SDK 走默认值
+    openai_base_url = os.environ.get("OPENAI_BASE_URL", "").strip().rstrip("/")
+    if openai_base_url and openai_base_url not in (
+        "https://api.openai.com",
+        "https://api.openai.com/v1",
+    ):
+        return AsyncOpenAI(api_key=openai_key, base_url=openai_base_url)
     return AsyncOpenAI(api_key=openai_key)
 
 

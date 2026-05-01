@@ -41,10 +41,10 @@ PROVIDER_MODEL_TIERS: dict[str, dict] = {
     },
     "openai": {
         "env_key": "OPENAI_API_KEY",
-        "quality": ["gpt-4o", "gpt-4o-mini"],
-        "balanced": ["gpt-4o-mini"],
-        "fast": ["gpt-4o-mini"],
-        "reasoning": ["gpt-4o", "gpt-4o-mini"],
+        "quality": ["gpt-4.1", "gpt-4o", "gpt-4o-mini"],
+        "balanced": ["gpt-4.1-mini", "gpt-4o-mini"],
+        "fast": ["gpt-4.1-mini", "gpt-4o-mini"],
+        "reasoning": ["gpt-4.1", "gpt-4o", "gpt-4o-mini"],
     },
     "anthropic": {
         "env_key": "ANTHROPIC_API_KEY",
@@ -336,9 +336,10 @@ DOMESTIC_PROVIDERS = {
     "qwen-turbo-latest": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"),
     "qwen-plus-latest": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"),
     "qwen-max-latest": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "DASHSCOPE_API_KEY"),
-    # Google AI Studio（Gemini，OpenAI 兼容端点）
+    # Google AI Studio（Gemini，OpenAI 兼容端点；GOOGLE_BASE_URL 可覆盖以走 GPTsAPI 等代理）
     "gemini-2.5-flash": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),
     "gemini-3.1-pro-preview": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),
+    "gemini-2.5-flash-lite": ("https://generativelanguage.googleapis.com/v1beta/openai/", "GOOGLE_API_KEY"),
     # 月之暗面 Kimi
     "kimi-k2.5": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
     "kimi-k2-0905-preview": ("https://api.moonshot.cn/v1", "MOONSHOT_API_KEY"),
@@ -572,6 +573,12 @@ def get_domestic_base_url(model: str) -> tuple[str | None, str | None]:
         base_url, env_key = DOMESTIC_PROVIDERS[model]
         if base_url == "QINIU_MAAS":
             base_url = os.environ.get("QINIU_MAAS_BASE_URL", "https://api.qnaigc.com/v1")
+        # GOOGLE_BASE_URL 用于第三方 OpenAI 兼容代理（如 GPTsAPI 同时承载 Gemini）
+        # 仅 GOOGLE_API_KEY 对应的条目允许覆盖
+        if env_key == "GOOGLE_API_KEY":
+            override = os.environ.get("GOOGLE_BASE_URL", "").strip().rstrip("/")
+            if override and override != "https://generativelanguage.googleapis.com/v1beta/openai":
+                base_url = override
         key = os.environ.get(env_key, "")
         if key:
             return base_url, key
@@ -592,7 +599,11 @@ def get_domestic_base_url(model: str) -> tuple[str | None, str | None]:
     elif model.startswith("gemini-"):
         key = os.environ.get("GOOGLE_API_KEY", "")
         if key:
-            return "https://generativelanguage.googleapis.com/v1beta/openai/", key
+            base_url = os.environ.get(
+                "GOOGLE_BASE_URL",
+                "https://generativelanguage.googleapis.com/v1beta/openai/",
+            ).strip().rstrip("/") or "https://generativelanguage.googleapis.com/v1beta/openai"
+            return base_url, key
     elif model.startswith(("glm-", "GLM-")):
         key = os.environ.get("ZHIPU_API_KEY", "")
         if key:
@@ -957,7 +968,9 @@ def resolve_model_for_saas_task(task_type: str) -> list[str]:
 # ── 模型 → 积分档位映射（定价分层）──────────────────────────────────
 _MODEL_TO_TIER: dict[str, str] = {
     # PRO — 高端模型
+    "gpt-4.1": "pro",
     "gpt-4o": "pro",
+    "gpt-4.1-mini": "standard",
     "gpt-4o-mini": "standard",
     "gemini-3.1-pro-preview": "pro",
     # STANDARD — 中端模型
@@ -1176,6 +1189,8 @@ async def log_llm_call(
 # 各模型每 1M token 的价格（USD），用于成本估算
 _MODEL_PRICING_PER_1M: dict[str, tuple[float, float]] = {
     # (input_per_1M, output_per_1M)
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
     "gemini-3.1-pro-preview": (1.25, 10.00),
