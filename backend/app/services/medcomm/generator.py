@@ -2,10 +2,13 @@
 章节生成服务 - 支持 SSE 流式输出
 """
 import json
+import logging
 import re
 from typing import AsyncIterator
 
 from app.agents.registry import get_agent_for_section, get_skip_flags
+
+logger = logging.getLogger(__name__)
 
 
 _METADATA_OUTPUT_INSTRUCTION = """
@@ -679,6 +682,27 @@ async def generate_section_stream(
                     **{k: v for k, v in rewrite_stats.items() if k not in ("rounds", "fact_guard")},
                 }
                 yield {"type": "rewritten_content", "content": full_content}
+
+        # ── P0-3 合规风险词扫描（决策附录 A.9 / A.10）──
+        # 不论是否走改写都跑一次；只有正文足够长才有意义
+        try:
+            from app.core.config import settings as _settings
+            if (
+                getattr(_settings, "enable_risk_scanner", True)
+                and len(full_content.strip()) >= 100
+            ):
+                from app.services.safety import scan_risk_words
+                risk_report = scan_risk_words(full_content)
+                # 始终把 report 写入，无命中也保留空结构方便前端持续渲染
+                report.setdefault("risk_words", risk_report.to_dict())
+                if risk_report.total_visible:
+                    logger.info(
+                        "[RiskScanner] 命中 %d 条用户可见风险（confirm_required=%s）",
+                        risk_report.total_visible,
+                        risk_report.confirm_required,
+                    )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[RiskScanner] 扫描失败 %s，跳过", exc)
 
         if report:
             yield {"type": "verify_report", "report": report}

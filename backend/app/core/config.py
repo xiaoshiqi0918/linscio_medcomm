@@ -178,6 +178,12 @@ class Settings:
     fact_guard_fail_open: bool = os.environ.get("FACT_GUARD_FAIL_OPEN", "1") == "1"
     enable_fact_guard_drugs: bool = os.environ.get("ENABLE_FACT_GUARD_DRUGS", "0") == "1"
 
+    # P0-3 风险词扫描（决策附录 A.9 / A.10）：
+    #   ENABLE_RISK_SCANNER          - 总开关
+    #   RISK_SCANNER_HARD_BLOCK      - K1 决策：P0 始终 False，BLOCK 仅 P1 启用
+    enable_risk_scanner: bool = os.environ.get("ENABLE_RISK_SCANNER", "1") == "1"
+    risk_scanner_hard_block: bool = os.environ.get("RISK_SCANNER_HARD_BLOCK", "0") == "1"
+
 
 settings = Settings()
 
