@@ -603,9 +603,55 @@
         </div>
         <el-button size="small" type="primary" @click="removeOrphanCitations">移除孤儿引用</el-button>
       </div>
+
+      <!-- P0-3 合规风险词（CONFIRM_HARD：红色 / CONFIRM_SOFT：橙色） -->
+      <div v-if="exportRiskHardMatches.length" class="export-check-group export-risk-hard">
+        <div class="export-check-title">合规风险 · 高（必须确认）</div>
+        <div
+          v-for="(m, idx) in exportRiskHardMatches"
+          :key="`rh-${idx}`"
+          class="export-check-item export-risk-item"
+        >
+          <div class="export-risk-main">
+            <span class="export-check-text">"{{ m.matched_text }}"</span>
+            <el-button size="small" text type="primary" @click="locateIssueText(m.matched_text)">定位</el-button>
+          </div>
+          <div class="export-risk-msg">{{ m.user_message }}</div>
+          <div v-if="m.suggestion" class="export-risk-suggestion">建议：{{ m.suggestion }}</div>
+          <div v-if="m.legal_ref" class="export-risk-legal">依据：{{ m.legal_ref }}</div>
+        </div>
+      </div>
+      <div v-if="exportRiskSoftMatches.length" class="export-check-group export-risk-soft">
+        <div class="export-check-title">合规风险 · 中（需确认）</div>
+        <div
+          v-for="(m, idx) in exportRiskSoftMatches"
+          :key="`rs-${idx}`"
+          class="export-check-item export-risk-item"
+        >
+          <div class="export-risk-main">
+            <span class="export-check-text">"{{ m.matched_text }}"</span>
+            <el-button size="small" text type="primary" @click="locateIssueText(m.matched_text)">定位</el-button>
+          </div>
+          <div class="export-risk-msg">{{ m.user_message }}</div>
+          <div v-if="m.suggestion" class="export-risk-suggestion">建议：{{ m.suggestion }}</div>
+          <div v-if="m.legal_ref" class="export-risk-legal">依据：{{ m.legal_ref }}</div>
+        </div>
+      </div>
+      <div v-if="exportRiskConfirmRequired" class="export-risk-ack-row">
+        <el-checkbox v-model="exportRiskAcknowledged">
+          我已知晓上述合规风险，确认导出
+        </el-checkbox>
+      </div>
+
       <template #footer>
         <el-button @click="exportCheckDialogVisible = false">取消</el-button>
-        <el-button type="warning" @click="confirmExportWithWarnings">仍要导出</el-button>
+        <el-button
+          type="warning"
+          :disabled="exportRiskConfirmRequired && !exportRiskAcknowledged"
+          @click="confirmExportWithWarnings"
+        >
+          仍要导出
+        </el-button>
       </template>
     </el-dialog>
 
@@ -1053,6 +1099,21 @@ const exportAbsoluteTerms = ref<Array<{ text: string; suggestion?: string }>>([]
 const exportOrphanCitations = ref<Array<{ section_id: number; section_title: string; text: string; paper_id: number }>>([])
 const exportValidPaperIds = ref<number[]>([])
 const pendingExportFormat = ref<string | null>(null)
+
+// ── P0-3 合规风险词导出弱打通（K1 决策落地）──
+interface ExportRiskMatch {
+  rule_name: string
+  category: string
+  action: string
+  matched_text: string
+  legal_ref: string
+  user_message: string
+  suggestion?: string
+}
+const exportRiskHardMatches = ref<ExportRiskMatch[]>([])
+const exportRiskSoftMatches = ref<ExportRiskMatch[]>([])
+const exportRiskConfirmRequired = ref(false)
+const exportRiskAcknowledged = ref(false)
 const locateRequest = ref<{ text: string; token: number } | null>(null)
 const locateToken = ref(0)
 /** 为 true 时，下一次子组件 locate-result 用于提示用户 */
@@ -2646,6 +2707,11 @@ async function handleExport(format: string) {
       exportAbsoluteTerms.value = Array.isArray(check?.absolute_terms) ? check.absolute_terms : []
       exportOrphanCitations.value = Array.isArray(check?.orphan_citations) ? check.orphan_citations : []
       exportValidPaperIds.value = Array.isArray(check?.valid_paper_ids) ? check.valid_paper_ids : []
+      const riskMab = check?.risk_words?.matches_by_action || {}
+      exportRiskHardMatches.value = Array.isArray(riskMab.confirm_hard) ? riskMab.confirm_hard : []
+      exportRiskSoftMatches.value = Array.isArray(riskMab.confirm_soft) ? riskMab.confirm_soft : []
+      exportRiskConfirmRequired.value = !!check?.confirm_required
+      exportRiskAcknowledged.value = false
       pendingExportFormat.value = format
       exportCheckDialogVisible.value = true
       return
@@ -2786,6 +2852,11 @@ async function confirmExportWithWarnings() {
     exportCheckDialogVisible.value = false
     return
   }
+  // P0-3 K1：CONFIRM_HARD/SOFT 命中时必须勾选才能继续
+  if (exportRiskConfirmRequired.value && !exportRiskAcknowledged.value) {
+    ElMessage.warning('请先勾选「我已知晓上述合规风险」')
+    return
+  }
   const fmt = pendingExportFormat.value
   exportCheckDialogVisible.value = false
   await doExport(fmt)
@@ -2887,12 +2958,20 @@ async function runExportCheck(): Promise<boolean> {
       if (Array.isArray(check?.orphan_citations) && check.orphan_citations.length) {
         warnings.push(`${check.orphan_citations.length} 处孤儿引用`)
       }
+      // P0-3：合规风险词命中时必须明确提示
+      const riskMab = check?.risk_words?.matches_by_action || {}
+      const hardN = Array.isArray(riskMab.confirm_hard) ? riskMab.confirm_hard.length : 0
+      const softN = Array.isArray(riskMab.confirm_soft) ? riskMab.confirm_soft.length : 0
+      if (hardN || softN) {
+        warnings.push(`${hardN + softN} 条合规风险（高 ${hardN} / 中 ${softN}）`)
+      }
       const detail = warnings.length ? `发现：${warnings.join('、')}` : (check?.message || '内容存在问题')
+      const confirmText = (hardN || softN) ? '我已知晓合规风险，仍要复制' : '仍要复制'
       try {
         await ElMessageBox.confirm(
           `${detail}。仍要复制吗？`,
           '内容检查提醒',
-          { confirmButtonText: '仍要复制', cancelButtonText: '取消', type: 'warning' }
+          { confirmButtonText: confirmText, cancelButtonText: '取消', type: 'warning' }
         )
       } catch {
         return false
@@ -3480,6 +3559,56 @@ async function handleAuthUserChanged() {
   font-size: 0.82rem;
   color: #111827;
   word-break: break-all;
+}
+
+/* P0-3 合规风险：导出 dialog 中的红/橙分级与勾选确认 */
+.export-risk-hard .export-check-title {
+  color: #b91c1c;
+  font-weight: 600;
+}
+.export-risk-soft .export-check-title {
+  color: #c2410c;
+  font-weight: 600;
+}
+.export-risk-hard .export-risk-item {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+.export-risk-soft .export-risk-item {
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+.export-risk-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.export-risk-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+.export-risk-msg {
+  font-size: 0.78rem;
+  color: #4b5563;
+  line-height: 1.5;
+}
+.export-risk-suggestion {
+  font-size: 0.76rem;
+  color: #059669;
+}
+.export-risk-legal {
+  font-size: 0.72rem;
+  color: #9ca3af;
+  font-style: italic;
+}
+.export-risk-ack-row {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
 }
 
 .polish-changes-list { max-height: 60vh; overflow-y: auto; }

@@ -358,22 +358,61 @@ async def _check_reading_level(content: str, target_audience: str) -> dict:
 
 async def run_export_check(content: str) -> dict[str, Any]:
     """
-    导出前检查：仅检测数据占位符与绝对化表述
-    返回 { can_export, data_warnings, absolute_terms, message }
+    导出前检查：检测数据占位符、绝对化表述、合规风险词（P0-3）
+
+    返回 { can_export, data_warnings, absolute_terms, risk_words, message }
+
+    can_export 规则：
+      - 数据占位符 / 绝对化表述：任何命中都阻断
+      - risk_words：CONFIRM_HARD / CONFIRM_SOFT 命中时阻断（confirm_required）
+                   WARN / LOG_ONLY 不阻断（仅展示）
     """
     _, data_warnings = await _verify_data_placeholders(content)
     _, absolute_terms = await _detect_absolute_terms(content)
-    has_warnings = len(data_warnings) > 0 or len(absolute_terms) > 0
-    msg = ""
+
+    # P0-3 合规风险词扫描接入（弱打通）
+    risk_words_dict: dict[str, Any] | None = None
+    confirm_required = False
+    try:
+        from app.core.config import settings as _settings
+        if (
+            getattr(_settings, "enable_risk_scanner", True)
+            and len(content.strip()) >= 100
+        ):
+            from app.services.safety import scan_risk_words
+            risk_report = scan_risk_words(content)
+            risk_words_dict = risk_report.to_dict()
+            confirm_required = risk_report.confirm_required
+    except Exception:  # noqa: BLE001
+        # 风险扫描失败不应阻止导出（fail-open），与 generator 一致
+        risk_words_dict = None
+
+    has_warnings = (
+        len(data_warnings) > 0
+        or len(absolute_terms) > 0
+        or confirm_required
+    )
+
+    msg_parts: list[str] = []
     if data_warnings:
-        msg += f"存在 {len(data_warnings)} 处数据/文献占位符需补充；"
+        msg_parts.append(f"存在 {len(data_warnings)} 处数据/文献占位符需补充")
     if absolute_terms:
-        msg += f"存在 {len(absolute_terms)} 处绝对化表述建议修改。"
+        msg_parts.append(f"存在 {len(absolute_terms)} 处绝对化表述建议修改")
+    if confirm_required and risk_words_dict:
+        hard_n = len(risk_words_dict.get("matches_by_action", {}).get("confirm_hard", []))
+        soft_n = len(risk_words_dict.get("matches_by_action", {}).get("confirm_soft", []))
+        if hard_n or soft_n:
+            msg_parts.append(
+                f"存在 {hard_n + soft_n} 条合规风险需勾选确认（高 {hard_n} / 中 {soft_n}）"
+            )
+
     return {
         "can_export": not has_warnings,
         "data_warnings": data_warnings,
         "absolute_terms": absolute_terms,
-        "message": msg.strip() or None,
+        "risk_words": risk_words_dict,
+        "confirm_required": confirm_required,
+        "message": "；".join(msg_parts) + "。" if msg_parts else None,
     }
 
 
