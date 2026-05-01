@@ -147,6 +147,146 @@
           </div>
         </div>
 
+        <!-- 合规风险（P0-3）：CONFIRM_HARD / CONFIRM_SOFT / WARN 三档分级 -->
+        <div
+          v-if="riskWordsData"
+          class="risk-words-block"
+          :class="{ 'clean-block': !riskWordsData.total_visible }"
+        >
+          <div class="block-title">
+            <span>合规风险</span>
+            <div class="risk-tag-group">
+              <el-tag
+                v-if="riskHardMatches.length"
+                type="danger"
+                size="small"
+                effect="dark"
+              >需确认 {{ riskHardMatches.length }}</el-tag>
+              <el-tag
+                v-if="riskSoftMatches.length"
+                type="warning"
+                size="small"
+                effect="dark"
+              >需确认 {{ riskSoftMatches.length }}</el-tag>
+              <el-tag
+                v-if="riskWarnMatches.length"
+                type="warning"
+                size="small"
+                effect="plain"
+              >提示 {{ riskWarnMatches.length }}</el-tag>
+              <el-tag
+                v-if="!riskWordsData.total_visible"
+                type="success"
+                size="small"
+              >通过</el-tag>
+            </div>
+          </div>
+
+          <!-- CONFIRM_HARD：红底 + 永远展开 -->
+          <div v-if="riskHardMatches.length" class="risk-group risk-group-hard">
+            <div class="risk-group-title">高风险（必须确认）</div>
+            <div
+              v-for="(m, i) in riskHardMatches"
+              :key="`hard-${i}`"
+              class="risk-item"
+            >
+              <div class="risk-text-row">
+                <span class="risk-matched">"{{ m.matched_text }}"</span>
+                <el-button
+                  size="small"
+                  text
+                  type="primary"
+                  @click="locateInEditor(m.matched_text)"
+                >定位</el-button>
+              </div>
+              <div class="risk-msg">{{ m.user_message }}</div>
+              <div v-if="m.suggestion" class="risk-suggestion">
+                建议：{{ m.suggestion }}
+              </div>
+              <div v-if="m.legal_ref" class="risk-legal">
+                依据：{{ m.legal_ref }}
+              </div>
+            </div>
+          </div>
+
+          <!-- CONFIRM_SOFT：橙底 + 永远展开 -->
+          <div v-if="riskSoftMatches.length" class="risk-group risk-group-soft">
+            <div class="risk-group-title">需确认</div>
+            <div
+              v-for="(m, i) in riskSoftMatches"
+              :key="`soft-${i}`"
+              class="risk-item"
+            >
+              <div class="risk-text-row">
+                <span class="risk-matched">"{{ m.matched_text }}"</span>
+                <el-button
+                  size="small"
+                  text
+                  type="primary"
+                  @click="locateInEditor(m.matched_text)"
+                >定位</el-button>
+              </div>
+              <div class="risk-msg">{{ m.user_message }}</div>
+              <div v-if="m.suggestion" class="risk-suggestion">
+                建议：{{ m.suggestion }}
+              </div>
+              <div v-if="m.legal_ref" class="risk-legal">
+                依据：{{ m.legal_ref }}
+              </div>
+            </div>
+          </div>
+
+          <!-- WARN：黄底 + 默认折叠（K3 决策，状态持久化到 localStorage） -->
+          <div v-if="riskWarnMatches.length" class="risk-group risk-group-warn">
+            <div
+              class="risk-group-title risk-group-collapsible"
+              @click="toggleRiskWarn"
+            >
+              <span class="risk-collapse-arrow" :class="{ expanded: riskWarnExpanded }">▶</span>
+              提示（{{ riskWarnMatches.length }}）
+            </div>
+            <div v-show="riskWarnExpanded" class="risk-group-body">
+              <div
+                v-for="(m, i) in riskWarnMatches"
+                :key="`warn-${i}`"
+                class="risk-item"
+              >
+                <div class="risk-text-row">
+                  <span class="risk-matched">"{{ m.matched_text }}"</span>
+                  <el-button
+                    size="small"
+                    text
+                    type="primary"
+                    @click="locateInEditor(m.matched_text)"
+                  >定位</el-button>
+                </div>
+                <div class="risk-msg">{{ m.user_message }}</div>
+                <div v-if="m.suggestion" class="risk-suggestion">
+                  建议：{{ m.suggestion }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 确认勾选框：CONFIRM 命中时必须勾选才允许"标记可发布" -->
+          <div v-if="riskWordsData.confirm_required" class="risk-confirm-row">
+            <el-checkbox v-model="riskConfirmAcknowledged" size="small">
+              我已知晓上述合规风险，确认发布
+            </el-checkbox>
+          </div>
+
+          <p v-else-if="!riskWordsData.total_visible" class="clean-hint">
+            未发现合规风险
+          </p>
+
+          <p
+            v-if="riskWordsData.matches_log_only_count"
+            class="risk-log-hint"
+          >
+            另有 {{ riskWordsData.matches_log_only_count }} 条后端审计日志（不展示给读者）
+          </p>
+        </div>
+
         <!-- AI 味检测 -->
         <div v-if="aiPatterns" class="ai-pattern-block" :class="{ 'clean-block': !aiPatterns.total_issues }">
           <div class="block-title">
@@ -269,6 +409,85 @@
             <li v-for="(w, i) in provenanceData.warnings" :key="i">{{ w }}</li>
           </ul>
         </div>
+
+        <!-- 事实一致性（P0-1）：改写器 fact_guard 累计统计 -->
+        <div
+          v-if="factGuardData"
+          class="fact-guard-block"
+          :class="{ 'clean-block': factGuardClean }"
+        >
+          <div class="block-title">
+            <span>事实一致性</span>
+            <el-tag
+              v-if="factGuardData.rejected_strong"
+              type="danger"
+              size="small"
+              effect="dark"
+            >{{ factGuardData.rejected_strong }} 段回退</el-tag>
+            <el-tag
+              v-else-if="factGuardData.rejected_weak"
+              type="warning"
+              size="small"
+              effect="dark"
+            >{{ factGuardData.rejected_weak }} 段弱失败</el-tag>
+            <el-tag
+              v-else-if="factGuardData.pass_fail_open"
+              type="warning"
+              size="small"
+              effect="plain"
+            >{{ factGuardData.pass_fail_open }} 段异常放行</el-tag>
+            <el-tag v-else type="success" size="small">通过</el-tag>
+          </div>
+
+          <div class="fg-summary-grid">
+            <div class="fg-item">
+              <span class="fg-label">改写检查</span>
+              <span class="fg-val">{{ factGuardData.total }} 段</span>
+            </div>
+            <div class="fg-item">
+              <span class="fg-label">真通过</span>
+              <span class="fg-val">{{ factGuardData.passed }}</span>
+            </div>
+            <div v-if="factGuardData.rejected_strong" class="fg-item fg-item-danger">
+              <span class="fg-label">强失败回退</span>
+              <span class="fg-val">{{ factGuardData.rejected_strong }}</span>
+            </div>
+            <div v-if="factGuardData.rejected_weak" class="fg-item fg-item-warn">
+              <span class="fg-label">弱失败</span>
+              <span class="fg-val">{{ factGuardData.rejected_weak }}</span>
+            </div>
+            <div v-if="factGuardData.pass_fail_open" class="fg-item fg-item-warn">
+              <span class="fg-label">异常放行</span>
+              <span class="fg-val">{{ factGuardData.pass_fail_open }}</span>
+            </div>
+          </div>
+
+          <div
+            v-if="Object.keys(factGuardData.failed_dimensions_count || {}).length"
+            class="fg-dimensions"
+          >
+            <div class="fg-dim-title">命中维度</div>
+            <div
+              v-for="(count, dim) in factGuardData.failed_dimensions_count"
+              :key="dim"
+              class="fg-dim-row"
+            >
+              <span class="fg-dim-name">{{ factGuardDimLabel(String(dim)) }}</span>
+              <el-tag
+                :type="isStrongDimension(String(dim)) ? 'danger' : 'warning'"
+                size="small"
+                effect="plain"
+              >
+                {{ isStrongDimension(String(dim)) ? '强' : '弱' }} · {{ count }} 次
+              </el-tag>
+            </div>
+          </div>
+
+          <p v-if="factGuardClean" class="clean-hint">
+            所有改写段事实一致
+          </p>
+        </div>
+
         <div v-if="settingsStore.showUpgradeHint" class="upgrade-hint">
           当前使用通用内容库核实。升级定制版后，核实准确率将基于学科专属文献显著提升。
         </div>
@@ -338,12 +557,50 @@ const articleStore = useArticleStore()
 
 const props = defineProps<{
   article?: any
-  verificationReport?: { claims?: any; reading_level?: any }
+  verificationReport?: {
+    claims?: any
+    reading_level?: any
+    ai_patterns?: any
+    uncited_facts?: any
+    provenance?: any
+    risk_words?: RiskWordsReport
+    fact_guard?: FactGuardSummary
+  }
   ollamaWarning?: string | null
   imageSuggestions?: Array<Record<string, unknown>>
   refreshingSuggestions?: boolean
   recheckLoading?: boolean
 }>()
+
+// ── 风险词扫描 / 事实一致性 类型（与后端 P0-3 / P0-1 字段对齐）──
+
+interface RiskMatch {
+  rule_name: string
+  category: string
+  action: 'block' | 'confirm_hard' | 'confirm_soft' | 'warn' | 'log_only'
+  matched_text: string
+  span: [number, number]
+  legal_ref: string
+  user_message: string
+  suggestion?: string
+}
+
+interface RiskWordsReport {
+  matches_by_action: Record<string, RiskMatch[]>
+  matches_log_only_count: number
+  confirm_required: boolean
+  block_required: boolean
+  total_visible: number
+}
+
+interface FactGuardSummary {
+  total: number
+  passed: number
+  pass_fail_open: number
+  rejected_strong: number
+  rejected_weak: number
+  failed_dimensions_count: Record<string, number>
+}
 
 defineEmits<{
   locateSuggestion: [anchor: string]
@@ -626,6 +883,84 @@ const levelSummary = computed(() => {
 const aiPatterns = computed(() => props.verificationReport?.ai_patterns ?? null)
 const uncitedFacts = computed(() => props.verificationReport?.uncited_facts ?? null)
 const provenanceData = computed(() => props.verificationReport?.provenance ?? null)
+
+// ── P0-3 风险词卡片 ────────────────────────────────────────
+const riskWordsData = computed<RiskWordsReport | null>(
+  () => props.verificationReport?.risk_words ?? null,
+)
+
+const _RISK_WARN_LS_KEY = 'aigc.riskWordsWarnExpanded'
+
+const riskWarnExpanded = ref<boolean>(
+  (() => {
+    try {
+      return localStorage.getItem(_RISK_WARN_LS_KEY) === '1'
+    } catch {
+      return false
+    }
+  })(),
+)
+
+function toggleRiskWarn() {
+  riskWarnExpanded.value = !riskWarnExpanded.value
+  try {
+    localStorage.setItem(_RISK_WARN_LS_KEY, riskWarnExpanded.value ? '1' : '0')
+  } catch {
+    /* localStorage 不可用时不持久化 */
+  }
+}
+
+const riskHardMatches = computed<RiskMatch[]>(
+  () => riskWordsData.value?.matches_by_action?.confirm_hard ?? [],
+)
+const riskSoftMatches = computed<RiskMatch[]>(
+  () => riskWordsData.value?.matches_by_action?.confirm_soft ?? [],
+)
+const riskWarnMatches = computed<RiskMatch[]>(
+  () => riskWordsData.value?.matches_by_action?.warn ?? [],
+)
+
+const riskConfirmAcknowledged = ref(false)
+watch(
+  () => riskWordsData.value,
+  () => {
+    // 报告刷新（重新检测 / 改写）后重置勾选状态
+    riskConfirmAcknowledged.value = false
+  },
+)
+
+// ── P0-1 fact_guard 卡片 ───────────────────────────────────
+const factGuardData = computed<FactGuardSummary | null>(
+  () => props.verificationReport?.fact_guard ?? null,
+)
+
+const factGuardClean = computed(() => {
+  const fg = factGuardData.value
+  if (!fg) return false
+  return (
+    fg.rejected_strong === 0 && fg.rejected_weak === 0 && fg.pass_fail_open === 0
+  )
+})
+
+const _STRONG_DIMENSIONS = new Set([
+  'study_subjects', 'citations', 'dosage_schedules',
+])
+
+function isStrongDimension(dim: string): boolean {
+  return _STRONG_DIMENSIONS.has(dim)
+}
+
+const _FACT_GUARD_DIM_LABELS: Record<string, string> = {
+  study_subjects: '研究对象',
+  citations: '引用标注',
+  dosage_schedules: '给药方案',
+  numbers: '数值与修饰',
+  drugs: '药物名',
+}
+
+function factGuardDimLabel(dim: string): string {
+  return _FACT_GUARD_DIM_LABELS[dim] || dim
+}
 
 function locateInEditor(text: string) {
   const clean = (text || '').replace(/[「」""\s]/g, '').trim()
@@ -1034,6 +1369,180 @@ async function doRecheck() {
   font-size: 0.78rem;
   color: #15803d;
   margin: 0;
+}
+
+/* 合规风险（P0-3）：CONFIRM_HARD 红 / CONFIRM_SOFT 橙 / WARN 黄 */
+.risk-words-block {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  background: #fff5f5;
+  border: 1px solid #fecaca;
+  font-size: 0.8rem;
+}
+.risk-tag-group {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+.risk-group {
+  margin-top: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+}
+.risk-group-hard {
+  background: #fef2f2;
+  border-left: 3px solid #dc2626;
+}
+.risk-group-soft {
+  background: #fff7ed;
+  border-left: 3px solid #f97316;
+}
+.risk-group-warn {
+  background: #fefce8;
+  border-left: 3px solid #f59e0b;
+}
+.risk-group-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 0.3rem;
+}
+.risk-group-collapsible {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0;
+}
+.risk-group-collapsible:hover {
+  color: #2563eb;
+}
+.risk-collapse-arrow {
+  display: inline-block;
+  font-size: 0.65rem;
+  transition: transform 0.15s;
+  color: #9ca3af;
+}
+.risk-collapse-arrow.expanded {
+  transform: rotate(90deg);
+}
+.risk-group-body {
+  margin-top: 0.3rem;
+}
+.risk-item {
+  padding: 0.3rem 0;
+  border-bottom: 1px dashed rgba(156, 163, 175, 0.3);
+}
+.risk-item:last-child {
+  border-bottom: none;
+}
+.risk-text-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.3rem;
+}
+.risk-matched {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.78rem;
+  color: #1f2937;
+  font-weight: 500;
+  word-break: break-all;
+}
+.risk-msg {
+  font-size: 0.74rem;
+  color: #4b5563;
+  margin-top: 0.1rem;
+  line-height: 1.5;
+}
+.risk-suggestion {
+  font-size: 0.72rem;
+  color: #059669;
+  margin-top: 0.1rem;
+  line-height: 1.4;
+}
+.risk-legal {
+  font-size: 0.7rem;
+  color: #9ca3af;
+  margin-top: 0.1rem;
+  font-style: italic;
+}
+.risk-confirm-row {
+  margin-top: 0.6rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid #fecaca;
+}
+.risk-log-hint {
+  margin: 0.4rem 0 0;
+  font-size: 0.7rem;
+  color: #9ca3af;
+}
+
+/* 事实一致性（P0-1）*/
+.fact-guard-block {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  font-size: 0.8rem;
+}
+.fg-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem 0.5rem;
+  margin-top: 0.3rem;
+}
+.fg-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.76rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+}
+.fg-item-danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.fg-item-warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+.fg-label {
+  color: #6b7280;
+}
+.fg-val {
+  font-weight: 600;
+  color: #1f2937;
+}
+.fg-item-danger .fg-val,
+.fg-item-warn .fg-val {
+  color: inherit;
+}
+.fg-dimensions {
+  margin-top: 0.45rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed #bfdbfe;
+}
+.fg-dim-title {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #1e40af;
+  margin-bottom: 0.25rem;
+}
+.fg-dim-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.76rem;
+  color: #374151;
+  padding: 0.1rem 0;
+}
+.fg-dim-name {
+  color: #4b5563;
 }
 
 /* AIGC 段落级检测 */

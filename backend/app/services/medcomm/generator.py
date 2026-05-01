@@ -659,6 +659,10 @@ async def generate_section_stream(
                 target_word_count=target_word_count,
                 skip_sections=skip_sections,
             )
+            # fact_guard 累计统计与 was_rewritten 解耦：
+            # 即使所有改写段都被回退（dry_run 拦截 / 强失败回退），统计仍要展示
+            if "fact_guard" in rewrite_stats:
+                report["fact_guard"] = rewrite_stats["fact_guard"]
             if was_rewritten:
                 full_content = rewritten
                 # 改写后再检测一次（仅当本形式开启了 AI 检测）
@@ -671,9 +675,6 @@ async def generate_section_stream(
                     score_after = ai_patterns_after.get("score", 0)
                 else:
                     score_after = None
-                # 把 fact_guard 累计统计单独提到 report 顶层，方便前端展示与监控
-                if "fact_guard" in rewrite_stats:
-                    report["fact_guard"] = rewrite_stats["fact_guard"]
                 report["deai_rewrite"] = {
                     "applied": True,
                     "rounds": rewrite_stats.get("rounds", 1),
