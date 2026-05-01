@@ -219,8 +219,17 @@ async def _call_llm(
         return None
 
 
-def _validate_rewrite(original: str, rewritten: str | None, label: str = "") -> str | None:
-    """校验改写结果的合理性，不合理则返回 None。"""
+def _validate_rewrite(
+    original: str,
+    rewritten: str | None,
+    label: str = "",
+    cap_chars: int | None = None,
+) -> str | None:
+    """校验改写结果的合理性，不合理则返回 None。
+
+    cap_chars: 本节字数硬上限（绝对值，含标点）。给定时按字数上下区间校验，
+    与 task_prompts._SECTION_MAX_WC 对齐；不给定时回退到旧的比例校验。
+    """
     tag = f"[{label}] " if label else ""
     if not rewritten or len(rewritten.strip()) < 50:
         logger.warning(f"{tag}改写返回过短，丢弃")
@@ -233,11 +242,26 @@ def _validate_rewrite(original: str, rewritten: str | None, label: str = "") -> 
         return None
 
     orig_len = len(original.strip())
-    length_ratio = len(rewritten.strip()) / orig_len
-    max_ratio = 3.0 if orig_len < 300 else 2.2 if orig_len < 800 else 1.8
-    if length_ratio < 0.4 or length_ratio > max_ratio:
-        logger.warning(f"{tag}长度比例异常 ({length_ratio:.2f}, 上限{max_ratio})，丢弃")
-        return None
+    new_len = len(rewritten.strip())
+
+    if cap_chars and cap_chars > 0:
+        # 上限：min(原文 × 1.1, cap × 1.2)；但若原文已远小于 cap，仍允许扩到 cap
+        upper_chars = min(int(orig_len * 1.1), int(cap_chars * 1.2))
+        upper_chars = max(upper_chars, cap_chars)
+        # 下限：取 cap × 0.4 与 原文 × 0.4 的较大者，至少 50 字
+        lower_chars = max(50, int(cap_chars * 0.4), int(orig_len * 0.4))
+        if new_len < lower_chars or new_len > upper_chars:
+            logger.warning(
+                f"{tag}改写后字数 {new_len} 超出区间 [{lower_chars}, {upper_chars}]"
+                f"（原文 {orig_len}，本节 cap {cap_chars}），丢弃"
+            )
+            return None
+    else:
+        length_ratio = new_len / orig_len
+        max_ratio = 3.0 if orig_len < 300 else 2.2 if orig_len < 800 else 1.8
+        if length_ratio < 0.4 or length_ratio > max_ratio:
+            logger.warning(f"{tag}长度比例异常 ({length_ratio:.2f}, 上限{max_ratio})，丢弃")
+            return None
 
     return rewritten.strip()
 
@@ -287,6 +311,97 @@ def _deai_paragraph_template() -> str:
     return load_deai_paragraph_template() or _DEAI_PARAGRAPH_PROMPT
 
 
+def _compute_section_cap(
+    content_format: str,
+    section_type: str,
+    target_word_count: int | None = None,
+    platform: str = "wechat",
+    skip_sections: list[str] | None = None,
+) -> int | None:
+    """计算本节字数硬上限。
+
+    优先级：
+      1. task_prompts._SECTION_MAX_WC 显式定义（article / contest_article 已配）
+      2. 兜底：从 _SECTION_WORD_RATIOS 按比例算 = 节预算 × 1.3（30% 缓冲）
+         覆盖 story / debunk / qa_article / research_read 等有 ratio 表的形式
+      3. 都没有则返回 None（改写器 validator 回退到老的比例校验）
+    """
+    try:
+        from app.agents.prompts.task_prompts import (
+            _SECTION_MAX_WC,
+            _SECTION_WORD_RATIOS,
+            _PLATFORM_DEFAULT_WORD_COUNT,
+        )
+
+        explicit = _SECTION_MAX_WC.get(content_format, {}).get(section_type)
+        if explicit:
+            return explicit
+
+        ratios = _SECTION_WORD_RATIOS.get(content_format, {})
+        if not ratios or section_type not in ratios:
+            return None
+
+        # 跳过章节后按比例重分配（与 task_prompts._section_word_target 同口径）
+        skip = set(skip_sections or [])
+        active_ratios = {k: v for k, v in ratios.items() if k not in skip and v > 0}
+        s_act = sum(active_ratios.values())
+        if section_type not in active_ratios or s_act <= 0:
+            return None
+
+        total = target_word_count or _PLATFORM_DEFAULT_WORD_COUNT.get(platform, 1500)
+        target_chars = int(total * active_ratios[section_type] / s_act)
+        # 30% 缓冲；最低 80 字保护，避免对极短章节（如 research_read.one_liner）
+        # validator 把所有合理改写都丢弃
+        return max(80, int(target_chars * 1.3))
+    except Exception:
+        return None
+
+
+def _compute_section_word_target(
+    content_format: str,
+    section_type: str,
+    target_word_count: int | None,
+    platform: str,
+    skip_sections: list[str] | None,
+) -> str:
+    """复用 task_prompts 的章节字数指引（如 '80-130字'），未注册的形式返回空串。"""
+    try:
+        from app.agents.prompts.task_prompts import _section_word_target
+        return _section_word_target({
+            "content_format": content_format,
+            "section_type": section_type,
+            "target_word_count": target_word_count,
+            "platform": platform,
+            "skip_sections": skip_sections or [],
+        }) or ""
+    except Exception:
+        return ""
+
+
+def _build_full_section_cap_hint(
+    cap_chars: int | None,
+    word_target_str: str,
+) -> str:
+    """构造第 1 轮全文级改写时追加在 user message 头部的字数硬约束提示。"""
+    if not cap_chars:
+        return ""
+    target = f"目标 {word_target_str}，" if word_target_str else ""
+    return (
+        f"【本节字数硬约束】{target}绝对上限 {cap_chars} 字（含标点和引用标注）。"
+        f"超出会被系统丢弃改写结果；写完即止，不要靠铺陈或重复凑字数。"
+    )
+
+
+def _build_para_cap_hint(para_cap: int | None) -> str:
+    """构造第 2 轮逐段改写时追加在 user message 头部的段落级字数提示。"""
+    if not para_cap:
+        return ""
+    return (
+        f"【本段字数约束】目标 ~{int(para_cap * 0.8)} 字，硬上限 {int(para_cap * 1.2)} 字。"
+        f"超出会被系统丢弃改写结果；保持与原段相近的规模，不要展开新论据。"
+    )
+
+
 async def rewrite_to_reduce_ai(
     content: str,
     section_type: str = "",
@@ -295,6 +410,9 @@ async def rewrite_to_reduce_ai(
     article_default_model: str | None = None,
     platform: str = "wechat",
     target_audience: str = "public",
+    content_format: str = "article",
+    target_word_count: int | None = None,
+    skip_sections: list[str] | None = None,
 ) -> tuple[str, bool]:
     """
     对已生成的内容进行去AI化改写（单轮，兼容旧调用）。
@@ -305,14 +423,29 @@ async def rewrite_to_reduce_ai(
     if not content or len(content.strip()) < 100:
         return content, False
 
+    cap_chars = _compute_section_cap(
+        content_format, section_type,
+        target_word_count=target_word_count,
+        platform=platform,
+        skip_sections=skip_sections,
+    )
+    word_target_str = _compute_section_word_target(
+        content_format, section_type, target_word_count, platform, skip_sections,
+    )
+    cap_hint = _build_full_section_cap_hint(cap_chars, word_target_str)
+
     sys_prompt = _resolve_deai_system_prompt(platform, target_audience)
+    user_content = _deai_rewrite_template().format(content=content)
+    if cap_hint:
+        user_content = f"{cap_hint}\n\n{user_content}"
+
     messages = [
         {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": _deai_rewrite_template().format(content=content)},
+        {"role": "user", "content": user_content},
     ]
 
     raw = await _call_llm(messages, article_id, article_default_model)
-    result = _validate_rewrite(content, raw, "单轮改写")
+    result = _validate_rewrite(content, raw, "单轮改写", cap_chars=cap_chars)
     if result is None:
         return content, False
 
@@ -331,6 +464,9 @@ async def rewrite_multi_pass(
     on_progress: Any = None,
     platform: str = "wechat",
     target_audience: str = "public",
+    content_format: str = "article",
+    target_word_count: int | None = None,
+    skip_sections: list[str] | None = None,
 ) -> tuple[str, bool, dict[str, Any]]:
     """
     多轮去AI化改写：
@@ -339,6 +475,8 @@ async def rewrite_multi_pass(
 
     Args:
         on_progress: 可选回调 async callable(message: str) 用于汇报进度
+        content_format / target_word_count / skip_sections: 用于查 task_prompts._SECTION_MAX_WC，
+            把本节字数硬上限同时注入 prompt 与 validator，避免改写阶段把字数推爆
 
     Returns:
         (final_content, was_rewritten, stats)
@@ -346,7 +484,23 @@ async def rewrite_multi_pass(
     if not content or len(content.strip()) < 100:
         return content, False, {"rounds": 0}
 
-    stats: dict[str, Any] = {"rounds": 0, "pass1_applied": False, "pass2_applied": False}
+    cap_chars = _compute_section_cap(
+        content_format, section_type,
+        target_word_count=target_word_count,
+        platform=platform,
+        skip_sections=skip_sections,
+    )
+    word_target_str = _compute_section_word_target(
+        content_format, section_type, target_word_count, platform, skip_sections,
+    )
+    full_cap_hint = _build_full_section_cap_hint(cap_chars, word_target_str)
+
+    stats: dict[str, Any] = {
+        "rounds": 0,
+        "pass1_applied": False,
+        "pass2_applied": False,
+        "section_cap": cap_chars,
+    }
     sys_prompt = _resolve_deai_system_prompt(platform, target_audience)
 
     # ── 第1轮：全文级改写 ──
@@ -356,13 +510,17 @@ async def rewrite_multi_pass(
         except Exception:
             pass
 
+    user_content_p1 = _deai_rewrite_template().format(content=content)
+    if full_cap_hint:
+        user_content_p1 = f"{full_cap_hint}\n\n{user_content_p1}"
+
     messages_p1 = [
         {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": _deai_rewrite_template().format(content=content)},
+        {"role": "user", "content": user_content_p1},
     ]
 
     raw_p1 = await _call_llm(messages_p1, article_id, article_default_model)
-    result_p1 = _validate_rewrite(content, raw_p1, "第1轮")
+    result_p1 = _validate_rewrite(content, raw_p1, "第1轮", cap_chars=cap_chars)
 
     if result_p1 is None:
         logger.warning("第1轮全文改写失败，跳过进入第2轮逐段改写")
@@ -385,14 +543,18 @@ async def rewrite_multi_pass(
     total_paras = len(paragraphs)
     risky = [p for p in paragraphs if p["risk_level"] in ("high", "medium")]
 
-    # 开头和结尾即使未被标记为高风险，也强制加入改写列表（这两处最暴露AI）
+    # 开头/结尾段强制加入改写列表（这两处最暴露 AI）
+    # 例外：本节预算极小（cap < 200，如 contest_article 的 conclusion=80/misconception=130）时，
+    # 强制改写极易触发"读者入口/行动建议"等扩写指令而冲爆字数，改为仅按风险检测自然加入
+    force_endpoints = not (cap_chars and cap_chars < 200)
     first_idx = 0
     last_idx = total_paras - 1 if total_paras > 0 else 0
     risky_indices = {p["index"] for p in risky}
-    for p in paragraphs:
-        if p["index"] in (first_idx, last_idx) and p["index"] not in risky_indices:
-            risky.append(p)
-            risky_indices.add(p["index"])
+    if force_endpoints:
+        for p in paragraphs:
+            if p["index"] in (first_idx, last_idx) and p["index"] not in risky_indices:
+                risky.append(p)
+                risky_indices.add(p["index"])
 
     if not risky:
         logger.info("无需改写的段落，跳过第2轮")
@@ -403,6 +565,12 @@ async def rewrite_multi_pass(
             await on_progress(f"正在执行第2轮改写（{len(risky)}个段落逐段独立风格改写）...")
         except Exception:
             pass
+
+    # 段级 cap：按节 cap 均摊到段落数，留 1.5× 余量给段长不均，最低 60 字
+    para_cap = None
+    if cap_chars and total_paras > 0:
+        para_cap = max(60, int(cap_chars / max(total_paras, 1) * 1.5))
+    para_cap_hint = _build_para_cap_hint(para_cap)
 
     stats["pass2_risky_count"] = len(risky)
     pass2_replaced = 0
@@ -443,6 +611,9 @@ async def rewrite_multi_pass(
             )
             style_label = style["name"]
 
+        if para_cap_hint:
+            user_prompt = f"{para_cap_hint}\n\n{user_prompt}"
+
         logger.info(f"第2轮段落{para_idx}：使用「{style_label}」改写")
 
         messages_p2 = [
@@ -455,10 +626,25 @@ async def rewrite_multi_pass(
             continue
 
         rewritten_para = raw_p2.strip()
-        para_ratio = len(rewritten_para) / len(original_para) if original_para else 1.0
-        if para_ratio < 0.3 or para_ratio > 2.5:
-            logger.warning(f"第2轮段落{para_idx}改写长度异常(比例{para_ratio:.2f})，跳过")
-            continue
+        new_para_chars = len(rewritten_para)
+        orig_para_chars = len(original_para)
+
+        if para_cap:
+            # 段落级硬上下限：与节 cap 对齐，原文越接近 cap 越不允许扩张
+            para_upper = min(int(orig_para_chars * 1.3), int(para_cap * 1.2))
+            para_upper = max(para_upper, para_cap)
+            para_lower = max(20, int(orig_para_chars * 0.3))
+            if new_para_chars < para_lower or new_para_chars > para_upper:
+                logger.warning(
+                    f"第2轮段落{para_idx}改写字数 {new_para_chars} 超出区间 "
+                    f"[{para_lower}, {para_upper}]（原段 {orig_para_chars}，段 cap {para_cap}），跳过"
+                )
+                continue
+        else:
+            para_ratio = new_para_chars / orig_para_chars if orig_para_chars else 1.0
+            if para_ratio < 0.3 or para_ratio > 2.5:
+                logger.warning(f"第2轮段落{para_idx}改写长度异常(比例{para_ratio:.2f})，跳过")
+                continue
 
         original_para_refs = set(re.findall(r"\[(\d+)\]", original_para))
         rewritten_para_refs = set(re.findall(r"\[(\d+)\]", rewritten_para))
