@@ -165,6 +165,19 @@ class Settings:
     def get_default_model(self) -> str | None:
         return os.environ.get("MEDCOMM_DEFAULT_MODEL") or None
 
+    # ── AIGC 治理 P0 配置（决策附录 A.6 / A.7 / A.11）──────────
+    # P0-1 fact_guard：
+    #   ENABLE_FACT_GUARD             - 总开关
+    #   FACT_GUARD_HARD_BLOCK         - Week 1-2: False(dry_run) / Week 3: True(真阻断)
+    #   FACT_GUARD_FULL_SCAN          - Week 1-2: True(全量数据) / Week 3: False(性能)
+    #   FACT_GUARD_FAIL_OPEN          - 内部异常时放行（设为 False 等价 fail-closed）
+    #   ENABLE_FACT_GUARD_DRUGS       - drugs gate 模块（G2: P0 不启用）
+    enable_fact_guard: bool = os.environ.get("ENABLE_FACT_GUARD", "1") == "1"
+    fact_guard_hard_block: bool = os.environ.get("FACT_GUARD_HARD_BLOCK", "0") == "1"
+    fact_guard_full_scan: bool = os.environ.get("FACT_GUARD_FULL_SCAN", "1") == "1"
+    fact_guard_fail_open: bool = os.environ.get("FACT_GUARD_FAIL_OPEN", "1") == "1"
+    enable_fact_guard_drugs: bool = os.environ.get("ENABLE_FACT_GUARD_DRUGS", "0") == "1"
+
 
 settings = Settings()
 

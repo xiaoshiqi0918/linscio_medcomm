@@ -219,16 +219,40 @@ async def _call_llm(
         return None
 
 
+def _build_fact_guard_config():
+    """从 settings 构建 FactGuardConfig。错误时返回 None（fact_guard 关闭）。"""
+    try:
+        from app.core.config import settings
+        from app.services.enhancement.fact_guard import FactGuardConfig
+        if not settings.enable_fact_guard:
+            return None
+        return FactGuardConfig(
+            enable_master=True,
+            enable_drugs=settings.enable_fact_guard_drugs,
+            fail_open_on_error=settings.fact_guard_fail_open,
+            hard_block=settings.fact_guard_hard_block,
+            full_scan=settings.fact_guard_full_scan,
+        )
+    except Exception:
+        return None
+
+
 def _validate_rewrite(
     original: str,
     rewritten: str | None,
     label: str = "",
     cap_chars: int | None = None,
+    fact_guard_summary: Any = None,
 ) -> str | None:
     """校验改写结果的合理性，不合理则返回 None。
 
-    cap_chars: 本节字数硬上限（绝对值，含标点）。给定时按字数上下区间校验，
-    与 task_prompts._SECTION_MAX_WC 对齐；不给定时回退到旧的比例校验。
+    校验顺序：
+      1. 长度（过短即丢弃）
+      2. 引用编号至少保留一个
+      3. 字数硬上限（cap_chars 优先，回退比例校验）
+      4. fact_guard：medical 事实一致性（强 gate 失败即丢弃；弱 gate 由 hard_block 控制）
+
+    fact_guard_summary: 可选 FactGuardSummary 实例，用于把每次检查记入累计统计。
     """
     tag = f"[{label}] " if label else ""
     if not rewritten or len(rewritten.strip()) < 50:
@@ -262,6 +286,32 @@ def _validate_rewrite(
         if length_ratio < 0.4 or length_ratio > max_ratio:
             logger.warning(f"{tag}长度比例异常 ({length_ratio:.2f}, 上限{max_ratio})，丢弃")
             return None
+
+    # P0-1 / fact_guard 强 gate
+    fg_cfg = _build_fact_guard_config()
+    if fg_cfg is not None:
+        try:
+            from app.services.enhancement.fact_guard import (
+                validate_facts_consistency,
+                GateResult,
+            )
+            fg_result = validate_facts_consistency(original, rewritten, fg_cfg)
+            if fact_guard_summary is not None:
+                fact_guard_summary.record(fg_result)
+            if fg_result.result == GateResult.REJECT_STRONG:
+                logger.warning(
+                    f"{tag}fact_guard REJECT_STRONG: failed={fg_result.failed_dimensions}，回退原文"
+                )
+                return None
+            if fg_result.result == GateResult.REJECT_WEAK and fg_cfg.hard_block:
+                logger.warning(
+                    f"{tag}fact_guard REJECT_WEAK: failed={fg_result.failed_dimensions}，回退原文"
+                )
+                return None
+            if fg_result.result == GateResult.PASS_BY_FAIL_OPEN:
+                logger.warning(f"{tag}fact_guard PASS_BY_FAIL_OPEN: {fg_result.error_msg}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"{tag}fact_guard 调用异常 {exc}，按 fail_open 放行")
 
     return rewritten.strip()
 
@@ -481,6 +531,15 @@ async def rewrite_to_reduce_ai(
     return result, True
 
 
+def _create_fact_guard_summary():
+    """安全创建 FactGuardSummary（fact_guard 模块不可用时返回 None）。"""
+    try:
+        from app.services.enhancement.fact_guard import FactGuardSummary
+        return FactGuardSummary()
+    except Exception:
+        return None
+
+
 async def rewrite_multi_pass(
     content: str,
     section_type: str = "",
@@ -526,6 +585,7 @@ async def rewrite_multi_pass(
         "pass2_applied": False,
         "section_cap": cap_chars,
     }
+    fg_summary = _create_fact_guard_summary()
     sys_prompt = _resolve_deai_system_prompt(platform, target_audience)
 
     # ── 第1轮：全文级改写 ──
@@ -545,7 +605,11 @@ async def rewrite_multi_pass(
     ]
 
     raw_p1 = await _call_llm(messages_p1, article_id, article_default_model)
-    result_p1 = _validate_rewrite(content, raw_p1, "第1轮", cap_chars=cap_chars)
+    result_p1 = _validate_rewrite(
+        content, raw_p1, "第1轮",
+        cap_chars=cap_chars,
+        fact_guard_summary=fg_summary,
+    )
 
     if result_p1 is None:
         logger.warning("第1轮全文改写失败，跳过进入第2轮逐段改写")
@@ -679,6 +743,35 @@ async def rewrite_multi_pass(
             logger.warning(f"第2轮段落{para_idx}改写丢失引用，跳过")
             continue
 
+        # P0-1 / fact_guard 段级强 gate
+        fg_cfg_p2 = _build_fact_guard_config()
+        if fg_cfg_p2 is not None:
+            try:
+                from app.services.enhancement.fact_guard import (
+                    validate_facts_consistency,
+                    GateResult,
+                )
+                fg_result_p2 = validate_facts_consistency(
+                    original_para, rewritten_para, fg_cfg_p2,
+                )
+                if fg_summary is not None:
+                    fg_summary.record(fg_result_p2)
+                if fg_result_p2.result == GateResult.REJECT_STRONG:
+                    logger.warning(
+                        f"第2轮段落{para_idx} fact_guard REJECT_STRONG: "
+                        f"failed={fg_result_p2.failed_dimensions}，跳过"
+                    )
+                    continue
+                if (fg_result_p2.result == GateResult.REJECT_WEAK
+                        and fg_cfg_p2.hard_block):
+                    logger.warning(
+                        f"第2轮段落{para_idx} fact_guard REJECT_WEAK: "
+                        f"failed={fg_result_p2.failed_dimensions}，跳过"
+                    )
+                    continue
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"第2轮段落{para_idx} fact_guard 异常 {exc}，按 fail_open 放行")
+
         _start = 0
         while True:
             idx = current.find(original_para, _start)
@@ -694,6 +787,10 @@ async def rewrite_multi_pass(
         stats["rounds"] = max(stats.get("rounds", 0), 2)
 
     logger.info(f"第2轮完成：逐段改写了 {pass2_replaced}/{len(risky)} 个段落")
+
+    # 把 fact_guard 累计统计塞回 stats，给 generator 写入 report
+    if fg_summary is not None:
+        stats["fact_guard"] = fg_summary.to_dict()
 
     was_rewritten = stats.get("pass1_applied", False) or pass2_replaced > 0
     return current, was_rewritten, stats

@@ -668,12 +668,15 @@ async def generate_section_stream(
                     score_after = ai_patterns_after.get("score", 0)
                 else:
                     score_after = None
+                # 把 fact_guard 累计统计单独提到 report 顶层，方便前端展示与监控
+                if "fact_guard" in rewrite_stats:
+                    report["fact_guard"] = rewrite_stats["fact_guard"]
                 report["deai_rewrite"] = {
                     "applied": True,
                     "rounds": rewrite_stats.get("rounds", 1),
                     "score_before": ai_score,
                     "score_after": score_after,
-                    **{k: v for k, v in rewrite_stats.items() if k != "rounds"},
+                    **{k: v for k, v in rewrite_stats.items() if k not in ("rounds", "fact_guard")},
                 }
                 yield {"type": "rewritten_content", "content": full_content}
 
