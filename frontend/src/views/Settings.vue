@@ -478,6 +478,30 @@
       </div>
     </el-card>
 
+    <!-- 图像生成偏好（SaaS + 桌面端通用） -->
+    <el-card class="settings-card">
+      <template #header>图像生成偏好</template>
+      <el-form label-width="170px">
+        <el-form-item label="默认画图引擎">
+          <el-select
+            :model-value="settingsStore.preferredImageProvider"
+            style="width: 280px"
+            @update:model-value="settingsStore.setPreferredImageProvider"
+          >
+            <el-option
+              v-for="opt in defaultImageEngineOptions"
+              :key="opt.value"
+              :label="opt.label"
+              :value="opt.value"
+            />
+          </el-select>
+          <div class="api-group-note" style="margin-top:0.35rem;">
+            未在画图入口显式指定引擎时，将以此为优先调用项；后端根据可用性进行 fallback。
+          </div>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
     <!-- SaaS 模式：客户端下载 -->
     <el-card v-if="!isElectronEnv" class="settings-card client-promo-card">
       <template #header>下载客户端</template>
@@ -647,6 +671,12 @@
           <el-input v-model="openaiKey" type="password" placeholder="sk-xxx" show-password />
           <a class="apply-link" href="https://platform.openai.com/api-keys" target="_blank">申请 ↗</a>
         </el-form-item>
+        <el-form-item label="OpenAI Base URL">
+          <el-input v-model="openaiBaseUrl" placeholder="留空走官方端点；GPTsAPI 等代理填 https://api.gptsapi.net/v1" />
+          <span class="api-group-note" style="display:block;margin-top:0.25rem;">
+            可选。用于走 OpenAI 兼容代理（GPTsAPI / One-API / OpenRouter 自建）；同一个 Key 可同时承载 GPT 与 Gemini。
+          </span>
+        </el-form-item>
         <el-form-item label="硅基流动 API Key">
           <el-input v-model="siliconflowKey" type="password" placeholder="sk-xxx" show-password />
           <a class="apply-link" href="https://cloud.siliconflow.cn/account/ak" target="_blank">申请 ↗</a>
@@ -679,34 +709,47 @@
           <el-input v-model="googleAiKey" type="password" placeholder="AIza..." show-password />
           <a class="apply-link" href="https://aistudio.google.com/apikey" target="_blank">申请 ↗</a>
         </el-form-item>
+        <el-form-item label="Gemini Base URL">
+          <el-input v-model="googleBaseUrl" placeholder="留空走官方端点；走 GPTsAPI 等代理填 https://api.gptsapi.net/v1" />
+          <span class="api-group-note" style="display:block;margin-top:0.25rem;">
+            可选。覆盖 Gemini 默认端点 generativelanguage.googleapis.com；走代理时必须改，否则 gemini-* 模型仍打官方。
+          </span>
+        </el-form-item>
         <el-form-item label="通义千问 API Key">
           <el-input v-model="dashscopeKey" type="password" placeholder="DashScope Key（同时用于通义万相生图）" show-password />
           <a class="apply-link" href="https://bailian.console.aliyun.com/?apiKey=1" target="_blank">申请 ↗</a>
         </el-form-item>
 
         <div class="api-group-title">图像生成（可选）</div>
-        <el-form-item label="默认画图引擎">
-          <el-select
-            :model-value="settingsStore.preferredImageProvider"
-            style="width: 280px"
-            @update:model-value="settingsStore.setPreferredImageProvider"
-          >
-            <el-option
-              v-for="opt in defaultImageEngineOptions"
-              :key="opt.value"
-              :label="opt.label"
-              :value="opt.value"
-            />
-          </el-select>
-          <div class="api-group-note" style="margin-top:0.35rem;">
-            未在画图入口显式指定引擎时，将以此为优先调用项；后端根据可用性进行 fallback。
-          </div>
-        </el-form-item>
         <el-form-item label="GPT Image API Key">
           <el-input v-model="gptImageKey" type="password" placeholder="GPT Image 专用 Key（gpt-image-2-plus）" show-password />
         </el-form-item>
         <div class="api-group-note">
           GPT Image 使用独立 API Key，支持 gpt-image-2-plus（¥0.14/张）和 gpt-image-1.5 等模型。未配置时将使用 OpenAI Key 调用 DALL·E 3。
+        </div>
+        <el-form-item label="Midjourney Proxy URL">
+          <el-input v-model="midjourneyProxy" placeholder="midjourney-proxy / GoAPI 的代理 URL" />
+          <a class="apply-link" href="https://www.midjourney.com/" target="_blank">申请 ↗</a>
+        </el-form-item>
+        <el-form-item label="Midjourney API Secret">
+          <el-input v-model="midjourneyApiSecret" type="password" placeholder="部分代理需要 mj-api-secret" show-password />
+        </el-form-item>
+        <el-form-item label="可灵 AccessKey">
+          <el-input v-model="klingAk" type="password" placeholder="可灵开放平台 AccessKey" show-password />
+          <a class="apply-link" href="https://app.klingai.com/cn/dev/" target="_blank">申请 ↗</a>
+        </el-form-item>
+        <el-form-item label="可灵 SecretKey">
+          <el-input v-model="klingSk" type="password" placeholder="可灵开放平台 SecretKey" show-password />
+        </el-form-item>
+        <el-form-item label="火山 AccessKey ID">
+          <el-input v-model="volcengineAk" type="password" placeholder="火山引擎/即梦 AccessKey ID" show-password />
+          <a class="apply-link" href="https://www.volcengine.com/docs/85621/1616429" target="_blank">申请 ↗</a>
+        </el-form-item>
+        <el-form-item label="火山 AccessKey Secret">
+          <el-input v-model="volcengineSk" type="password" placeholder="火山引擎/即梦 AccessKey Secret" show-password />
+        </el-form-item>
+        <div class="api-group-note">
+          可灵 / 即梦 均按张计费，仅在画图入口显式选择对应引擎时才会调用。
         </div>
 
         <div class="api-group-title">文献翻译（可选）</div>
@@ -1713,6 +1756,17 @@ const defaultImageEngineOptions: Array<{ value: string; label: string }> = [
   { value: 'siliconflow', label: '硅基流动' },
   { value: 'wenxin', label: '文心一格' },
 ]
+// OpenAI / Gemini 兼容代理 Base URL（如 GPTsAPI），桌面端可选填
+const openaiBaseUrl = ref('')
+const googleBaseUrl = ref('')
+// Midjourney 代理（与 ProviderBar 互补，Settings 也提供入口）
+const midjourneyProxy = ref('')
+const midjourneyApiSecret = ref('')
+// 可灵 / 即梦 双 key，Settings 入口（与 ProviderBar 互补，统一存 keychain）
+const klingAk = ref('')
+const klingSk = ref('')
+const volcengineAk = ref('')
+const volcengineSk = ref('')
 const deeplKey = ref('')
 const googleTranslateKey = ref('')
 const azureTranslateKey = ref('')
@@ -1924,34 +1978,55 @@ onMounted(async () => {
   }
   if (hasElectronKeychain) {
     const api = (window as any).electronAPI
-    const [openai, dashscope, siliconflow, deepseek, zhipu, moonshot, googleAi, openrouter, qiniuMaas, anthropic, gptImage, deepl, googleTrans, azureTrans, azureTransRegion] = await Promise.all([
+    const [
+      openai, openaiBase, dashscope, siliconflow, deepseek, zhipu, moonshot,
+      googleAi, googleBase, openrouter, qiniuMaas, anthropic, gptImage,
+      mjProxy, mjSecret, klAk, klSk, vcAk, vcSk,
+      deepl, googleTrans, azureTrans, azureTransRegion,
+    ] = await Promise.all([
       api.getApiKey('openai'),
+      api.getApiKey('openai_base_url'),
       api.getApiKey('dashscope'),
       api.getApiKey('siliconflow'),
       api.getApiKey('deepseek'),
       api.getApiKey('zhipu'),
       api.getApiKey('moonshot'),
       api.getApiKey('google_ai'),
+      api.getApiKey('google_base_url'),
       api.getApiKey('openrouter'),
       api.getApiKey('qiniu_maas'),
       api.getApiKey('anthropic'),
       api.getApiKey('gpt_image'),
+      api.getApiKey('midjourney_proxy'),
+      api.getApiKey('midjourney_api_secret'),
+      api.getApiKey('kling_ak'),
+      api.getApiKey('kling_sk'),
+      api.getApiKey('volcengine_ak'),
+      api.getApiKey('volcengine_sk'),
       api.getApiKey('deepl'),
       api.getApiKey('google_translate'),
       api.getApiKey('azure_translate'),
       api.getApiKey('azure_translate_region'),
     ])
     if (openai) openaiKey.value = openai
+    if (openaiBase) openaiBaseUrl.value = openaiBase
     if (dashscope) dashscopeKey.value = dashscope
     if (siliconflow) siliconflowKey.value = siliconflow
     if (deepseek) deepseekKey.value = deepseek
     if (zhipu) zhipuKey.value = zhipu
     if (moonshot) moonshotKey.value = moonshot
     if (googleAi) googleAiKey.value = googleAi
+    if (googleBase) googleBaseUrl.value = googleBase
     if (openrouter) openrouterKey.value = openrouter
     if (qiniuMaas) qiniuMaasKey.value = qiniuMaas
     if (anthropic) anthropicKey.value = anthropic
     if (gptImage) gptImageKey.value = gptImage
+    if (mjProxy) midjourneyProxy.value = mjProxy
+    if (mjSecret) midjourneyApiSecret.value = mjSecret
+    if (klAk) klingAk.value = klAk
+    if (klSk) klingSk.value = klSk
+    if (vcAk) volcengineAk.value = vcAk
+    if (vcSk) volcengineSk.value = vcSk
     if (deepl) deeplKey.value = deepl
     if (googleTrans) googleTranslateKey.value = googleTrans
     if (azureTrans) azureTranslateKey.value = azureTrans
@@ -2089,16 +2164,24 @@ async function saveApiKeys() {
     const api = (window as any).electronAPI
     const keyItems: Array<{ account: string; label: string; value: string }> = [
       { account: 'openai', label: 'OpenAI API Key', value: openaiKey.value.trim() },
+      { account: 'openai_base_url', label: 'OpenAI Base URL', value: openaiBaseUrl.value.trim() },
       { account: 'dashscope', label: '通义千问 API Key', value: dashscopeKey.value.trim() },
       { account: 'siliconflow', label: '硅基流动 API Key', value: siliconflowKey.value.trim() },
       { account: 'deepseek', label: 'DeepSeek API Key', value: deepseekKey.value.trim() },
       { account: 'zhipu', label: '智谱 API Key', value: zhipuKey.value.trim() },
       { account: 'moonshot', label: 'Moonshot API Key', value: moonshotKey.value.trim() },
       { account: 'google_ai', label: 'Google AI API Key', value: googleAiKey.value.trim() },
+      { account: 'google_base_url', label: 'Gemini Base URL', value: googleBaseUrl.value.trim() },
       { account: 'openrouter', label: 'OpenRouter API Key', value: openrouterKey.value.trim() },
       { account: 'qiniu_maas', label: '七牛 MaaS API Key', value: qiniuMaasKey.value.trim() },
       { account: 'anthropic', label: 'Anthropic API Key', value: anthropicKey.value.trim() },
       { account: 'gpt_image', label: 'GPT Image API Key', value: gptImageKey.value.trim() },
+      { account: 'midjourney_proxy', label: 'Midjourney Proxy URL', value: midjourneyProxy.value.trim() },
+      { account: 'midjourney_api_secret', label: 'Midjourney API Secret', value: midjourneyApiSecret.value.trim() },
+      { account: 'kling_ak', label: '可灵 AccessKey', value: klingAk.value.trim() },
+      { account: 'kling_sk', label: '可灵 SecretKey', value: klingSk.value.trim() },
+      { account: 'volcengine_ak', label: '火山引擎 AccessKey ID', value: volcengineAk.value.trim() },
+      { account: 'volcengine_sk', label: '火山引擎 AccessKey Secret', value: volcengineSk.value.trim() },
       { account: 'deepl', label: 'DeepL API Key', value: deeplKey.value.trim() },
       { account: 'google_translate', label: 'Google 翻译 API Key', value: googleTranslateKey.value.trim() },
       { account: 'azure_translate', label: 'Azure 翻译 Key', value: azureTranslateKey.value.trim() },

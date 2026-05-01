@@ -16,6 +16,14 @@
  * "LinScio MedComm - Keys" / pollinations   → Pollinations API Key
  * "LinScio MedComm - Keys" / comfy_cloud    → Comfy Cloud API Key（platform.comfy.org）
  * "LinScio MedComm - Keys" / gpt_image      → GPT Image API Key（gpt-image-2-plus 等）
+ * "LinScio MedComm - Keys" / midjourney_proxy   → Midjourney Proxy URL（midjourney-proxy / GoAPI）
+ * "LinScio MedComm - Keys" / midjourney_api_secret → Midjourney Proxy mj-api-secret
+ * "LinScio MedComm - Keys" / kling_ak       → 可灵 AI AccessKey（KLING_AI_ACCESS_KEY）
+ * "LinScio MedComm - Keys" / kling_sk       → 可灵 AI SecretKey（KLING_AI_SECRET_KEY）
+ * "LinScio MedComm - Keys" / volcengine_ak  → 火山引擎/即梦 AccessKey ID（VOLCENGINE_AK）
+ * "LinScio MedComm - Keys" / volcengine_sk  → 火山引擎/即梦 AccessKey Secret（VOLCENGINE_SK）
+ * "LinScio MedComm - Keys" / openai_base_url    → OpenAI 兼容代理 Base URL（如 GPTsAPI）
+ * "LinScio MedComm - Keys" / google_base_url    → Gemini 兼容代理 Base URL（GPTsAPI 等）
  * "LinScio MedComm - Keys" / deepl          → DeepL 翻译 API Key
  * "LinScio MedComm - Keys" / google_translate → Google Cloud Translation API Key
  * "LinScio MedComm - Keys" / azure_translate  → Azure Translator API Key
@@ -38,12 +46,14 @@ const LEGACY_TO_ACCOUNT = {
 
 const ACCOUNT_TO_ENV = {
   openai: 'OPENAI_API_KEY',
+  openai_base_url: 'OPENAI_BASE_URL',
   dashscope: 'DASHSCOPE_API_KEY',
   siliconflow: 'SILICONFLOW_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   zhipu: 'ZHIPU_API_KEY',
   moonshot: 'MOONSHOT_API_KEY',
   google_ai: 'GOOGLE_API_KEY',
+  google_base_url: 'GOOGLE_BASE_URL',
   baidu: 'BAIDU_API_KEY',
   baidu_secret: 'BAIDU_SECRET_KEY',
   openrouter: 'OPENROUTER_API_KEY',
@@ -52,6 +62,12 @@ const ACCOUNT_TO_ENV = {
   pollinations: 'POLLINATIONS_API_KEY',
   comfy_cloud: 'COMFY_CLOUD_API_KEY',
   gpt_image: 'GPT_IMAGE_API_KEY',
+  midjourney_proxy: 'MIDJOURNEY_PROXY_URL',
+  midjourney_api_secret: 'MIDJOURNEY_API_SECRET',
+  kling_ak: 'KLING_AI_ACCESS_KEY',
+  kling_sk: 'KLING_AI_SECRET_KEY',
+  volcengine_ak: 'VOLCENGINE_AK',
+  volcengine_sk: 'VOLCENGINE_SK',
   deepl: 'DEEPL_API_KEY',
   google_translate: 'GOOGLE_TRANSLATE_API_KEY',
   azure_translate: 'AZURE_TRANSLATE_KEY',
