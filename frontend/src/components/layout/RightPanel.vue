@@ -641,6 +641,15 @@ const _AI_CATEGORY_LABELS: Record<string, string> = {
   excessive_modifier: '学术腔/堆叠修饰',
   ai_ending: 'AI 套路结尾',
   ai_connector: '高频连接词',
+  metaphor_density: '比喻密度',
+  formulaic_rhetoric: '套路化修辞',
+  evidence_filler: '实证语滥用',
+  explainer_tone: '解释腔短语',
+  rhetorical_opener: '段首反问开场',
+  rhetorical_question_density: '反问开场占比',
+  dash_density: '破折号过密',
+  paragraph_risk: '段落综合风险',
+  statistical_signal: '统计信号',
 }
 function aiCategoryLabel(cat: string): string {
   return _AI_CATEGORY_LABELS[cat] || cat

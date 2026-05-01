@@ -394,12 +394,18 @@ def detect_ai_patterns(content: str) -> dict[str, Any]:
     """
     检测高频 AI 写作模式，返回各类别匹配详情及整体评分。
     评分 0-100，100 表示无明显 AI 味，低于 60 建议人工润色。
+
+    评分由两层组成：
+      1. 字面量/正则规则匹配（含 GPT 科普高频模板：实证语、解释腔、段首反问等）
+      2. 段落级统计信号（复用 detect_ai_patterns_by_paragraph 的结果，
+         把 burstiness/连接词密度/段首句式重复等并入主分）
     """
     import re
 
     clean = _strip_markdown(content)
 
     results: dict[str, list[str]] = {
+        # ── 早期咪蒙体/营销文 ──
         "share_call": [],
         "list_cliche": [],
         "mechanical_transition": [],
@@ -408,6 +414,14 @@ def detect_ai_patterns(content: str) -> dict[str, Any]:
         "ai_connector": [],
         "metaphor_density": [],
         "formulaic_rhetoric": [],
+        # ── GPT 科普高频模板（新增）──
+        "evidence_filler": [],          # 数据显示/研究表明/实验显示
+        "explainer_tone": [],           # 简单理解/简单讲/说白了/换言之
+        "rhetorical_opener": [],        # 段首"你猜怎么着/你是不是/你有没有过"
+        "rhetorical_question_density": [],  # 段首问号反问占比过高
+        "dash_density": [],             # 全文破折号过密
+        "paragraph_risk": [],           # 段落级综合风险（来自 paragraph 检测器）
+        "statistical_signal": [],       # 段落级统计信号汇总
     }
 
     _SHARE_CALL_PATTERNS = [
@@ -467,35 +481,40 @@ def detect_ai_patterns(content: str) -> dict[str, Any]:
         for m in re.finditer(pat, clean, re.MULTILINE):
             results["ai_ending"].append(m.group()[:60])
 
+    # AI 连接词：取消"≤1 清零"陷阱，改为第 2 处起逐次扣分（保留首次容忍）
     _AI_CONNECTOR_PATTERNS = [
-        r"简单说[，,]",
-        r"换句话说[，,]",
-        r"也就是说[，,]",
         r"不仅如此[，,]",
         r"值得一提的是[，,]",
         r"更重要的是[，,]",
         r"需要注意的是[，,]",
         r"需要了解的是[，,]",
+        r"与此同时[，,]",
+        r"在此基础上[，,]",
+        r"事实上[，,]",
+        r"实际上[，,]",
     ]
+    _ai_conn_hits: list[str] = []
     for pat in _AI_CONNECTOR_PATTERNS:
         for m in re.finditer(pat, clean):
-            results["ai_connector"].append(m.group())
-    if len(results["ai_connector"]) <= 1:
-        results["ai_connector"] = []
+            _ai_conn_hits.append(m.group())
+    if len(_ai_conn_hits) >= 2:
+        results["ai_connector"] = _ai_conn_hits[1:]  # 首次容忍，第 2 处起计
 
+    # 比喻密度：取消"≤3 清零"陷阱，改为第 3 处起逐次扣分
     _METAPHOR_MARKERS = [
         r"就像", r"好比", r"好似", r"想象成", r"可以比作",
         r"就好比", r"如同", r"犹如", r"好像.{0,4}一样",
         r"像.{1,6}一样", r"比喻成",
     ]
+    _metaphor_hits: list[str] = []
     for pat in _METAPHOR_MARKERS:
         for m in re.finditer(pat, clean):
-            results["metaphor_density"].append(m.group())
-    if len(results["metaphor_density"]) <= 3:
-        results["metaphor_density"] = []
+            _metaphor_hits.append(m.group())
+    if len(_metaphor_hits) >= 3:
+        results["metaphor_density"] = _metaphor_hits[2:]  # 前 2 处容忍
 
     _FORMULAIC_PATTERNS = [
-        r"不是.{2,15}[，,]\s*而是.{2,15}[。！]",
+        r"不是.{2,15}[，,]\s*而是.{2,15}[。！——]",  # 放宽：句末破折号也算
         r"并肩.{0,6}(作战|前行|同行)",
         r"(清醒|从容|坦然).{0,4}(和|与).{0,4}(清醒|从容|坦然|勇气|智慧)",
         r"(你|我们|每一?位).{0,10}(并肩|携手|一起).{0,10}(前行|前进|走下去|面对)",
@@ -508,10 +527,143 @@ def detect_ai_patterns(content: str) -> dict[str, Any]:
         for m in re.finditer(pat, clean):
             results["formulaic_rhetoric"].append(m.group()[:60])
 
-    total_issues = sum(len(v) for v in results.values())
+    # ── B-1. 实证语滥用（数据显示/研究表明/实验显示等）──
+    # 单次出现合理；密度高就是 GPT 科普模板
+    _EVIDENCE_FILLER_PATTERNS = [
+        r"数据显示", r"数据表明", r"数据指出", r"数据证实",
+        r"研究显示", r"研究发现", r"研究表明", r"研究指出", r"研究证实",
+        r"实验显示", r"实验表明", r"实验证实",
+        r"临床上", r"实际操作中", r"实践证明",
+        r"调查显示", r"调查表明", r"统计显示",
+    ]
+    _evidence_hits: list[str] = []
+    for pat in _EVIDENCE_FILLER_PATTERNS:
+        for m in re.finditer(pat, clean):
+            _evidence_hits.append(m.group())
+    if len(_evidence_hits) >= 3:
+        results["evidence_filler"] = _evidence_hits[2:]  # 前 2 次容忍
 
+    # ── B-2. 解释腔（说白了/简单理解/换句话说/也就是说 等）──
+    _EXPLAINER_PATTERNS = [
+        r"简单说[，,]", r"简单讲[，,]", r"简单来说[，,]", r"简单理解[，,：:]",
+        r"通俗讲[，,]", r"通俗地讲[，,]", r"通俗来说[，,]",
+        r"说白了[，,]", r"换句话说[，,]", r"换言之[，,]",
+        r"也就是说[，,]", r"一言以蔽之[，,]",
+        r"举个例子[，,]", r"打个比方[，,]",
+        r"可以这样理解[，,:：]", r"可以把它理解为",
+    ]
+    _explainer_hits: list[str] = []
+    for pat in _EXPLAINER_PATTERNS:
+        for m in re.finditer(pat, clean):
+            _explainer_hits.append(m.group())
+    if len(_explainer_hits) >= 2:
+        results["explainer_tone"] = _explainer_hits[1:]  # 首次容忍
+
+    # ── B-3. 段首反问开场（"你猜怎么着 / 你是不是 / 你有没有过" 等）──
+    paragraphs_for_opener = [p.strip() for p in re.split(r"\n\s*\n", clean) if p.strip() and len(p.strip()) > 10]
+    _RHETORICAL_OPENER_PATTERNS = [
+        r"^你猜怎么着[？?]",
+        r"^你是不是(也|又)?",
+        r"^你有没有(过)?",
+        r"^你知道吗[，,？?]",
+        r"^你听说过(吗)?[，,？?]?",
+        r"^大家(有没有|是不是)",
+        r"^我们(是不是|有没有)",
+        r"^(你|想象一下)，?如果",
+    ]
+    rhetorical_opener_paragraphs = 0
+    for para in paragraphs_for_opener:
+        for pat in _RHETORICAL_OPENER_PATTERNS:
+            m = re.search(pat, para)
+            if m:
+                results["rhetorical_opener"].append(m.group()[:30])
+                rhetorical_opener_paragraphs += 1
+                break  # 每段最多算一次
+
+    # ── B-4. 段首问号反问占比（首句以 ? 结尾的段数 / 总段数）──
+    if len(paragraphs_for_opener) >= 4:
+        question_opener_count = 0
+        for para in paragraphs_for_opener:
+            first_sent = re.split(r"[。！？!?]", para)[0]
+            # 首句结尾紧跟问号才算（取首句加其后一个字符）
+            first_sent_with_punct = para[: len(first_sent) + 1] if len(para) > len(first_sent) else para
+            if first_sent_with_punct.endswith(("?", "？")):
+                question_opener_count += 1
+        ratio = question_opener_count / len(paragraphs_for_opener)
+        if ratio >= 0.4 and question_opener_count >= 2:
+            results["rhetorical_question_density"].append(
+                f"{question_opener_count}/{len(paragraphs_for_opener)} 段以反问开场（{int(ratio * 100)}%）"
+            )
+
+    # ── B-5. 全文破折号密度（—— 或 — 过密）──
+    text_len_no_space = len(re.sub(r"\s", "", clean))
+    if text_len_no_space >= 200:
+        dash_count = clean.count("——") + clean.count("—")
+        # 破折号每 200 字 1 处可以接受；超过 5 处或密度 > 0.025 触发
+        density = dash_count / text_len_no_space
+        if dash_count >= 5 and density > 0.012:
+            results["dash_density"].append(
+                f"全文 {dash_count} 处破折号（密度 {density * 1000:.1f}‰）"
+            )
+
+    # ── A. 段落级检测器结果并入主分 ──
+    paragraph_high = 0
+    paragraph_medium = 0
+    para_stat_aggregate: dict[str, int] = {}
+    try:
+        paragraphs_detail = detect_ai_patterns_by_paragraph(content)
+    except Exception:
+        paragraphs_detail = []
+
+    _STAT_ISSUE_TYPES = {
+        "low_burstiness", "no_short_sentence", "narrow_range",
+        "consecutive_similar_length", "low_vocabulary_diversity",
+        "high_connector_density", "repetitive_opening",
+        "noun_phrase_stacking", "monotone_punctuation",
+        "excessive_period", "excessive_dash", "short_first_sentence",
+        "connector_opener",
+    }
+    for p in paragraphs_detail:
+        if p["risk_level"] == "high":
+            paragraph_high += 1
+        elif p["risk_level"] == "medium":
+            paragraph_medium += 1
+        for issue in p.get("issues", []):
+            t = issue.get("type", "")
+            if t in _STAT_ISSUE_TYPES:
+                para_stat_aggregate[t] = para_stat_aggregate.get(t, 0) + 1
+
+    if paragraph_high or paragraph_medium:
+        results["paragraph_risk"].append(
+            f"高风险段 {paragraph_high} 段 / 中风险段 {paragraph_medium} 段"
+        )
+
+    _STAT_LABEL = {
+        "low_burstiness": "句长过于均匀",
+        "no_short_sentence": "缺少极短句",
+        "narrow_range": "句长差异过窄",
+        "consecutive_similar_length": "连续句长相近",
+        "low_vocabulary_diversity": "词汇多样性偏低",
+        "high_connector_density": "连接词密度偏高",
+        "repetitive_opening": "段首句式重复",
+        "noun_phrase_stacking": "定语堆叠",
+        "monotone_punctuation": "标点种类单一",
+        "excessive_period": "句号过密",
+        "excessive_dash": "破折号过多",
+        "short_first_sentence": "段首句过短",
+        "connector_opener": "段首连接词",
+    }
+    for stat_type, cnt in para_stat_aggregate.items():
+        if cnt >= 1:
+            label = _STAT_LABEL.get(stat_type, stat_type)
+            results["statistical_signal"].append(f"{label} × {cnt}")
+
+    # ── 评分（三层 cap，避免重复扣分把分数打到地板）──
+    # 三层最大扣分：字面量 40 + 段落风险 20 + 统计信号 10 = 70
+    # 即重度 AI 模板文最低 30 分，中度 50~65，轻度 80+
     score = 100
     penalty_weights = {
+        # 字面量规则
         "share_call": 12,
         "list_cliche": 8,
         "mechanical_transition": 6,
@@ -520,10 +672,35 @@ def detect_ai_patterns(content: str) -> dict[str, Any]:
         "ai_connector": 3,
         "metaphor_density": 3,
         "formulaic_rhetoric": 8,
+        # 新增类别
+        "evidence_filler": 4,
+        "explainer_tone": 4,
+        "rhetorical_opener": 6,
+        "rhetorical_question_density": 12,  # 段首反问占比是强信号，单条多扣
+        "dash_density": 6,
     }
+    _CAT_CAP = 15  # 单类字面量扣分上限
+    literal_total = 0
     for category, items in results.items():
-        score -= len(items) * penalty_weights.get(category, 5)
+        if category in ("paragraph_risk", "statistical_signal"):
+            continue
+        cat_penalty = len(items) * penalty_weights.get(category, 5)
+        literal_total += min(_CAT_CAP, cat_penalty)
+    literal_total = min(40, literal_total)  # 字面量总扣分上限 40
+    score -= literal_total
+
+    # 段落级风险扣分（A 的核心，与字面量上限独立）
+    para_penalty = paragraph_high * 6 + paragraph_medium * 2
+    para_penalty = min(20, para_penalty)
+    score -= para_penalty
+
+    # 段落统计信号（句长/连接词密度/段首重复 等），按出现段数累加，上限 -10
+    stat_total = sum(para_stat_aggregate.values())
+    if stat_total >= 2:
+        score -= min(10, stat_total)
+
     score = max(0, score)
+    total_issues = sum(len(v) for v in results.values())
 
     warnings: list[str] = []
     if results["share_call"]:
@@ -541,12 +718,28 @@ def detect_ai_patterns(content: str) -> dict[str, Any]:
         example = results["ai_ending"][0]
         warnings.append(f'检测到 {len(results["ai_ending"])} 处 AI 套路结尾（如「{example}」），建议改写')
     if results["ai_connector"]:
-        warnings.append(f'检测到 {len(results["ai_connector"])} 处高频 AI 连接词密集使用，建议减少')
+        warnings.append(f'检测到 {len(results["ai_connector"]) + 1} 处高频 AI 连接词，建议精简')
     if results["metaphor_density"]:
-        warnings.append(f'检测到 {len(results["metaphor_density"])} 处比喻/类比（超过 3 处），比喻密度过高，建议精简至 2-3 处')
+        warnings.append(f'比喻/类比密度过高（共 {len(results["metaphor_density"]) + 2} 处），建议精简至 2-3 处')
     if results["formulaic_rhetoric"]:
         example = results["formulaic_rhetoric"][0]
         warnings.append(f'检测到 {len(results["formulaic_rhetoric"])} 处套路化修辞（如「{example}」），建议改写')
+    if results["evidence_filler"]:
+        warnings.append(
+            f'实证语「数据显示/研究发现/实验显示」类共 {len(results["evidence_filler"]) + 2} 处，建议改用具体描述（"X 团队对 Y 人观察 Z 个月"）'
+        )
+    if results["explainer_tone"]:
+        warnings.append(f'解释腔短语（如「换句话说/简单理解/说白了」）共 {len(results["explainer_tone"]) + 1} 处，建议直接陈述')
+    if results["rhetorical_opener"]:
+        warnings.append(
+            f'{len(results["rhetorical_opener"])} 段以「你是不是/你有没有过/你猜怎么着」式反问开场，建议改用具体场景描写'
+        )
+    if results["rhetorical_question_density"]:
+        warnings.append(f'{results["rhetorical_question_density"][0]}，全文反问开场过多，节奏单一')
+    if results["dash_density"]:
+        warnings.append(f'{results["dash_density"][0]}，建议把部分破折号改为冒号、句号或直接陈述')
+    if results["paragraph_risk"]:
+        warnings.append(f'段落级综合检测：{results["paragraph_risk"][0]}（详见 AIGC 段落检测）')
 
     return {
         "score": score,
@@ -554,6 +747,12 @@ def detect_ai_patterns(content: str) -> dict[str, Any]:
         "details": {k: v for k, v in results.items() if v},
         "warnings": warnings,
         "needs_polish": score < 60,
+        "paragraph_summary": {
+            "high": paragraph_high,
+            "medium": paragraph_medium,
+            "total": len(paragraphs_detail),
+            "stat_signals": para_stat_aggregate,
+        },
     }
 
 
