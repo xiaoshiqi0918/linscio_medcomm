@@ -242,13 +242,39 @@ PROVIDER_LABELS: dict[str, str] = {
 }
 
 
+# env_key → Settings 类上的镜像字段名。
+# 仅列出 Settings 真的有镜像的 key；之后若在 Settings 中新增镜像（如 google_api_key），
+# 在此处补一行即可，所有判断点（_env_key_has_value 的调用方）会自动一致。
+_ENV_KEY_TO_SETTINGS_ATTR: dict[str, str] = {
+    "OPENAI_API_KEY": "openai_api_key",
+    "DEEPSEEK_API_KEY": "deepseek_api_key",
+}
+
+
+def _env_key_has_value(env_key: str) -> bool:
+    """统一判断给定 env_key 对应的 API Key 是否已配置。
+
+    优先读 os.environ；若 Settings 类有同名镜像字段，则做兜底。
+    所有"判断 provider 是否可用"的代码路径都应走本函数，
+    避免「设置页显示已接入但实际路由跳过」之类的展示/运行时不一致。
+    """
+    if not env_key:
+        return False
+    if os.environ.get(env_key, "").strip():
+        return True
+    attr = _ENV_KEY_TO_SETTINGS_ATTR.get(env_key)
+    if attr:
+        return bool((getattr(settings, attr, "") or "").strip())
+    return False
+
+
 def _get_provider_models_for_tier(provider: str, tier: TaskTier) -> list[str]:
     """从 PROVIDER_MODEL_TIERS 中按 provider + tier 返回有 key 的模型列表。"""
     info = PROVIDER_MODEL_TIERS.get(provider)
     if not info:
         return []
     env_key = info.get("env_key", "")
-    if not os.environ.get(env_key, "").strip():
+    if not _env_key_has_value(env_key):
         return []
     models = info.get(tier.value, [])
     return [m for m in models if _model_has_key(m)]
@@ -262,11 +288,10 @@ def get_available_providers() -> list[dict]:
         if not info:
             continue
         env_key = info.get("env_key", "")
-        configured = bool(os.environ.get(env_key, "").strip())
         out.append({
             "id": p,
             "label": PROVIDER_LABELS.get(p, p),
-            "configured": configured,
+            "configured": _env_key_has_value(env_key),
         })
     return out
 
@@ -490,9 +515,8 @@ def _model_has_key(model: str) -> bool:
     """
     if model in DOMESTIC_PROVIDERS:
         _, env_key = DOMESTIC_PROVIDERS[model]
-        return bool(os.environ.get(env_key, "").strip())
-    env_key = _infer_env_key(model)
-    return bool(os.environ.get(env_key, "").strip())
+        return _env_key_has_value(env_key)
+    return _env_key_has_value(_infer_env_key(model))
 
 
 def _infer_env_key(model: str) -> str:
@@ -527,14 +551,14 @@ def _find_any_available_model() -> str | None:
     for m in preferred_order:
         if m in DOMESTIC_PROVIDERS:
             _, env_key = DOMESTIC_PROVIDERS[m]
-            if os.environ.get(env_key, "").strip():
+            if _env_key_has_value(env_key):
                 return m
     for m, (_, env_key) in DOMESTIC_PROVIDERS.items():
-        if os.environ.get(env_key, "").strip():
+        if _env_key_has_value(env_key):
             return m
-    if os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    if _env_key_has_value("ANTHROPIC_API_KEY"):
         return "claude-sonnet-4-6"
-    if os.environ.get("OPENAI_API_KEY", "").strip():
+    if _env_key_has_value("OPENAI_API_KEY"):
         return "gpt-4o-mini"
     return None
 
@@ -768,7 +792,7 @@ def _pick_model_from_available_providers(task: TaskTier) -> str | None:
         info = PROVIDER_MODEL_TIERS.get(provider)
         if not info:
             continue
-        if not os.environ.get(info["env_key"], "").strip():
+        if not _env_key_has_value(info.get("env_key", "")):
             continue
         for model in info.get(task.value, []):
             return model
@@ -1051,7 +1075,7 @@ def _pick_saas_model_from_providers(task: TaskTier) -> str | None:
         info = PROVIDER_MODEL_TIERS.get(provider)
         if not info:
             continue
-        if not os.environ.get(info["env_key"], "").strip():
+        if not _env_key_has_value(info.get("env_key", "")):
             continue
         for model in info.get(task.value, []):
             return model
