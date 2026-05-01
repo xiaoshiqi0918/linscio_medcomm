@@ -520,14 +520,61 @@
         </div>
       </el-collapse-item>
     </el-collapse>
-    <el-collapse v-if="hasImageSlotCapability" v-model="contestCollapseItems" class="bindings-panel">
+    <el-collapse v-if="hasImageSlotCapability" ref="bindingsPanelRef" v-model="contestCollapseItems" class="bindings-panel">
       <el-collapse-item name="painting">
         <template #title>
           <span>配图管理</span>
           <el-tag v-if="contestImageSlotCount > 0" size="small" type="success" style="margin-left: 0.5rem;">
-            {{ contestImageUploadedCount }}/{{ contestImageSlotCount }} 已上传
+            {{ contestImageUploadedCount }}/{{ paintableSectionCount || contestImageSlotCount }} 已上传
           </el-tag>
         </template>
+        <div class="slot-batch-bar">
+          <div class="slot-batch-bar__main">
+            <el-select
+              v-model="slotBatchEngine"
+              size="small"
+              style="width: 220px;"
+              placeholder="生图引擎"
+              @change="onSlotBatchEngineChange"
+            >
+              <el-option label="跟随默认（自动选择）" value="" />
+              <el-option
+                v-for="opt in slotBatchEngineOptions"
+                :key="opt.value"
+                :label="slotBatchEngineLabel(opt)"
+                :value="opt.value"
+                :disabled="!slotBatchEngineReady(opt.value)"
+              />
+            </el-select>
+            <el-button
+              type="primary"
+              size="small"
+              :loading="slotBatchGenerating"
+              :disabled="slotBatchGenerating || !paintableSectionCount"
+              @click="handleBatchSlotGenerate"
+            >
+              {{ slotBatchGenerating ? `生成中 ${slotBatchDone}/${slotBatchTotal}` : `一键全文配图（${paintableSectionCount} 节）` }}
+            </el-button>
+            <el-button
+              size="small"
+              :disabled="slotBatchGenerating || !nextUnpaintedSectionId"
+              @click="handleJumpToNextUnpaintedSection"
+            >
+              {{ nextUnpaintedSectionId ? '下一未配图章节' : '全部已配图' }}
+            </el-button>
+          </div>
+          <div v-if="slotBatchGenerating || slotBatchDone > 0" class="slot-batch-bar__progress">
+            <el-progress
+              :percentage="slotBatchTotal ? Math.round(slotBatchDone / slotBatchTotal * 100) : 0"
+              :status="slotBatchFail > 0 ? 'warning' : (slotBatchDone === slotBatchTotal && slotBatchTotal > 0 ? 'success' : undefined)"
+            />
+            <div class="slot-batch-bar__stats">
+              <span>{{ slotBatchDone }}/{{ slotBatchTotal }}</span>
+              <span v-if="slotBatchFail" class="slot-batch-bar__fail">失败 {{ slotBatchFail }}</span>
+              <span v-if="slotBatchSkipped" class="slot-batch-bar__skip">跳过 {{ slotBatchSkipped }}</span>
+            </div>
+          </div>
+        </div>
         <PaintingIntentPanel
           v-if="articleId && currentSectionId"
           :article-id="articleId"
@@ -837,6 +884,87 @@ const isVisualExportFormat = computed(() => VISUAL_EXPORT_FORMATS.includes(artic
 // ── Contest article state ──
 const contestCollapseItems = ref<string[]>(['painting'])
 const contestImageSlots = ref<any[]>([])
+const bindingsPanelRef = ref<any>(null)
+let _hasAutoScrolledToBindings = false
+
+// 元节（无需配图）— 只用于排除规划/封面等不需要正文配图的节
+const META_SECTION_TYPES = new Set([
+  'planner', 'series_plan', 'book_plan', 'image_plan', 'script_plan',
+  'drama_plan', 'anim_plan', 'handbook_plan', 'poster_brief', 'design_spec',
+  'prod_notes', 'filming_notes', 'cast_table', 'char_design',
+])
+
+const slotBatchEngine = ref<string>('')
+const slotBatchGenerating = ref(false)
+const slotBatchTotal = ref(0)
+const slotBatchDone = ref(0)
+const slotBatchFail = ref(0)
+const slotBatchSkipped = ref(0)
+const slotBatchProviders = ref<Record<string, boolean>>({})
+const slotBatchProvidersLoaded = ref(false)
+
+const slotBatchEngineOptions: Array<{ value: string; label: string }> = [
+  { value: 'gpt_image', label: 'GPT Image' },
+  { value: 'openai', label: 'DALL·E 3 / ChatGPT' },
+  { value: 'gemini_image', label: 'Google Gemini 图像' },
+  { value: 'moonshot_image', label: 'Kimi（Moonshot）图像' },
+  { value: 'midjourney', label: 'Midjourney' },
+  { value: 'kling', label: '可灵 AI' },
+  { value: 'jimeng', label: '即梦 AI（火山 Seedream）' },
+  { value: 'comfyui_local', label: 'ComfyUI（本地）' },
+  { value: 'comfyui_cloud', label: 'ComfyUI Cloud' },
+  { value: 'wanx', label: '通义万相' },
+  { value: 'siliconflow', label: '硅基流动' },
+  { value: 'wenxin', label: '文心一格' },
+]
+
+function slotBatchEngineReady(value: string): boolean {
+  if (!slotBatchProvidersLoaded.value) return true
+  if (!value) return true
+  if (value === 'comfyui_local') return !!slotBatchProviders.value.comfyui_local_running
+  return !!slotBatchProviders.value[value]
+}
+
+function slotBatchEngineLabel(opt: { value: string; label: string }) {
+  return slotBatchEngineReady(opt.value) ? opt.label : `${opt.label}（未接入）`
+}
+
+function onSlotBatchEngineChange(val: string) {
+  slotBatchEngine.value = val
+  if (val) settingsStore.setPreferredImageProvider(val)
+}
+
+async function loadSlotBatchProviders() {
+  try {
+    const res = await api.imageIntent.getImageProviders()
+    slotBatchProviders.value = res.data?.providers || {}
+  } catch {
+    slotBatchProviders.value = {}
+  } finally {
+    slotBatchProvidersLoaded.value = true
+  }
+}
+
+const paintableSections = computed(() => {
+  const list = article.value?.sections || []
+  return [...list]
+    .filter((s: any) => s?.has_content && !META_SECTION_TYPES.has(s.section_type || ''))
+    .sort((a: any, b: any) => Number(a.order_num || 0) - Number(b.order_num || 0))
+})
+
+const paintableSectionCount = computed(() => paintableSections.value.length)
+
+const nextUnpaintedSectionId = computed<number | null>(() => {
+  const slotsBySid: Record<number, any> = {}
+  for (const s of contestImageSlots.value) {
+    if (s?.section_id != null) slotsBySid[s.section_id] = s
+  }
+  for (const sec of paintableSections.value) {
+    const slot = slotsBySid[sec.id]
+    if (!slot || !slot.image_path) return sec.id
+  }
+  return null
+})
 
 const hasImageSlotCapability = computed(() =>
   FORMATS_WITH_IMAGE_SLOTS.has(article.value?.content_format || '')
@@ -903,6 +1031,201 @@ function onImageSlotUpdated(slot: any) {
   } else {
     contestImageSlots.value.push(slot)
   }
+}
+
+function _findSlotForSection(sectionId: number) {
+  return contestImageSlots.value.find((s: any) => s.section_id === sectionId) || null
+}
+
+function _sectionPlainText(sec: any): string {
+  if (!sec) return ''
+  if (typeof sec.content_text === 'string' && sec.content_text.trim()) return sec.content_text.trim()
+  if (sec.content_json) {
+    try {
+      const doc = typeof sec.content_json === 'string' ? JSON.parse(sec.content_json) : sec.content_json
+      if (doc?.content) {
+        return doc.content
+          .filter((n: any) => n.type === 'paragraph' || n.type === 'heading')
+          .map((n: any) => (n.content || []).map((c: any) => c.text || '').join(''))
+          .join('\n')
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return ''
+}
+
+async function _ensureSlotForSection(sectionId: number, intentText: string) {
+  const existing = _findSlotForSection(sectionId)
+  if (existing) return existing
+  try {
+    const res = await api.imageIntent.createImageSlot(articleId.value!, {
+      section_id: sectionId,
+      intent_text: intentText,
+      aspect_ratio: '16:9',
+    })
+    const slot = res.data
+    if (slot) contestImageSlots.value.push(slot)
+    return slot
+  } catch {
+    return null
+  }
+}
+
+async function _generateOneSection(sec: any): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
+  try {
+    let slot = _findSlotForSection(sec.id)
+    let intentText = slot?.intent_text || ''
+
+    if (!intentText) {
+      const sectionText = _sectionPlainText(sec)
+      if (!sectionText || sectionText.length < 8) {
+        return { ok: false, skipped: true, error: '正文过短，跳过' }
+      }
+      try {
+        const sgRes = await api.imageIntent.suggestIntent({
+          section_text: sectionText,
+          topic: article.value?.topic,
+          section_type: sec.section_type,
+        })
+        const first = sgRes.data?.suggestions?.[0]?.intent
+        if (first) intentText = String(first).trim()
+      } catch {
+        /* ignore — 走兜底 */
+      }
+      if (!intentText) {
+        const trimmed = sectionText.replace(/\s+/g, ' ').slice(0, 60)
+        intentText = `围绕「${sec.title || sec.section_type || article.value?.topic || '健康科普'}」配一张专业、温和、贴合医学语境的插画：${trimmed}`
+      }
+    }
+
+    if (!slot) {
+      slot = await _ensureSlotForSection(sec.id, intentText)
+    } else if (!slot.intent_text) {
+      try {
+        const upd = await api.imageIntent.updateImageSlot(slot.id, { intent_text: intentText })
+        slot = upd.data || { ...slot, intent_text: intentText }
+        const idx = contestImageSlots.value.findIndex((s: any) => s.id === slot.id)
+        if (idx >= 0) contestImageSlots.value[idx] = slot
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!slot) return { ok: false, error: '建画位失败' }
+
+    if (!slot.prompt_zh && !slot.prompt_en) {
+      const pr = await api.imageIntent.generateSlotPrompt(slot.id)
+      slot = pr.data?.slot || slot
+      const idx = contestImageSlots.value.findIndex((s: any) => s.id === slot.id)
+      if (idx >= 0) contestImageSlots.value[idx] = slot
+    }
+
+    const gen = await api.imageIntent.generateSlotImage(
+      slot.id,
+      slotBatchEngine.value ? { preferred_provider: slotBatchEngine.value } : undefined,
+    )
+    const newSlot = gen.data?.slot
+    if (newSlot) {
+      const idx = contestImageSlots.value.findIndex((s: any) => s.id === newSlot.id)
+      if (idx >= 0) contestImageSlots.value[idx] = newSlot
+      else contestImageSlots.value.push(newSlot)
+    }
+    return { ok: true }
+  } catch (e: any) {
+    const msg = e?.response?.data?.detail || e?.message || '生成失败'
+    return { ok: false, error: String(msg) }
+  }
+}
+
+async function handleBatchSlotGenerate() {
+  if (!articleId.value) return
+  const sections = paintableSections.value
+  if (!sections.length) {
+    ElMessage.warning('当前文章尚无可配图的章节正文，请先生成章节内容')
+    return
+  }
+
+  await loadContestImageSlots()
+  const alreadyPainted = sections.filter((sec: any) => {
+    const slot = _findSlotForSection(sec.id)
+    return slot?.image_path
+  })
+  if (alreadyPainted.length > 0) {
+    try {
+      await ElMessageBox.confirm(
+        `已有 ${alreadyPainted.length} 节配图，重新生成将覆盖。是否继续？（未配图的 ${sections.length - alreadyPainted.length} 节也会一起处理）`,
+        '一键全文配图',
+        { confirmButtonText: '全部重新生成', cancelButtonText: '取消', type: 'warning' },
+      )
+    } catch {
+      return
+    }
+  }
+
+  if (!slotBatchProvidersLoaded.value) await loadSlotBatchProviders()
+  if (slotBatchEngine.value && !slotBatchEngineReady(slotBatchEngine.value)) {
+    ElMessage.warning('所选引擎当前未接入，已切换为自动选择')
+    slotBatchEngine.value = ''
+  }
+
+  slotBatchGenerating.value = true
+  slotBatchTotal.value = sections.length
+  slotBatchDone.value = 0
+  slotBatchFail.value = 0
+  slotBatchSkipped.value = 0
+
+  const CONCURRENCY = 2
+  const queue = [...sections]
+  const errors: string[] = []
+
+  async function worker() {
+    while (queue.length) {
+      const sec = queue.shift()
+      if (!sec) break
+      const r = await _generateOneSection(sec)
+      slotBatchDone.value++
+      if (!r.ok) {
+        if (r.skipped) slotBatchSkipped.value++
+        else slotBatchFail.value++
+        if (r.error) errors.push(`${sec.title || sec.section_type}：${r.error}`)
+      }
+    }
+  }
+
+  try {
+    await Promise.allSettled(Array.from({ length: CONCURRENCY }, () => worker()))
+    await loadContestImageSlots()
+    const ok = slotBatchDone.value - slotBatchFail.value - slotBatchSkipped.value
+    if (slotBatchFail.value === 0 && slotBatchSkipped.value === 0) {
+      ElMessage.success(`全文配图完成：${ok}/${slotBatchTotal.value}`)
+    } else if (slotBatchFail.value === 0) {
+      ElMessage.warning(`完成 ${ok} 节，跳过 ${slotBatchSkipped.value} 节（章节正文过短）`)
+    } else {
+      ElMessage.warning(`完成 ${ok} 节，失败 ${slotBatchFail.value} 节${slotBatchSkipped.value ? `，跳过 ${slotBatchSkipped.value} 节` : ''}`)
+      if (errors.length) {
+        console.warn('[batch-slot-generate] errors:', errors)
+      }
+    }
+  } finally {
+    slotBatchGenerating.value = false
+  }
+}
+
+function handleJumpToNextUnpaintedSection() {
+  const sid = nextUnpaintedSectionId.value
+  if (sid == null) {
+    ElMessage.success('全部章节已配图')
+    return
+  }
+  if (sid === currentSectionId.value) return
+  currentSectionId.value = sid
+  if (!contestCollapseItems.value.includes('painting')) {
+    contestCollapseItems.value = [...contestCollapseItems.value, 'painting']
+  }
+  nextTick(() => {
+    bindingsPanelRef.value?.$el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+  })
 }
 
 const batchGenerating = ref(false)
@@ -1352,7 +1675,22 @@ async function loadArticle(sectionId?: number) {
         }
       }).catch(() => {})
     }
-    void loadContestImageSlots()
+    void loadContestImageSlots().then(() => {
+      if (
+        !_hasAutoScrolledToBindings &&
+        hasImageSlotCapability.value &&
+        contestImageUploadedCount.value === 0 &&
+        paintableSectionCount.value > 0 &&
+        bindingsPanelRef.value?.$el
+      ) {
+        _hasAutoScrolledToBindings = true
+        nextTick(() => {
+          try {
+            bindingsPanelRef.value.$el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          } catch { /* ignore */ }
+        })
+      }
+    })
   } catch {
     article.value = null
   }
@@ -3098,6 +3436,8 @@ onMounted(() => {
   const querySectionId = getSectionIdFromQuery()
   if (querySectionId) currentSectionId.value = querySectionId
   externalQuery.value = String(article.value?.topic || article.value?.title || '')
+  slotBatchEngine.value = settingsStore.preferredImageProvider === 'auto' ? '' : (settingsStore.preferredImageProvider || '')
+  void loadSlotBatchProviders()
   loadArticle(querySectionId ?? undefined)
   loadBindings()
   syncCitationRefsInEditor()
@@ -3240,6 +3580,30 @@ async function handleAuthUserChanged() {
 }
 .bindings-panel :deep(.el-collapse-item__header) { padding-left: 0; }
 .bindings-content { padding: 0.25rem 0; }
+.slot-batch-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  background: var(--el-fill-color-lighter);
+  border-radius: 6px;
+}
+.slot-batch-bar__main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.slot-batch-bar__progress { display: flex; flex-direction: column; gap: 0.25rem; }
+.slot-batch-bar__stats {
+  display: flex;
+  gap: 0.75rem;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.slot-batch-bar__fail { color: var(--el-color-danger); }
+.slot-batch-bar__skip { color: var(--el-color-warning); }
 .bindings-toolbar {
   display: flex;
   align-items: center;

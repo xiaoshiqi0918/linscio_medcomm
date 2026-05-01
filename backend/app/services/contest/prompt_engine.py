@@ -358,9 +358,8 @@ async def _suggest_via_llm(
     prior_intents: list[str] | None = None,
 ) -> list[dict]:
     """通过 LLM 生成画意候选"""
-    from app.services.llm.manager import get_llm_manager
-
-    mgr = get_llm_manager()
+    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.manager import TaskTier
 
     user_parts = [f"<paragraph>\n{section_text[:2000]}\n</paragraph>"]
     if topic:
@@ -369,18 +368,18 @@ async def _suggest_via_llm(
         import json as _json
         user_parts.append(f"<prior_intents>\n{_json.dumps(prior_intents, ensure_ascii=False)}\n</prior_intents>")
 
-    response = await mgr.chat_completion(
+    raw = await chat_completion(
         messages=[
             {"role": "system", "content": _SUGGEST_INTENT_SYSTEM_PROMPT},
             {"role": "user", "content": "\n\n".join(user_parts)},
         ],
+        task=TaskTier.BALANCED,
         temperature=0.7,
-        max_tokens=600,
+        _log_task_type="contest_suggest_intent",
     )
 
     import json
-    text = response.get("content", "")
-    text = text.strip()
+    text = (raw if isinstance(raw, str) else "").strip()
     if text.startswith("```"):
         lines = text.split("\n")
         lines = [l for l in lines if not l.strip().startswith("```")]
@@ -705,9 +704,9 @@ async def _translate_intent(intent: str, target_lang: str = "en") -> str:
     if target_lang == "zh" or not intent:
         return intent
     try:
-        from app.services.llm.manager import get_llm_manager
-        mgr = get_llm_manager()
-        resp = await mgr.chat_completion(
+        from app.services.llm.openai_client import chat_completion
+        from app.services.llm.manager import TaskTier
+        raw = await chat_completion(
             messages=[
                 {"role": "system", "content": (
                     "You are a medical illustration translator. "
@@ -716,10 +715,11 @@ async def _translate_intent(intent: str, target_lang: str = "en") -> str:
                 )},
                 {"role": "user", "content": intent},
             ],
+            task=TaskTier.FAST,
             temperature=0.3,
-            max_tokens=200,
+            _log_task_type="contest_intent_translate",
         )
-        text = resp.get("content", "").strip()
+        text = (raw if isinstance(raw, str) else "").strip()
         return text if text else intent
     except Exception as e:
         logger.warning("Intent translation failed: %s, using original", e)
@@ -1266,19 +1266,20 @@ async def orchestrate_prompt(input_data: dict) -> dict:
         )
 
     try:
-        from app.services.llm.manager import get_llm_manager
-        mgr = get_llm_manager()
+        from app.services.llm.openai_client import chat_completion
+        from app.services.llm.manager import TaskTier
 
-        resp = await mgr.chat_completion(
+        raw = await chat_completion(
             messages=[
                 {"role": "system", "content": _ORCHESTRATOR_SYSTEM_PROMPT},
                 {"role": "user", "content": "\n".join(user_parts)},
             ],
+            task=TaskTier.BALANCED,
             temperature=0.5,
-            max_tokens=1200,
+            _log_task_type="contest_p5_orchestrate",
         )
 
-        text = resp.get("content", "").strip()
+        text = (raw if isinstance(raw, str) else "").strip()
         if text.startswith("```"):
             lines = text.split("\n")
             lines = [l for l in lines if not l.strip().startswith("```")]
