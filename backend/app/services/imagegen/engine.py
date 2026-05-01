@@ -66,6 +66,7 @@ _IMAGE_PROVIDER_KEYS: tuple[str, ...] = (
     "gemini_image",
     "moonshot_image",
     "midjourney",
+    "kling",
     "wanx",
     "wenxin",
     "siliconflow",
@@ -103,6 +104,7 @@ async def detect_providers() -> dict:
         "gemini_image": gemini_img,
         "moonshot_image": moonshot_img,
         "midjourney": bool(os.environ.get("MIDJOURNEY_PROXY_URL")),
+        "kling": _kling_available(),
         "wanx": bool(os.environ.get("DASHSCOPE_API_KEY")),
         "wenxin": wenxin_key and wenxin_secret,
         "siliconflow": bool(os.environ.get("SILICONFLOW_API_KEY")),
@@ -520,6 +522,207 @@ async def _midjourney(
         return []
 
 
+# ── 可灵 AI（Kling）── 异步任务 + JWT 鉴权 ────────────────────────────
+# 官方文档：https://app.klingai.com/cn/dev/document-api/apiReference/model/imageGeneration
+
+_kling_semaphore = asyncio.Semaphore(2)
+# JWT 缓存：{access_key: (token, expires_at_unix)}
+_kling_jwt_cache: dict[str, tuple[str, float]] = {}
+
+# 可灵支持的 aspect_ratio 枚举（按比例数值用于近似匹配）
+_KLING_ASPECT_RATIOS: tuple[tuple[str, float], ...] = (
+    ("16:9", 16 / 9),
+    ("9:16", 9 / 16),
+    ("1:1", 1.0),
+    ("4:3", 4 / 3),
+    ("3:4", 3 / 4),
+    ("3:2", 3 / 2),
+    ("2:3", 2 / 3),
+    ("21:9", 21 / 9),
+)
+
+
+def _kling_aspect_ratio(width: int, height: int) -> str:
+    """根据像素 width/height 比例选最接近的 Kling aspect_ratio 枚举值"""
+    if not width or not height:
+        return "1:1"
+    target = float(width) / float(height)
+    return min(_KLING_ASPECT_RATIOS, key=lambda c: abs(target - c[1]))[0]
+
+
+def _kling_credentials() -> tuple[str, str, str]:
+    """返回 (access_key, secret_key, bearer_token)。任一可用即可调用"""
+    ak = os.environ.get("KLING_AI_ACCESS_KEY", "").strip()
+    sk = os.environ.get("KLING_AI_SECRET_KEY", "").strip()
+    bearer = os.environ.get("KLING_AI_API_KEY", "").strip()
+    return ak, sk, bearer
+
+
+def _kling_available() -> bool:
+    """JWT 双 key 或 Bearer Token 任一存在即可用"""
+    ak, sk, bearer = _kling_credentials()
+    return bool((ak and sk) or bearer)
+
+
+def _kling_jwt(access_key: str, secret_key: str) -> str:
+    """生成可灵 JWT token，30min 缓存（提前 60s 续签）"""
+    import time
+    import jwt as _jwt
+
+    now = time.time()
+    cached = _kling_jwt_cache.get(access_key)
+    if cached and cached[1] > now + 60:
+        return cached[0]
+
+    payload = {
+        "iss": access_key,
+        "exp": int(now) + 1800,   # 30 min 有效
+        "nbf": int(now) - 5,      # 容忍轻微时钟漂移
+    }
+    token = _jwt.encode(
+        payload,
+        secret_key,
+        algorithm="HS256",
+        headers={"alg": "HS256", "typ": "JWT"},
+    )
+    # PyJWT 2.x: encode 直接返回 str；1.x 返回 bytes
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+    _kling_jwt_cache[access_key] = (token, now + 1800)
+    return token
+
+
+def _kling_resolve_token() -> str:
+    """优先 JWT（access_key + secret_key），fallback 到 Bearer Token"""
+    ak, sk, bearer = _kling_credentials()
+    if ak and sk:
+        try:
+            return _kling_jwt(ak, sk)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Kling JWT 生成失败 %s，尝试 Bearer Token fallback", exc)
+    return bearer
+
+
+async def _kling(
+    prompt: str,
+    style: str,
+    width: int,
+    height: int,
+    image_type: str = "generated",
+    *,
+    reference_image: str | None = None,
+    image_reference: str = "",
+) -> list[str]:
+    """
+    可灵 AI 图像生成（kling-v1 / v1-5 / v2 / v2-1）。
+
+    特性：
+    - 异步任务（提交 → 轮询 task_id → 下载图片 URL）
+    - JWT（推荐）或 Bearer Token 鉴权
+    - 支持文生图与图生图（reference_image + image_reference="subject"/"face"）
+    """
+    token = _kling_resolve_token()
+    if not token:
+        return []
+
+    base_url = (
+        os.environ.get("KLING_AI_BASE_URL", "").strip().rstrip("/")
+        or "https://api-beijing.klingai.com"
+    )
+    model = os.environ.get("KLING_AI_MODEL", "").strip() or "kling-v1-5"
+    resolution = os.environ.get("KLING_AI_RESOLUTION", "").strip() or "1k"
+
+    headers: dict[str, str] = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    payload: dict = {
+        "model_name": model,
+        "prompt": (prompt or "")[:2500],
+        "n": 1,
+        "aspect_ratio": _kling_aspect_ratio(width, height),
+        "resolution": resolution,
+    }
+    if reference_image:
+        payload["image"] = reference_image
+        # 默认按 subject（角色特征参考）；kling-v1-5 + 图生图必填 image_reference
+        payload["image_reference"] = image_reference or "subject"
+
+    async with _kling_semaphore:
+        # ── 1. 提交任务 ───────────────────────────────────
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    f"{base_url}/v1/images/generations",
+                    headers=headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+                data = resp.json() or {}
+                # 可灵返回结构：{"code": 0, "message": "SUCCEED", "data": {"task_id": "..."}}
+                code = data.get("code")
+                if code not in (0, None):
+                    _log.warning(
+                        "Kling submit failed: code=%s message=%s",
+                        code, data.get("message"),
+                    )
+                    return []
+                task_id = (data.get("data") or {}).get("task_id")
+                if not task_id:
+                    _log.warning("Kling submit returned no task_id: %s", data)
+                    return []
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Kling submit error: %s", exc)
+            return []
+
+        # ── 2. 轮询任务结果 ────────────────────────────────
+        max_wait, interval = 120, 3
+        elapsed = 0
+        image_url: str | None = None
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                while elapsed < max_wait:
+                    await asyncio.sleep(interval)
+                    elapsed += interval
+                    resp = await client.get(
+                        f"{base_url}/v1/images/{task_id}",
+                        headers=headers,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json() or {}
+                    task = data.get("data") or {}
+                    status = (task.get("task_status") or "").lower()
+                    if status == "succeed":
+                        images = (task.get("task_result") or {}).get("images") or []
+                        if images:
+                            image_url = images[0].get("url")
+                        break
+                    if status == "failed":
+                        _log.warning(
+                            "Kling task failed: %s",
+                            task.get("task_status_msg") or task,
+                        )
+                        return []
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Kling poll error: %s", exc)
+            return []
+
+    if not image_url:
+        _log.warning("Kling task timed out after %ds (task_id=%s)", max_wait, task_id)
+        return []
+
+    # ── 3. 下载图片落地 ──────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.get(image_url)
+            r.raise_for_status()
+        rel = _save_local(r.content, provider="kling", image_type=image_type)
+        return [f"medcomm-image://{rel}"]
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("Kling download error: %s", exc)
+        return []
+
+
 _log = logging.getLogger("linscio.imagegen")
 
 
@@ -706,6 +909,10 @@ async def generate_image(
     skip_sf = not os.environ.get("SILICONFLOW_API_KEY")
     skip_wenxin = not (os.environ.get("ERNIE_IMAGE_API_KEY") or os.environ.get("BAIDU_API_KEY"))
     skip_comfy = _comfy_provider_skip()
+    # 可灵：默认仅在用户显式选择 preferred_provider="kling" 时才参与 fallback；
+    # 这样能避免在不知情的情况下消耗 Kling 配额（异步任务且按张计费）。
+    _kling_pref = (preferred_provider or "").strip().lower() == "kling"
+    skip_kling = (not _kling_pref) or (not _kling_available())
 
     async def gpt_image_fn(_iter_s: int) -> list[str]:
         return await _gpt_image(base_pos, style, width, height, it)
@@ -715,6 +922,9 @@ async def generate_image(
 
     async def midjourney_fn(_iter_s: int) -> list[str]:
         return await _midjourney(api_merged, width, height, it)
+
+    async def kling_fn(_iter_s: int) -> list[str]:
+        return await _kling(api_merged, style, width, height, it)
 
     async def wanx_fn(_iter_s: int) -> list[str]:
         return await _wanx(api_merged, style, width, height, it)
@@ -754,6 +964,7 @@ async def generate_image(
         ("gpt_image", gpt_image_fn, skip_gpt_image),
         ("comfyui", comfy_fn, skip_comfy),
         ("midjourney", midjourney_fn, skip_mj),
+        ("kling", kling_fn, skip_kling),
         ("openai", openai_fn, skip_openai),
         ("wanx", wanx_fn, skip_wanx),
         ("siliconflow", silicon_fn, skip_sf),
