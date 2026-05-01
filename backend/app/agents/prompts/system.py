@@ -6,7 +6,12 @@ AI 身份设定、角色约束、输出语言、质量标准
 提供两个变体：
 - _DEFAULT_SYSTEM: 编辑/内部格式，保留 [共识] [推断] [[待补充]] 标签用于溯源
 - _DEFAULT_SYSTEM_READER_FACING: 读者向格式，使用 [N] 文献编号，禁止内部标签
+
+P0-2 / R3：两个变体末尾都追加共享的信息保真禁令（FACT_PRESERVATION_RULES，
+描述式版本）。改写层在 deai_rewriter._resolve_deai_system_prompt 中注入命令
+式版本（REWRITE_FACT_BLOCK）。生成层与改写层共用同一份规则源，避免双份维护。
 """
+from app.agents.prompts.fact_preservation_rules import FACT_PRESERVATION_RULES
 from app.agents.prompts.loader import load_layer0_system
 
 _SHARED_EVIDENCE_LANGUAGE = """【证据语言原则】
@@ -43,9 +48,13 @@ _DEFAULT_SYSTEM = f"""你是一位在三甲医院工作十年的临床医生，�
 15. 行内标注[共识]和[推断:基于XX]
 16. 不附参考文献列表和溯源摘要（由系统自动处理）
 17. 正文简体中文；术语附英文对照（如「胰岛素（Insulin）」）
+
+═══ 信息保真禁令（与改写层共享，P0-2 / R3）═══
+
+{FACT_PRESERVATION_RULES}
 """
 
-_DEFAULT_SYSTEM_READER_FACING = """你是一位有十年临床医学背景的健康科普写作者。你的稿件最常出现在医学媒体的科普专栏与各类医学科普征稿中，读者多为受过中等教育的普通成人。
+_DEFAULT_SYSTEM_READER_FACING = f"""你是一位有十年临床医学背景的健康科普写作者。你的稿件最常出现在医学媒体的科普专栏与各类医学科普征稿中，读者多为受过中等教育的普通成人。
 
 你的文风：半正式科普——语言平实准确，不堆砌修辞，也不做学术论文式的生硬陈列。可以自然引入临床场景与判断，但不写"正确但空洞"的过渡句，每句话都要承载信息。
 
@@ -110,9 +119,28 @@ R14. 用自然语言表达不确定性（"可能"、"在多数情况下"、"目�
 安全红线（R7-R11）> 事实准确（R1-R6）> 可读性 > 风格偏好
 
 赛制约束（如系统在用户消息中提供）的优先级高于本文档的"输出格式"和"风格偏好"，但不得突破"安全红线"与"事实准确"。
+
+═══ 信息保真禁令（与改写层共享，P0-2 / R3）═══
+
+{FACT_PRESERVATION_RULES}
 """
 
-MEDCOMM_SYSTEM_PROMPT = load_layer0_system() or _DEFAULT_SYSTEM
+def _ensure_fact_rules(text: str) -> str:
+    """确保 system prompt 末尾包含 FACT_PRESERVATION_RULES（P0-2 / R3）。
+
+    layer0/system.txt override 文件不能绕过共享禁令——业务规则应当强制生效。
+    """
+    if FACT_PRESERVATION_RULES in text:
+        return text
+    return (
+        f"{text.rstrip()}\n\n"
+        "═══ 信息保真禁令（与改写层共享，P0-2 / R3）═══\n\n"
+        f"{FACT_PRESERVATION_RULES}"
+    )
+
+
+_LOADED_LAYER0 = load_layer0_system()
+MEDCOMM_SYSTEM_PROMPT = _ensure_fact_rules(_LOADED_LAYER0) if _LOADED_LAYER0 else _DEFAULT_SYSTEM
 
 _READER_FACING_CONTENT_FORMATS = {
     "article", "qa_article", "debunk", "story", "research_read",
@@ -134,7 +162,7 @@ def get_system_prompt(
     target register (casual / serious / wechat-popular).
     """
     if content_format in _READER_FACING_CONTENT_FORMATS:
-        base = _DEFAULT_SYSTEM_READER_FACING
+        base = _ensure_fact_rules(_DEFAULT_SYSTEM_READER_FACING)
     else:
         base = MEDCOMM_SYSTEM_PROMPT
 

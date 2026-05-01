@@ -269,8 +269,9 @@ def _validate_rewrite(
 def _build_deai_system_prompt(platform: str = "wechat", target_audience: str = "public") -> str:
     """Build the de-AI system prompt with style-aware register guidance."""
     from app.agents.prompts.audiences import resolve_writing_style
+    from app.agents.prompts.fact_preservation_rules import REWRITE_FACT_BLOCK
     style = resolve_writing_style(platform, target_audience)
-    return (
+    base = (
         f"你是一位给健康媒体写专栏的临床医生。当前文章风格是「{style['name']}」。\n"
         f"语域：{style['register']}\n\n"
         f"改写任务的规则：\n"
@@ -280,15 +281,39 @@ def _build_deai_system_prompt(platform: str = "wechat", target_audience: str = "
         f"- 情感色彩：{style['emotion']}\n"
         f"- 典型表达（参考）：{style['typical']}"
     )
+    return f"{base}\n\n{REWRITE_FACT_BLOCK}"
 
 
 def _resolve_deai_system_prompt(platform: str = "wechat", target_audience: str = "public") -> str:
-    """若 prompt-example/prompts/deai/system_override.txt 非空则整段替换，否则用风格感知的动态 system。"""
+    """若 prompt-example/prompts/deai/system_override.txt 非空则整段替换，否则用风格感知的动态 system。
+
+    不论走 override 还是动态 system，末尾都追加 REWRITE_FACT_BLOCK 信息保真禁令
+    （P0-2 / R3：禁令必须始终注入，不允许 override 文件覆盖）。
+    """
     from app.agents.prompts.loader import load_deai_system_override
+    from app.agents.prompts.fact_preservation_rules import REWRITE_FACT_BLOCK
     override = load_deai_system_override()
     if override:
-        return override
+        return f"{override}\n\n{REWRITE_FACT_BLOCK}"
     return _build_deai_system_prompt(platform, target_audience)
+
+
+# ────────────────────────────────────────────
+# 多轮改写：第 2 轮 user prompt 头部提示（P0-2 / R1）
+# ────────────────────────────────────────────
+#
+# R1 决策：第 2 轮不给上一轮改写结果，让 LLM 把当前段落当作原文做"句式微调"。
+# 不在 prompt 里塞"这是已经改过一轮的"，避免 LLM 在第 1 轮基础上做累积改动。
+# 但需要明示"第 2 轮重点是句式微调"，否则 LLM 会做完整改动量，导致改动过激。
+
+_R2_HEAD_HINT = """\
+【第 2 轮微调】
+你看到的就是原文段落。本轮重点是段落内部的句式微调和连接词替换：
+- 不做大幅重写，不调整段落结构
+- 优先打磨节奏（长短句交替、避免连续 3 句同结构）和段首连接词
+- 信息保真禁令请严格遵守（见 system message）
+
+"""
 
 
 def _deai_rewrite_template() -> str:
@@ -611,6 +636,8 @@ async def rewrite_multi_pass(
             )
             style_label = style["name"]
 
+        # 头部依次叠加：R1 第 2 轮微调提示 → 段级字数约束 → 模板正文
+        user_prompt = f"{_R2_HEAD_HINT}{user_prompt}"
         if para_cap_hint:
             user_prompt = f"{para_cap_hint}\n\n{user_prompt}"
 
