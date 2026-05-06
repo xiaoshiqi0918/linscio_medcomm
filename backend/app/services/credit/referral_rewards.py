@@ -134,3 +134,69 @@ async def grant_referred_first_recharge_bonus(
         "被推广人首充奖励[%s]: user=%d bonus=%s",
         source_type, user.id, bonus,
     )
+
+
+async def grant_referral_license_download_reward(
+    user_id: int,
+    db: AsyncSession,
+    *,
+    source_id: int | None = None,
+) -> bool:
+    """
+    被推广人首次成功下载客户端（且名下持有有效授权码）→ 推广人获得固定推广积分。
+
+    幂等保护：若已存在 (referrer_id, referred_id, trigger_type='license_download') 的 ReferralLog，
+    直接返回 False 不重复发放。
+
+    返回 True 表示本次发放成功。
+    """
+    from app.core.config import settings
+    from app.models.user import User
+    from app.models.billing import LicenseCode
+    from app.models.referral import ReferralLog
+
+    user = await db.get(User, user_id)
+    if not user or not user.referred_by:
+        return False
+
+    has_license = await db.scalar(
+        select(LicenseCode.id).where(LicenseCode.owner_id == user_id).limit(1)
+    )
+    if not has_license:
+        return False
+
+    already = await db.scalar(
+        select(ReferralLog.id).where(
+            ReferralLog.referrer_id == user.referred_by,
+            ReferralLog.referred_id == user.id,
+            ReferralLog.trigger_type == "license_download",
+        ).limit(1)
+    )
+    if already:
+        return False
+
+    referrer = await db.get(User, user.referred_by)
+    if not referrer:
+        return False
+
+    reward = Decimal(str(settings.referral_license_download_reward))
+    if reward <= 0:
+        return False
+
+    referrer.promo_credits = (referrer.promo_credits or Decimal("0")) + reward
+    referrer.promo_credits_expire_at = _promo_expire_at()
+
+    log = ReferralLog(
+        referrer_id=referrer.id,
+        referred_id=user.id,
+        trigger_type="license_download",
+        related_recharge_id=source_id,
+        reward_credits=reward,
+    )
+    db.add(log)
+
+    logger.info(
+        "授权码下载奖励: referrer=%d referred=%d reward=%s",
+        referrer.id, user.id, reward,
+    )
+    return True

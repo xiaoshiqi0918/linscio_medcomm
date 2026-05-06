@@ -113,6 +113,8 @@ class Settings:
     promo_credits_validity_months: int = 6
     promo_cash_rate: float = 0.10
     promo_min_withdraw: int = 100
+    # 被推广人首次成功下载客户端（且持有有效授权码）→ 推广人获得固定推广积分
+    referral_license_download_reward: int = 1000
 
     # ── 易支付 ─────────────────────────────────────────────────
     yipay_pid: str = os.environ.get("YIPAY_PID", "")

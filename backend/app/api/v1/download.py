@@ -243,6 +243,19 @@ async def download_software(
         user.id, req.platform, latest_ver, dl_log.id,
     )
 
+    if user.referred_by:
+        try:
+            from app.services.credit.referral_rewards import (
+                grant_referral_license_download_reward,
+            )
+            granted = await grant_referral_license_download_reward(
+                user.id, db, source_id=dl_log.id,
+            )
+            if granted:
+                await db.commit()
+        except Exception:
+            logger.exception("授权码下载推广奖励发放失败 user=%d", user.id)
+
     return {
         "download_url": download_url,
         "filename": filename,

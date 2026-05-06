@@ -95,7 +95,8 @@
         <div style="margin-top: 12px; padding: 10px 14px; background: #f0fdf4; border-radius: 8px; border: 1px solid #bbf7d0; font-size: 0.82rem; color: #166534; line-height: 1.7;">
           好友通过您的推广链接注册 → 您获得 <strong>5 推广积分</strong><br />
           好友充值 ≥50 元 → 您获得其充值积分 <strong>10%</strong> 的推广积分<br />
-          好友首次充值 ≥50 元 → 好友本人获得充值积分 <strong>20%</strong> 的推广积分奖励
+          好友首次充值 ≥50 元 → 好友本人获得充值积分 <strong>20%</strong> 的推广积分奖励<br />
+          好友持有客户端授权码并首次下载客户端 → 您获得 <strong>1000 推广积分</strong>（同一好友仅奖励一次）
         </div>
 
         <!-- 推广明细 -->
@@ -1455,12 +1456,12 @@ async function applyWithdraw() {
 }
 
 function referralTriggerLabel(type: string): string {
-  const map: Record<string, string> = { register: '注册奖励', recharge: '充值返利', first_recharge_bonus: '首充奖励' }
+  const map: Record<string, string> = { register: '注册奖励', recharge: '充值返利', first_recharge_bonus: '首充奖励', license_download: '授权码下载奖励' }
   return map[type] || type
 }
 
 function referralTriggerTag(type: string): string {
-  const map: Record<string, string> = { register: 'success', recharge: '', first_recharge_bonus: 'warning' }
+  const map: Record<string, string> = { register: 'success', recharge: '', first_recharge_bonus: 'warning', license_download: 'danger' }
   return map[type] || ''
 }
 
