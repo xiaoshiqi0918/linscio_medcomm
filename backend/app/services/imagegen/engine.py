@@ -448,15 +448,47 @@ async def _midjourney(
     width: int,
     height: int,
     image_type: str = "generated",
+    *,
+    seed: int | None = None,
+    reference_image: str | None = None,
+    consistency_strength: str = "normal",
 ) -> list[str]:
-    """Midjourney via proxy API（兼容 midjourney-proxy / GoAPI 等常见代理格式）"""
+    """Midjourney via proxy API（兼容 midjourney-proxy / GoAPI 等常见代理格式）。
+
+    支持视觉锚点：
+    - seed: 透传为 ``--seed N``，让同一 seed + 同一 prompt 输出相似画面
+    - reference_image: 同时透传为 ``--cref URL`` (角色一致性) 和 ``--sref URL`` (风格一致性)
+      代理服务通常通过 base64Array 字段接收参考图，我们采用 ``--cref/--sref`` 写在 prompt 中
+      （这是 mj-proxy / GoAPI 的通用做法）。
+    """
     base_url = os.environ.get("MIDJOURNEY_PROXY_URL", "").strip().rstrip("/")
     api_secret = os.environ.get("MIDJOURNEY_API_SECRET", "").strip()
     if not base_url:
         return []
 
     ar = _mj_aspect_ratio(width, height)
-    full_prompt = f"{prompt} --ar {ar} --v 6.1"
+    suffix_parts = [f"--ar {ar}", "--v 6.1"]
+    if seed is not None and seed >= 0:
+        # MJ 的 --seed 是 0~4294967295 范围的整数
+        suffix_parts.append(f"--seed {int(seed) % 4_294_967_295}")
+    if reference_image:
+        if reference_image.startswith("data:"):
+            # MJ proxy 的 --cref / --sref 只接受公网 URL，不支持 data URI
+            # （把 base64 塞 prompt 会爆字符上限并触发参数校验失败）
+            _log.warning(
+                "Midjourney 不支持 data: URI 形式的参考图（请配置公网 SITE_URL），"
+                "本次生图将跳过 --cref/--sref"
+            )
+        else:
+            # --cref：角色参考；--sref：风格参考；同图既锁人物又锁风格
+            suffix_parts.append(f"--cref {reference_image}")
+            suffix_parts.append(f"--sref {reference_image}")
+            # 故事板/强一致性：把 character / style 权重拉到上限，并加 image weight
+            if consistency_strength == "high":
+                suffix_parts.append("--cw 100")
+                suffix_parts.append("--sw 1000")
+                suffix_parts.append("--iw 2")
+    full_prompt = f"{prompt} " + " ".join(suffix_parts)
 
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if api_secret:
@@ -614,6 +646,7 @@ async def _kling(
     *,
     reference_image: str | None = None,
     image_reference: str = "",
+    consistency_strength: str = "normal",
 ) -> list[str]:
     """
     可灵 AI 图像生成（kling-v1 / v1-5 / v2 / v2-1）。
@@ -646,35 +679,96 @@ async def _kling(
         "resolution": resolution,
     }
     if reference_image:
-        payload["image"] = reference_image
+        # 可灵 image 字段同时接受公网 URL 与纯 base64（不带 data: 前缀）
+        if reference_image.startswith("data:"):
+            _, _, _b64 = reference_image.partition(",")
+            payload["image"] = _b64
+        else:
+            payload["image"] = reference_image
         # 默认按 subject（角色特征参考）；kling-v1-5 + 图生图必填 image_reference
         payload["image_reference"] = image_reference or "subject"
+        # 故事板/强一致性模式：把 image_fidelity 调到接近上限，让生成结果更贴参考
+        # 默认 0.5，普通模式不传（让平台用默认），high 模式 0.85
+        if consistency_strength == "high":
+            payload["image_fidelity"] = float(
+                os.environ.get("KLING_IMAGE_FIDELITY_STRONG", "").strip() or 0.85
+            )
+
+    def _kling_is_ref_image_error(code: int | str | None, message: str | None) -> bool:
+        """判断可灵返回是否为"图生图功能未开通 / 参考图字段不支持 / 模型不支持 i2i"类错误。
+
+        命中时上层移除 image / image_reference 字段后重试 t2i。
+        """
+        if code is None:
+            return False
+        try:
+            code_int = int(code)
+        except Exception:
+            code_int = -1
+        # 可灵常见 i2i 鉴权 / 模型不支持错误码
+        # 1023/1024：模型不支持当前参数；1101/1103：账号/服务未开通
+        REF_ERROR_CODES = {1023, 1024, 1101, 1103, 50000, 50001, 50002}
+        if code_int in REF_ERROR_CODES:
+            return True
+        msg = (message or "").lower()
+        keywords = (
+            "image_reference", "i2i", "图生图", "image not support",
+            "not support image", "not authorized", "permission",
+            "未开通", "未授权", "无权限", "model not support",
+            "invalid image", "image url",
+        )
+        return any(k in msg for k in keywords)
+
+    async def _kling_submit(_payload: dict) -> tuple[str | None, dict]:
+        """提交一次 Kling 任务，返回 (task_id, full_response)。"""
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                f"{base_url}/v1/images/generations",
+                headers=headers,
+                json=_payload,
+            )
+            resp.raise_for_status()
+            d = resp.json() or {}
+            return (d.get("data") or {}).get("task_id"), d
 
     async with _kling_semaphore:
-        # ── 1. 提交任务 ───────────────────────────────────
+        # ── 1. 提交任务（首次带 reference_image，失败时自动 fallback）──
+        task_id: str | None = None
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                resp = await client.post(
-                    f"{base_url}/v1/images/generations",
-                    headers=headers,
-                    json=payload,
+            task_id, data = await _kling_submit(payload)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Kling submit error: %s", exc)
+            return []
+
+        code = data.get("code")
+        if not task_id and code not in (0, None):
+            # ── 自动 fallback：参考图导致鉴权 / 模型不支持时移除 image 重试 ──
+            if reference_image and _kling_is_ref_image_error(code, data.get("message")):
+                _log.warning(
+                    "Kling i2i 失败（code=%s msg=%s），自动降级到 t2i（移除参考图）",
+                    code, data.get("message"),
                 )
-                resp.raise_for_status()
-                data = resp.json() or {}
-                # 可灵返回结构：{"code": 0, "message": "SUCCEED", "data": {"task_id": "..."}}
+                fallback_payload = {k: v for k, v in payload.items() if k not in ("image", "image_reference")}
+                try:
+                    task_id, data = await _kling_submit(fallback_payload)
+                except Exception as exc:  # noqa: BLE001
+                    _log.warning("Kling fallback submit error: %s", exc)
+                    return []
                 code = data.get("code")
-                if code not in (0, None):
+                if not task_id and code not in (0, None):
                     _log.warning(
-                        "Kling submit failed: code=%s message=%s",
+                        "Kling fallback submit failed: code=%s message=%s",
                         code, data.get("message"),
                     )
                     return []
-                task_id = (data.get("data") or {}).get("task_id")
-                if not task_id:
-                    _log.warning("Kling submit returned no task_id: %s", data)
-                    return []
-        except Exception as exc:  # noqa: BLE001
-            _log.warning("Kling submit error: %s", exc)
+            else:
+                _log.warning(
+                    "Kling submit failed: code=%s message=%s",
+                    code, data.get("message"),
+                )
+                return []
+        if not task_id:
+            _log.warning("Kling submit returned no task_id: %s", data)
             return []
 
         # ── 2. 轮询任务结果 ────────────────────────────────
@@ -738,6 +832,12 @@ _JIMENG_VERSION = "2022-08-31"
 _JIMENG_REGION = "cn-north-1"
 # 文生图 3.0 默认模型；3.1 等可通过 JIMENG_REQ_KEY 切换
 _JIMENG_DEFAULT_REQ_KEY = "high_aes_general_v30l_zt2i"
+# 图生图 / 智能参考（角色一致性）默认 req_key；可通过 JIMENG_I2I_REQ_KEY 切换
+# 火山引擎即梦图生图常见 req_key:
+#   - jimeng_i2i_v30        (即梦图生图 3.0 通用)
+#   - byteedit_v2.0         (即梦智能编辑)
+#   - high_aes_ip_v20       (即梦角色 IP 保持，更适合人物一致性)
+_JIMENG_I2I_DEFAULT_REQ_KEY = "high_aes_ip_v20"
 # 人像保持（Portrait Consistency）req_key（预留，前端 Img2Img 暂未对接）
 _JIMENG_AVATAR_REQ_KEY = "high_aes_ip_v20"
 
@@ -838,18 +938,193 @@ def _jimeng_sign_v4(
     }
 
 
-async def _jimeng_request(action: str, body: dict, ak: str, sk: str) -> dict:
-    """统一调用火山引擎 cv.* Action（POST 带 V4 签名）"""
+async def _jimeng_request(
+    action: str, body: dict, ak: str, sk: str, *, version: str | None = None,
+) -> dict:
+    """统一调用火山引擎 cv.* Action（POST 带 V4 签名）。
+
+    version: 默认 _JIMENG_VERSION (2022-08-31)，旧 CVSync2Async* 接口用。
+             即梦图生图 3.0 智能参考新接口需传 "2024-06-06"。
+    HTTP 错误（4xx/5xx）时把 response body 也带回去，便于排查火山具体错误码（比如
+    OperationDenied.NoPermission / ResourceNotFound 等）。
+    """
     import json as _json
 
-    query = {"Action": action, "Version": _JIMENG_VERSION}
+    api_version = version or _JIMENG_VERSION
+    query = {"Action": action, "Version": api_version}
     body_str = _json.dumps(body, ensure_ascii=False, separators=(",", ":"))
     headers = _jimeng_sign_v4("POST", "/", query, body_str, ak, sk)
     url = f"https://{_JIMENG_HOST}/"
     async with httpx.AsyncClient(timeout=20.0) as client:
         resp = await client.post(url, params=query, content=body_str.encode("utf-8"), headers=headers)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # 把火山返回的 body 一起抛出来（一般包含 ErrorCode / Message，4xx 时尤其重要）
+            try:
+                _err_body = resp.text[:500]
+            except Exception:
+                _err_body = "<unreadable>"
+            _log.warning(
+                "Jimeng %s HTTP %s | version=%s | req_key=%s | resp body: %s",
+                action, resp.status_code, api_version, body.get("req_key"), _err_body,
+            )
+            resp.raise_for_status()
         return resp.json() or {}
+
+
+# ─────────────────────────────────────────────────────────────────
+# 即梦图生图 3.0 智能参考（jimeng_i2i_v30 / Version=2024-06-06）
+# 与老的 CVSync2Async* 接口（文生图 high_aes_general_v30l_zt2i）参数完全不同：
+#   · scale 范围 0~1（不是 1~10），默认 0.5；强一致性档建议 0.3
+#   · 没有 use_pre_llm 字段
+#   · prompt 限 800 字符
+# ─────────────────────────────────────────────────────────────────
+_JIMENG_I2I_V30_VERSION = "2024-06-06"
+_JIMENG_I2I_V30_SUBMIT = "JimengI2IV30SubmitTask"
+_JIMENG_I2I_V30_RESULT = "JimengI2IV30GetResult"
+
+
+def _jimeng_unwrap_result(resp: dict) -> dict | None:
+    """火山新版接口（Version=2024-06-06）的响应包了一层 Result：
+        {"ResponseMetadata": {...}, "Result": {"code":10000, "data":{...}, ...}}
+    老接口直接是 {"code":10000, "data":{...}, ...}。
+    本函数统一取出业务对象。
+    """
+    if not isinstance(resp, dict):
+        return None
+    if "Result" in resp and isinstance(resp["Result"], dict):
+        return resp["Result"]
+    return resp
+
+
+async def _jimeng_i2i_v30(
+    prompt: str,
+    width: int,
+    height: int,
+    image_type: str,
+    *,
+    reference_image: str,
+    seed: int | None,
+    consistency_strength: str,
+    ak: str,
+    sk: str,
+) -> list[str]:
+    """调用即梦图生图 3.0 智能参考专属接口。失败返回 []，由调用方 fallback 到 t2i。"""
+    import json as _json
+
+    # scale 是"prompt 影响程度"，越高越按 prompt 走（场景可变化），越低越像参考图
+    # 默认值偏向 prompt 主导：故事板 0.6（平衡），普通 0.8（场景自由度高）
+    # i2i 角色一致性主要靠"参考图本身"提供，不靠压低 scale
+    if consistency_strength == "high":
+        scale = float(os.environ.get("JIMENG_I2I_SCALE_STRONG", "").strip() or 0.6)
+    else:
+        scale = float(os.environ.get("JIMENG_I2I_SCALE", "").strip() or 0.8)
+    scale = max(0.0, min(scale, 1.0))
+
+    # i2i 模式下不锁定 seed —— 参考图已经提供角色一致性，再叠加 seed 锁定会
+    # 让每节生成结果几乎完全复刻参考图（场景也跟着不变）。让 seed 随机，
+    # 由 prompt 控制场景多样性，由参考图控制角色稳定性。
+    final_prompt = (prompt or "")[:800]
+    body: dict = {
+        "req_key": "jimeng_i2i_v30",
+        "prompt": final_prompt,
+        "seed": -1,
+        "scale": scale,
+    }
+    # 把实际送给即梦的 prompt 完整打印（首次成功后可移除），便于排查
+    # "prompt 没生效" / "结果和锚点图复刻" 等问题
+    _log.info(
+        "Jimeng i2i v30 final prompt (scale=%s, len=%d): %s",
+        scale, len(final_prompt), final_prompt,
+    )
+    # width/height 必须同时传，且 [512, 2016]，不传则由模型自动决定（更稳）
+    if 512 <= width <= 2016 and 512 <= height <= 2016:
+        body["width"] = int(width)
+        body["height"] = int(height)
+    # 参考图：data URI → binary_data_base64；公网 URL → image_urls
+    if reference_image.startswith("data:"):
+        _, _, _b64 = reference_image.partition(",")
+        body["binary_data_base64"] = [_b64]
+    else:
+        body["image_urls"] = [reference_image]
+
+    async with _jimeng_semaphore:
+        try:
+            data = await _jimeng_request(
+                _JIMENG_I2I_V30_SUBMIT, body, ak, sk,
+                version=_JIMENG_I2I_V30_VERSION,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Jimeng i2i v30 submit error: %s", exc)
+            return []
+        # ── 解析响应：火山新版统一格式 {"ResponseMetadata":{...},"Result":{...}} ──
+        # Result 内部沿用旧业务结构 {"code":10000,"data":{"task_id":...},"message":"Success"}
+        result_obj = _jimeng_unwrap_result(data)
+        if not isinstance(result_obj, dict):
+            _log.warning("Jimeng i2i v30 unexpected response: %s", str(data)[:500])
+            return []
+        biz_code = result_obj.get("code") or result_obj.get("status")
+        if biz_code not in (10000, "10000", 0, "0"):
+            _log.warning(
+                "Jimeng i2i v30 submit failed: code=%s message=%s",
+                biz_code, result_obj.get("message") or result_obj.get("Message"),
+            )
+            return []
+        task_id = ((result_obj.get("data") or {}).get("task_id")
+                   or (result_obj.get("Data") or {}).get("TaskId"))
+        if not task_id:
+            _log.warning("Jimeng i2i v30 no task_id in result: %s", str(result_obj)[:500])
+            return []
+
+        query_body = {
+            "req_key": "jimeng_i2i_v30",
+            "task_id": task_id,
+            "req_json": _json.dumps({"return_url": True, "logo_info": {"add_logo": False}}),
+        }
+        max_wait, interval = 120, 3
+        elapsed = 0
+        image_url: str | None = None
+        try:
+            while elapsed < max_wait:
+                await asyncio.sleep(interval)
+                elapsed += interval
+                d = await _jimeng_request(
+                    _JIMENG_I2I_V30_RESULT, query_body, ak, sk,
+                    version=_JIMENG_I2I_V30_VERSION,
+                )
+                d_result = _jimeng_unwrap_result(d) or {}
+                code = d_result.get("code") or d_result.get("status")
+                if code not in (10000, "10000", 0, "0"):
+                    _log.warning(
+                        "Jimeng i2i v30 poll error: code=%s message=%s",
+                        code, d_result.get("message"),
+                    )
+                    return []
+                task = d_result.get("data") or {}
+                status = (task.get("status") or "").lower()
+                if status == "done":
+                    urls = task.get("image_urls") or []
+                    if urls:
+                        image_url = urls[0]
+                    break
+                if status in ("failed", "expired", "not_found"):
+                    _log.warning("Jimeng i2i v30 task %s: %s", status, task)
+                    return []
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Jimeng i2i v30 poll error: %s", exc)
+            return []
+
+    if not image_url:
+        _log.warning("Jimeng i2i v30 timed out (task_id=%s)", task_id)
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.get(image_url)
+            r.raise_for_status()
+        rel = _save_local(r.content, provider="jimeng_i2i", image_type=image_type)
+        return [f"medcomm-image://{rel}"]
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("Jimeng i2i v30 download error: %s", exc)
+        return []
 
 
 def _jimeng_pre_llm_default() -> bool:
@@ -866,6 +1141,37 @@ def _jimeng_scale_default() -> float:
     return max(1.0, min(v, 10.0))
 
 
+def _jimeng_is_unauth_error(code: int | str | None, message: str | None) -> bool:
+    """判断即梦返回是否为"req_key 未开通 / 无权限 / 不存在"类错误。
+
+    命中时上层可自动 fallback 到 t2i（无 reference_image），保证流程不中断。
+    """
+    if code is None:
+        return False
+    try:
+        code_int = int(code)
+    except Exception:
+        code_int = -1
+    # 火山引擎常见无权限/不存在错误码
+    UNAUTH_CODES = {
+        50410,  # req_key not exist
+        50411,  # req_key invalid
+        50412,  # req_key not authorized
+        50413,  # service not subscribed
+        50414,  # req_key auth failed
+        100404, 100403, 100401,  # 兜底通用错误码
+    }
+    if code_int in UNAUTH_CODES:
+        return True
+    msg = (message or "").lower()
+    keywords = (
+        "not authorized", "not authoriz", "未授权", "未开通", "无权限",
+        "permission", "not subscribed", "not exist", "req_key", "无效的",
+        "auth failed", "forbidden",
+    )
+    return any(k in msg for k in keywords)
+
+
 async def _jimeng(
     prompt: str,
     style: str,
@@ -874,6 +1180,8 @@ async def _jimeng(
     image_type: str = "generated",
     *,
     seed: int | None = None,
+    reference_image: str | None = None,
+    consistency_strength: str = "normal",
 ) -> list[str]:
     """
     即梦 AI 文生图（Seedream 3.0 / 3.1 等）。
@@ -882,34 +1190,77 @@ async def _jimeng(
     - 火山引擎 V4 签名鉴权
     - 异步任务（CVSync2AsyncSubmitTask → CVSync2AsyncGetResult 轮询）
     - 推荐尺寸档自动匹配（512-2048 范围内）
+    - 可选 reference_image：传入时自动切换到 i2i / 角色 IP 保持 req_key，
+      用于跨节人物一致性（视觉锚点链路）
+    - 自动 fallback：如果 i2i req_key 未开通或鉴权失败，自动降级到 t2i
+      （保留 prompt + seed 但放弃图片参考）
     """
     ak, sk = _jimeng_credentials()
     if not (ak and sk):
         return []
 
-    req_key = (os.environ.get("JIMENG_REQ_KEY", "").strip() or _JIMENG_DEFAULT_REQ_KEY)
-    w, h = _jimeng_resolve_size(width, height)
+    use_i2i = bool(reference_image)
 
-    submit_body = {
-        "req_key": req_key,
-        "prompt": (prompt or "")[:2000],
-        "width": w,
-        "height": h,
-        "seed": int(seed) if seed is not None and seed >= 0 else -1,
-        "use_pre_llm": _jimeng_pre_llm_default(),
-        "scale": _jimeng_scale_default(),
-    }
+    # ── i2i 优先走新接口（即梦图生图 3.0 智能参考） ──
+    # 该接口 Action / Version / scale 范围都与老的 CVSync2Async* 接口完全不同，
+    # 必须独立路径。失败时自动 fallback 到 t2i 老路径。
+    if use_i2i:
+        urls = await _jimeng_i2i_v30(
+            prompt, width, height, image_type,
+            reference_image=reference_image,  # type: ignore[arg-type]
+            seed=seed,
+            consistency_strength=consistency_strength,
+            ak=ak, sk=sk,
+        )
+        if urls:
+            return urls
+        _log.warning("Jimeng i2i v30 失败，自动降级到 t2i（仅 prompt + seed，参考图被忽略）")
+        use_i2i = False  # 后续走 t2i 路径
+        reference_image = None  # 防止老路径里 use_i2i 误判
+
+    req_key = (
+        os.environ.get("JIMENG_REQ_KEY", "").strip()
+        or _JIMENG_DEFAULT_REQ_KEY
+    )
+    w, h = _jimeng_resolve_size(width, height)
+    _scale = _jimeng_scale_default()
+    _pre_llm = _jimeng_pre_llm_default()
+
+    def _build_body(_req_key: str, _ref: str | None) -> dict:
+        body: dict = {
+            "req_key": _req_key,
+            "prompt": (prompt or "")[:2000],
+            "width": w,
+            "height": h,
+            "seed": int(seed) if seed is not None and seed >= 0 else -1,
+            "use_pre_llm": _pre_llm,
+            "scale": _scale,
+        }
+        if _ref:
+            # 即梦 i2i 接受两种参考图字段：
+            #   - image_urls: 公网可访问的 URL 列表
+            #   - binary_data_base64: 纯 base64 字节列表（更可靠，dev / 私网 SITE_URL 必走这条）
+            if _ref.startswith("data:"):
+                _, _, _b64 = _ref.partition(",")
+                body["binary_data_base64"] = [_b64]
+            else:
+                body["image_urls"] = [_ref]
+        return body
+
+    submit_body = _build_body(req_key, None)
 
     async with _jimeng_semaphore:
-        # ── 1. 提交任务 ─────────────────────────────────
+        # ── 1. 提交任务（t2i 路径，老接口 CVSync2AsyncSubmitTask） ──
         try:
             data = await _jimeng_request("CVSync2AsyncSubmitTask", submit_body, ak, sk)
         except Exception as exc:  # noqa: BLE001
-            _log.warning("Jimeng submit error: %s", exc)
+            _log.warning("Jimeng t2i submit error: %s", exc)
             return []
-        # 火山返回 {"code": 10000, "data": {"task_id": "..."}}
         if data.get("code") != 10000:
-            _log.warning("Jimeng submit failed: code=%s message=%s", data.get("code"), data.get("message"))
+            _log.warning(
+                "Jimeng t2i submit failed: code=%s message=%s",
+                data.get("code"), data.get("message"),
+            )
             return []
         task_id = (data.get("data") or {}).get("task_id")
         if not task_id:
@@ -1193,11 +1544,23 @@ async def generate_image(
     sampler_name: str | None = None,
     skip_style_envelope: bool = False,
     loras: list[tuple[str, float]] | None = None,
+    reference_image: str | None = None,
+    consistency_strength: str = "normal",
 ) -> tuple[list[str], bool, dict]:
     """
     生成图像，返回 (URL/路径列表, is_fallback, meta)。
     meta 含 seeds: 每图使用的种子；provider: 实际使用的提供方逻辑名。
     ComfyUI 使用独立负向节点；其他 API 将负向合并进主 prompt。
+
+    reference_image: 视觉锚点参考图（路径或 URL）。
+        - 仅对支持 i2i 的 provider 生效（当前：可灵 / 即梦 / MJ）；其他 provider 自动忽略。
+
+    consistency_strength: "normal" / "high"
+        - "high"（故事板模式）：i2i provider 启用最强角色保持参数
+            · Kling: image_fidelity=0.85
+            · Jimeng: scale=1.5 + 关闭 use_pre_llm
+            · MJ: --cw 100 --sw 1000 --iw 2
+        - 普通模式：使用 provider 默认参数
     """
     if skip_style_envelope:
         base_pos = (prompt or "").strip()
@@ -1254,14 +1617,27 @@ async def generate_image(
     async def openai_fn(_iter_s: int) -> list[str]:
         return await _dalle3(api_merged, style, width, height, it)
 
-    async def midjourney_fn(_iter_s: int) -> list[str]:
-        return await _midjourney(api_merged, width, height, it)
+    async def midjourney_fn(iter_s: int) -> list[str]:
+        return await _midjourney(
+            api_merged, width, height, it,
+            seed=iter_s, reference_image=reference_image,
+            consistency_strength=consistency_strength,
+        )
 
     async def kling_fn(_iter_s: int) -> list[str]:
-        return await _kling(api_merged, style, width, height, it)
+        # 可灵支持 reference_image (image_reference="subject" 锁定角色)
+        return await _kling(
+            api_merged, style, width, height, it,
+            reference_image=reference_image, image_reference="subject" if reference_image else "",
+            consistency_strength=consistency_strength,
+        )
 
     async def jimeng_fn(iter_s: int) -> list[str]:
-        return await _jimeng(api_merged, style, width, height, it, seed=iter_s)
+        return await _jimeng(
+            api_merged, style, width, height, it,
+            seed=iter_s, reference_image=reference_image,
+            consistency_strength=consistency_strength,
+        )
 
     async def wanx_fn(_iter_s: int) -> list[str]:
         return await _wanx(api_merged, style, width, height, it)

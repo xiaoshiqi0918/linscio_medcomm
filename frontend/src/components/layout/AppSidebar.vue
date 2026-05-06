@@ -6,6 +6,9 @@
         <router-link to="/medcomm" class="nav-item">
           <span class="icon">✍️</span> 科普写作
         </router-link>
+        <router-link to="/illustration" class="nav-item">
+          <span class="icon">🎨</span> 配图工作台
+        </router-link>
       </div>
       <div v-if="isElectron" class="nav-group">
         <span class="nav-group-title">绘图 <span class="dev-tag">开发中</span></span>

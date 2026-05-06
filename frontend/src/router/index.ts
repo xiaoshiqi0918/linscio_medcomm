@@ -96,6 +96,18 @@ const router = createRouter({
           meta: { title: '创作库' },
         },
         {
+          path: 'illustration',
+          name: 'illustration',
+          component: () => import('@/views/illustration/Index.vue'),
+          meta: { title: '配图工作台' },
+        },
+        {
+          path: 'illustration/:articleId',
+          name: 'illustration-workspace',
+          component: () => import('@/views/illustration/Workspace.vue'),
+          meta: { title: '配图工作台 · 文章' },
+        },
+        {
           path: 'knowledge',
           name: 'knowledge',
           component: () => import('@/views/knowledge/Index.vue'),

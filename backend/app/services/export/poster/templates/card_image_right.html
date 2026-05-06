@@ -1,0 +1,20 @@
+{% extends "card_image_left.html" %}
+
+{# 与 card_image_left 完全共享样式与封面，仅章节图位左右翻转 #}
+
+{% block body %}
+<div class="poster-doc">
+  <div class="page page--hero">
+    {{ M.render_hero(meta, hero, '#2563eb') }}
+  </div>
+  <div class="page page--body">
+    <div class="article-body">
+      {% for sec in sections %}
+        {{ M.render_card_section(sec, image_side='right') }}
+      {% endfor %}
+      {{ M.render_references(references) }}
+      {{ M.render_ai_declaration(meta) }}
+    </div>
+  </div>
+</div>
+{% endblock %}

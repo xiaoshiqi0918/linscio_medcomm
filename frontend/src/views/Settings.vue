@@ -1740,7 +1740,7 @@ const openrouterKey = ref('')
 const qiniuMaasKey = ref('')
 const anthropicKey = ref('')
 const gptImageKey = ref('')
-// 全局默认画图引擎下拉选项；与 PaintingIntentPanel/medpic/artgen 保持一致命名
+// 全局默认画图引擎下拉选项；与 ContestImageOverview/medpic/artgen 保持一致命名
 const defaultImageEngineOptions: Array<{ value: string; label: string }> = [
   { value: 'auto', label: '自动选择（推荐）' },
   { value: 'gpt_image', label: 'GPT Image' },

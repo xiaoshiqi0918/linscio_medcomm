@@ -1,0 +1,139 @@
+{# 配图块：仅渲染图片，不显示画意/提示词作为图说（无障碍 alt 仍保留） #}
+{# 参数 max_width / caption_prefix 保留以兼容旧调用方，当前不再使用：
+   - max_width 与 _base.html 的全局 `img { max-width: 100% }` 等价，且没有调用方覆盖
+   - caption_prefix 改成由 caption_override 直接给出文本
+   保留参数避免外部模板传参时报"unexpected argument"。#}
+{% macro render_slots(slots, max_width="100%", caption_prefix="图") -%}
+  {% for s in slots %}
+    {% if s.image_data_uri %}
+      <figure class="figure" data-slot-id="{{ s.id }}" data-section-type="{{ s.section_type|default('') }}">
+        <img src="{{ s.image_data_uri }}" alt="{{ s.intent_text|e }}" />
+        {% if s.caption_override %}
+          <figcaption data-edit="slot-caption" data-slot-id="{{ s.id }}">{{ s.caption_override|e }}</figcaption>
+        {% else %}
+          <figcaption data-edit="slot-caption" data-slot-id="{{ s.id }}" data-empty="1"></figcaption>
+        {% endif %}
+      </figure>
+    {% endif %}
+  {% endfor %}
+{%- endmacro %}
+
+{# 章节块：标题 + 正文 + 章后图 #}
+{% macro render_section(sec, slots_at_top=true) -%}
+  <section class="section" data-section-type="{{ sec.section_type|default('') }}">
+    {% if sec.show_heading %}
+      <h2 class="section-title" data-edit="section-title" data-section-type="{{ sec.section_type|default('') }}">{{ sec.title|e }}</h2>
+    {% endif %}
+    {% if slots_at_top %}{{ render_slots(sec.slots) }}{% endif %}
+    <div class="section-body" data-edit="section-body" data-section-type="{{ sec.section_type|default('') }}">{{ sec.body_html|safe }}</div>
+    {% if not slots_at_top %}{{ render_slots(sec.slots) }}{% endif %}
+  </section>
+{%- endmacro %}
+
+{# 卡片式章节：图文左右排版（image_side="left" → 左图右文；"right" → 左文右图）
+   - 章节有图：渲染 image | text 两栏；首张已加载完成的图作为主图，其他图接到正文下方
+   - 章节无图：仅文字，整段占满 #}
+{% macro render_card_section(sec, image_side="left") -%}
+  {# 取第一张已生成（含 data uri）的图作为主图 #}
+  {% set ns = namespace(head=none) %}
+  {% if sec.slots %}
+    {% for s in sec.slots %}
+      {% if ns.head is none and s.image_data_uri %}
+        {% set ns.head = s %}
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+  {% set head_slot = ns.head %}
+  {# 剩余图按 id 排除主图 — 用 id 过滤比 equalto 比较 dict 内容更稳妥
+     （head_slot 为空时 head_id=None，rejectattr 不会误伤任何 slot）#}
+  {% set head_id = head_slot.id if head_slot else none %}
+  {% set rest_slots = (sec.slots | rejectattr('id', 'equalto', head_id) | list) if sec.slots else [] %}
+  <section class="section card-section card-section--image-{{ image_side }}{% if not head_slot %} card-section--no-image{% endif %}"
+           data-section-type="{{ sec.section_type|default('') }}">
+    {% if sec.show_heading %}
+      <h2 class="section-title" data-edit="section-title" data-section-type="{{ sec.section_type|default('') }}">{{ sec.title|e }}</h2>
+    {% endif %}
+    <div class="card-row">
+      {% if head_slot %}
+        <figure class="card-row__image figure" data-slot-id="{{ head_slot.id }}" data-section-type="{{ sec.section_type|default('') }}">
+          <img src="{{ head_slot.image_data_uri }}" alt="{{ head_slot.intent_text|e }}" />
+          {% if head_slot.caption_override %}
+            <figcaption data-edit="slot-caption" data-slot-id="{{ head_slot.id }}">{{ head_slot.caption_override|e }}</figcaption>
+          {% else %}
+            <figcaption data-edit="slot-caption" data-slot-id="{{ head_slot.id }}" data-empty="1"></figcaption>
+          {% endif %}
+        </figure>
+      {% endif %}
+      <div class="card-row__text">
+        <div class="section-body" data-edit="section-body" data-section-type="{{ sec.section_type|default('') }}">{{ sec.body_html|safe }}</div>
+      </div>
+    </div>
+    {% if rest_slots %}{{ render_slots(rest_slots) }}{% endif %}
+  </section>
+{%- endmacro %}
+
+{# 顶部题图 / 封面：
+   - meta.authors 存在（用户填了第一/第二/通讯作者）→ 同一行用空格隔开依次列出姓名（不显示角色 label）；
+   - 否则降级到 meta.author（文章本身的 author 字段）；
+   - meta.affiliation 用户填了或文章自带都展示在下一行。 #}
+{% macro render_hero(meta, hero, accent_color) -%}
+  <header class="cover">
+    {% if hero and hero.image_data_uri %}
+      <div class="cover-hero" style="background-image: url('{{ hero.image_data_uri }}');"></div>
+    {% endif %}
+    <div class="cover-overlay">
+      <h1 class="cover-title" data-edit="title">{{ meta.title|e }}</h1>
+      {% if meta.subtitle %}<div class="cover-subtitle" data-edit="subtitle">{{ meta.subtitle|e }}</div>{% else %}<div class="cover-subtitle" data-edit="subtitle" data-empty="1"></div>{% endif %}
+      {% if meta.authors or meta.author or meta.affiliation %}
+      <div class="cover-meta">
+        {% if meta.authors %}
+          <div class="cover-meta__authors" data-edit="authors">
+            {%- for a in meta.authors -%}
+              {%- if not loop.first %} {% endif -%}
+              <span class="cover-meta__name" data-edit="author-name" data-author-index="{{ loop.index0 }}" data-author-label="{{ a.label|e }}">{{ a.name|e }}</span>
+            {%- endfor -%}
+          </div>
+        {% elif meta.author %}
+          <div class="cover-meta__authors" data-edit="authors">
+            <span class="cover-meta__name" data-edit="author-name" data-author-index="0" data-author-label="作者">{{ meta.author|e }}</span>
+          </div>
+        {% else %}
+          <div class="cover-meta__authors" data-edit="authors"></div>
+        {% endif %}
+        {% if meta.affiliation %}
+          <div class="cover-meta__affiliation" data-edit="affiliation">{{ meta.affiliation|e }}</div>
+        {% else %}
+          <div class="cover-meta__affiliation" data-edit="affiliation" data-empty="1"></div>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="cover-meta">
+        <div class="cover-meta__authors" data-edit="authors"></div>
+        <div class="cover-meta__affiliation" data-edit="affiliation" data-empty="1"></div>
+      </div>
+      {% endif %}
+    </div>
+  </header>
+{%- endmacro %}
+
+{# 参考文献块 #}
+{% macro render_references(references) -%}
+  {% if references %}
+    <section class="references-block">
+      <h2 class="section-title">参考文献</h2>
+      <ol class="references-list" data-edit="references">
+        {% for r in references %}<li data-edit="reference-item" data-ref-index="{{ loop.index0 }}">{{ r|e }}</li>{% endfor %}
+      </ol>
+    </section>
+  {% endif %}
+{%- endmacro %}
+
+{# AI 声明脚注 #}
+{% macro render_ai_declaration(meta) -%}
+  {% if meta.ai_declaration %}
+    <footer class="ai-footer">
+      <span class="ai-footer__label">AI 使用声明</span>
+      <span class="ai-footer__text">{{ meta.ai_declaration|e }}</span>
+    </footer>
+  {% endif %}
+{%- endmacro %}

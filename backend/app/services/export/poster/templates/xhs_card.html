@@ -1,0 +1,195 @@
+{% extends "_base.html" %}
+{% import "_macros.html" as M %}
+
+{% block extra_styles %}
+<style>
+  /* ── xhs_card：小红书图卡风（鲜艳、卡片化） ────────────── */
+  body {
+    background: linear-gradient(135deg, #fce7f3 0%, #fbcfe8 50%, #fae8ff 100%);
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: #4a044e;
+    padding: 24px 0;
+  }
+  .page {
+    background: #fff;
+    max-width: 480px;  /* 接近手机阅读宽度 */
+    margin: 0 auto;
+    padding: 0;
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(219, 39, 119, 0.18);
+    overflow: hidden;
+  }
+
+  /* 封面（粉色色块 + 大标题） */
+  .cover {
+    background: linear-gradient(135deg, #ec4899 0%, #db2777 50%, #be185d 100%);
+    padding: 28px 24px 32px;
+    color: #fff;
+    position: relative;
+    overflow: hidden;
+  }
+  .cover-hero {
+    position: absolute;
+    right: -40px; bottom: -40px;
+    width: 240px; height: 240px;
+    background-size: cover; background-position: center;
+    border-radius: 50%;
+    opacity: 0.35;
+  }
+  .cover-overlay { position: relative; z-index: 2; }
+  .cover-badge {
+    display: inline-block;
+    padding: 5px 14px;
+    border-radius: 16px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #fff !important;
+    color: #db2777;
+    margin-bottom: 12px;
+    width: fit-content;
+  }
+  .cover-title {
+    font-size: 26px;
+    font-weight: 800;
+    margin: 0 0 8px;
+    line-height: 1.3;
+    letter-spacing: 0.02em;
+  }
+  .cover-subtitle {
+    font-size: 13px;
+    opacity: 0.95;
+    margin-bottom: 12px;
+    font-weight: 400;
+  }
+  .cover-meta {
+    font-size: 12px;
+    opacity: 0.92;
+    display: flex;
+    gap: 8px;
+  }
+
+  /* 正文：卡片化 */
+  .article-body {
+    padding: 24px 22px 28px;
+    font-size: 15px;
+    line-height: 1.8;
+  }
+  .section {
+    background: #fff7fb;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin: 18px 0;
+    border: 1px solid #fce7f3;
+  }
+  .section:first-child { margin-top: 0; }
+
+  .section-title {
+    font-size: 16px;
+    color: #db2777;
+    margin: 0 0 0.5em;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .section-title::before {
+    content: '';
+    display: inline-block;
+    width: 4px; height: 16px;
+    background: linear-gradient(180deg, #ec4899 0%, #be185d 100%);
+    border-radius: 2px;
+  }
+
+  .section-body p {
+    margin: 0.6em 0;
+    color: #4a044e;
+  }
+  .section-body strong {
+    color: #be185d;
+    background: linear-gradient(180deg, transparent 65%, #fbcfe8 65%);
+    padding: 0 1px;
+  }
+  .section-body ul, .section-body ol { padding-left: 1.4em; margin: 0.5em 0; }
+  .section-body li { margin: 0.3em 0; }
+  .section-body blockquote {
+    background: #fbcfe8;
+    border-left: 3px solid #ec4899;
+    padding: 0.6em 0.8em;
+    margin: 0.8em 0;
+    border-radius: 0 8px 8px 0;
+    color: #831843;
+    font-size: 14px;
+  }
+
+  /* 配图：圆角大图 */
+  .figure { margin: 1.2em -4px; }
+  .figure img {
+    max-width: 100%;
+    border-radius: 12px;
+    box-shadow: 0 4px 14px rgba(219, 39, 119, 0.15);
+  }
+  .figure figcaption {
+    font-size: 12px;
+    color: #be185d;
+    margin-top: 0.5em;
+    text-align: center;
+    font-weight: 500;
+    font-style: normal;
+  }
+
+  /* 参考文献：折叠样式 */
+  .references-block {
+    margin-top: 1.2em;
+    padding: 12px 14px;
+    background: #f5f3ff;
+    border-radius: 10px;
+  }
+  .references-block .section-title { padding: 0; font-size: 14px; }
+  .references-block .section-title::before {
+    background: linear-gradient(180deg, #a78bfa, #6366f1);
+  }
+  .references-list {
+    font-size: 11.5px;
+    color: #4c1d95;
+    padding-left: 1.4em;
+    line-height: 1.6;
+    margin: 0.4em 0 0;
+  }
+  .references-list li { margin: 0.2em 0; }
+
+  /* AI 声明 */
+  .ai-footer {
+    margin: 1em 0 0;
+    padding: 0.7em 0.9em;
+    background: #fae8ff;
+    border-radius: 8px;
+    font-size: 11px;
+    color: #6b21a8;
+    text-align: center;
+  }
+  .ai-footer__label { font-weight: 600; margin-right: 0.4em; }
+
+  @media print {
+    body { background: #fff; padding: 0; }
+    .page { box-shadow: none; max-width: 100%; }
+    .figure { page-break-inside: avoid; }
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="poster-doc">
+  <div class="page page--hero">
+    {{ M.render_hero(meta, hero, '#db2777') }}
+  </div>
+  <div class="page page--body">
+    <div class="article-body">
+      {% for sec in sections %}
+        {{ M.render_section(sec, slots_at_top=loop.index0 == 0) }}
+      {% endfor %}
+      {{ M.render_references(references) }}
+      {{ M.render_ai_declaration(meta) }}
+    </div>
+  </div>
+</div>
+{% endblock %}

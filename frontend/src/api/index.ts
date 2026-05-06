@@ -1,5 +1,30 @@
 import axios from 'axios'
 
+// ── 视觉锚点（角色卡 + 风格锁 + Seed）类型定义 ──
+export interface VisualAnchorCharacter {
+  id: string
+  role: string
+  description: string
+  importance: number
+}
+export interface VisualAnchorStyleLock {
+  color_palette?: string
+  lighting?: string
+  art_style_extra?: string
+}
+export interface VisualAnchor {
+  id?: number
+  article_id: number
+  characters: VisualAnchorCharacter[]
+  style_lock: VisualAnchorStyleLock
+  base_seed: number | null
+  anchor_image_path: string | null
+  anchor_source: 'auto_first' | 'manual_pick' | 'manual_upload' | 'disabled'
+  auto_extracted_at: string | null
+  last_modified_by: 'ai' | 'user' | null
+  is_configured: boolean
+}
+
 const _isElectronEnv = typeof window !== 'undefined' && !!(window as any).electronAPI?.isElectron
 
 /** 与 http 请求路径配合：路径已含 `/api/v1/...`，base 只能是「空（同域）」或「不含 /api/v1 的 origin」。 */
@@ -361,6 +386,54 @@ export const api = {
       ),
     exportArticle: (id: number, format: string) =>
       http.get(`/api/v1/medcomm/articles/${id}/export`, { params: { format }, responseType: 'blob' }),
+    listPosterTemplates: () =>
+      http.get<{ items: Array<{ id: string; name: string; description: string; aspect_hint: string; accent_color: string; cover_style: string }> }>(
+        '/api/v1/medcomm/poster-templates'
+      ),
+    renderPoster: (
+      id: number,
+      template: string,
+      format: 'html' | 'pdf' | 'docx',
+      options?: {
+        first_author?: string
+        second_author?: string
+        corresponding_author?: string
+        affiliation?: string
+        include_references?: boolean
+      },
+    ) => {
+      const isBinary = format === 'pdf' || format === 'docx'
+      return http.get(`/api/v1/medcomm/articles/${id}/poster`, {
+        params: { template, format, ...(options || {}) },
+        responseType: isBinary ? 'blob' : 'text',
+        timeout: format === 'pdf' ? 120000 : 30000,
+      })
+    },
+    /**
+     * 带 overrides 的海报渲染（编辑模式）。前端把用户在预览页改的标题 / 作者 /
+     * 单位 / 章节 / 配图等覆盖项 POST 给后端。后端会基于原文章数据 + overrides
+     * 渲染 HTML / PDF / DOCX，原文章不会被修改。
+     */
+    renderPosterWithOverrides: (
+      id: number,
+      payload: {
+        template: string
+        format: 'html' | 'pdf' | 'docx'
+        first_author?: string
+        second_author?: string
+        corresponding_author?: string
+        affiliation?: string
+        include_references?: boolean
+        editable?: boolean
+        overrides?: Record<string, any>
+      },
+    ) => {
+      const isBinary = payload.format === 'pdf' || payload.format === 'docx'
+      return http.post(`/api/v1/medcomm/articles/${id}/poster/render`, payload, {
+        responseType: isBinary ? 'blob' : 'text',
+        timeout: payload.format === 'pdf' ? 120000 : 30000,
+      })
+    },
   },
   formats: {
     getFormats: () => http.get('/api/v1/formats'),
@@ -1012,8 +1085,33 @@ export const api = {
     // 画意范例
     getIntentExamples: (params?: { topic?: string; style_preset_id?: number | null }) =>
       http.get('/api/v1/contest/intent-examples', { params }),
-    suggestIntent: (data: { section_text: string; topic?: string; section_type?: string }) =>
+    suggestIntent: (data: {
+      section_text: string
+      topic?: string
+      section_type?: string
+      section_title?: string
+      prior_intents?: string[]
+    }) =>
       http.post('/api/v1/contest/intent-examples/suggest', data, { timeout: 60000 }),
+    enrichIntent: (data: {
+      intent_text: string
+      style_preset?: string | null
+      aspect_ratio?: string
+      section_text?: string | null
+      topic?: string | null
+      section_type?: string | null
+    }) => http.post<{
+      status: 'ok' | 'rejected' | 'error'
+      reason?: string
+      enriched_intent: string
+      hints_added: string[]
+      preserved: string[]
+      original_intent: string
+      original_length: number
+      enriched_length: number
+      from_cache: boolean
+      cost?: number
+    }>('/api/v1/contest/intent-examples/enrich', data, { timeout: 90000 }),
 
     // 提示词生成
     generatePrompt: (data: {
@@ -1081,11 +1179,20 @@ export const api = {
     }) => http.post(`/api/v1/contest/articles/${articleId}/image-slots`, data),
     updateImageSlot: (slotId: number, data: Record<string, any>) =>
       http.put(`/api/v1/contest/image-slots/${slotId}`, data),
-    deleteImageSlot: (slotId: number) =>
-      http.delete(`/api/v1/contest/image-slots/${slotId}`),
-    generateSlotPrompt: (slotId: number) =>
-      http.post(`/api/v1/contest/image-slots/${slotId}/generate-prompt`, {}, { timeout: 60000 }),
-    generateSlotImage: (slotId: number, data?: { preferred_provider?: string }) =>
+    deleteImageSlot: (slotId: number, opts?: { purge_history?: boolean }) =>
+      http.delete<{ ok: boolean; purged_history?: number }>(
+        `/api/v1/contest/image-slots/${slotId}`,
+        { params: opts?.purge_history ? { purge_history: true } : undefined },
+      ),
+    generateSlotPrompt: (
+      slotId: number,
+      data?: { preferred_provider?: string; target_language?: 'zh' | 'en' | 'both' },
+    ) =>
+      http.post(`/api/v1/contest/image-slots/${slotId}/generate-prompt`, data || {}, { timeout: 60000 }),
+    generateSlotImage: (
+      slotId: number,
+      data?: { preferred_provider?: string; consistency_strength?: 'normal' | 'high' },
+    ) =>
       http.post(`/api/v1/contest/image-slots/${slotId}/generate-image`, data || {}, { timeout: 90000 }),
     getImageProviders: () =>
       http.get<{ providers: Record<string, boolean>; any_available: boolean }>('/api/v1/contest/image-providers'),
@@ -1102,8 +1209,76 @@ export const api = {
       http.get(`/api/v1/contest/style-presets/${presetId}`),
     getIntentExamples: (params?: { topic?: string; style_preset_id?: number | null }) =>
       http.get('/api/v1/contest/intent-examples', { params }),
-    suggestIntent: (data: { section_text: string; topic?: string; section_type?: string }) =>
+    suggestIntent: (data: {
+      section_text: string
+      topic?: string
+      section_type?: string
+      section_title?: string
+      prior_intents?: string[]
+    }) =>
       http.post('/api/v1/contest/intent-examples/suggest', data, { timeout: 60000 }),
+    enrichIntent: (data: {
+      intent_text: string
+      style_preset?: string | null
+      aspect_ratio?: string
+      section_text?: string | null
+      topic?: string | null
+      section_type?: string | null
+    }) => http.post<{
+      status: 'ok' | 'rejected' | 'error'
+      reason?: string
+      enriched_intent: string
+      hints_added: string[]
+      preserved: string[]
+      original_intent: string
+      original_length: number
+      enriched_length: number
+      from_cache: boolean
+      cost?: number
+    }>('/api/v1/contest/intent-examples/enrich', data, { timeout: 90000 }),
+
+    // 视觉锚点（角色卡 + 风格锁 + Seed）
+    getVisualAnchor: (articleId: number) =>
+      http.get<VisualAnchor>(`/api/v1/contest/articles/${articleId}/visual-anchor`),
+    extractVisualAnchor: (articleId: number) =>
+      http.post<{
+        status: 'ok' | 'error'
+        reason?: string
+        characters: VisualAnchorCharacter[]
+        style_lock: VisualAnchorStyleLock
+        from_cache: boolean
+        cost?: number
+        anchor: VisualAnchor
+      }>(`/api/v1/contest/articles/${articleId}/visual-anchor/extract`, {}, { timeout: 90000 }),
+    extractVisualAnchorFromImage: (
+      articleId: number,
+      data?: {
+        image_path?: string | null
+        merge_mode?: 'replace' | 'append'
+      },
+    ) =>
+      http.post<{
+        status: 'ok' | 'error'
+        reason?: string
+        characters: VisualAnchorCharacter[]
+        style_lock: VisualAnchorStyleLock
+        from_cache: boolean
+        image_path: string | null
+        cost?: number
+        anchor: VisualAnchor
+        merge_mode?: 'replace' | 'append'
+      }>(
+        `/api/v1/contest/articles/${articleId}/visual-anchor/extract-from-image`,
+        data || {},
+        { timeout: 120000 },
+      ),
+    updateVisualAnchor: (articleId: number, data: {
+      characters?: VisualAnchorCharacter[] | null
+      style_lock?: VisualAnchorStyleLock | null
+      base_seed?: number | null
+      anchor_source?: 'auto_first' | 'manual_pick' | 'manual_upload' | 'disabled' | null
+      anchor_image_path?: string | null
+    }) => http.put<VisualAnchor>(`/api/v1/contest/articles/${articleId}/visual-anchor`, data),
     generatePrompt: (data: {
       intent_text: string
       style_preset_id?: number | null
@@ -1126,11 +1301,20 @@ export const api = {
     }) => http.post(`/api/v1/contest/articles/${articleId}/image-slots`, data),
     updateImageSlot: (slotId: number, data: Record<string, any>) =>
       http.put(`/api/v1/contest/image-slots/${slotId}`, data),
-    deleteImageSlot: (slotId: number) =>
-      http.delete(`/api/v1/contest/image-slots/${slotId}`),
-    generateSlotPrompt: (slotId: number) =>
-      http.post(`/api/v1/contest/image-slots/${slotId}/generate-prompt`, {}, { timeout: 60000 }),
-    generateSlotImage: (slotId: number, data?: { preferred_provider?: string }) =>
+    deleteImageSlot: (slotId: number, opts?: { purge_history?: boolean }) =>
+      http.delete<{ ok: boolean; purged_history?: number }>(
+        `/api/v1/contest/image-slots/${slotId}`,
+        { params: opts?.purge_history ? { purge_history: true } : undefined },
+      ),
+    generateSlotPrompt: (
+      slotId: number,
+      data?: { preferred_provider?: string; target_language?: 'zh' | 'en' | 'both' },
+    ) =>
+      http.post(`/api/v1/contest/image-slots/${slotId}/generate-prompt`, data || {}, { timeout: 60000 }),
+    generateSlotImage: (
+      slotId: number,
+      data?: { preferred_provider?: string; consistency_strength?: 'normal' | 'high' },
+    ) =>
       http.post(`/api/v1/contest/image-slots/${slotId}/generate-image`, data || {}, { timeout: 90000 }),
     getImageProviders: () =>
       http.get<{ providers: Record<string, boolean>; any_available: boolean }>('/api/v1/contest/image-providers'),

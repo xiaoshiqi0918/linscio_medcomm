@@ -400,7 +400,7 @@ def calc_export_cost(with_watermark: bool) -> Decimal:
 
 
 # ── 配图 AI 提示词 ─────────────────────────────────────────
-MEDPIC_PROMPT_COST = Decimal("0.2")
+MEDPIC_PROMPT_COST = Decimal("0.4")
 
 
 def calc_medpic_prompt_cost() -> Decimal:
@@ -409,7 +409,7 @@ def calc_medpic_prompt_cost() -> Decimal:
 
 
 # ── 检索词智能设计 ─────────────────────────────────────────
-KEYWORD_DESIGN_COST = Decimal("0.1")
+KEYWORD_DESIGN_COST = Decimal("0.2")
 
 
 def calc_keyword_design_cost() -> Decimal:
@@ -418,7 +418,7 @@ def calc_keyword_design_cost() -> Decimal:
 
 
 # ── 图像生成（外部 API） ──────────────────────────────────────
-IMAGE_GEN_COST_PER_IMAGE = Decimal("1.5")
+IMAGE_GEN_COST_PER_IMAGE = Decimal("2")
 
 
 def calc_image_gen_cost(batch_count: int = 1) -> Decimal:
@@ -427,9 +427,11 @@ def calc_image_gen_cost(batch_count: int = 1) -> Decimal:
 
 
 # ── 参赛 LLM 辅助 ─────────────────────────────────────────────
-CONTEST_SUGGEST_INTENT_COST = Decimal("0.15")
-CONTEST_GENERATE_PROMPT_COST = Decimal("0.2")
-CONTEST_PARSE_ANNOUNCEMENT_COST = Decimal("0.15")
+CONTEST_SUGGEST_INTENT_COST = Decimal("0.3")
+CONTEST_GENERATE_PROMPT_COST = Decimal("0.4")
+CONTEST_PARSE_ANNOUNCEMENT_COST = Decimal("0.3")
+# AI 智能扩写画意：把简短画意扩写成 300+ 字剧本场景描述（BALANCED 档，输出长）
+CONTEST_INTENT_ENRICH_COST = Decimal("0.6")
 
 
 def calc_contest_llm_cost(action: str) -> Decimal:
@@ -438,12 +440,19 @@ def calc_contest_llm_cost(action: str) -> Decimal:
         "suggest_intent": CONTEST_SUGGEST_INTENT_COST,
         "generate_prompt": CONTEST_GENERATE_PROMPT_COST,
         "parse_announcement": CONTEST_PARSE_ANNOUNCEMENT_COST,
+        "intent_enrich": CONTEST_INTENT_ENRICH_COST,
+        "visual_anchor_extract": VISUAL_ANCHOR_EXTRACT_COST,
     }
-    return costs.get(action, Decimal("0.15"))
+    return costs.get(action, Decimal("0.3"))
+
+
+# ── 视觉锚点（角色卡 + 风格锁 + Seed）──────────────────────────
+# 一次性扫描全文抽取核心角色 + 风格基调，注入所有配图 prompt 保证一致性
+VISUAL_ANCHOR_EXTRACT_COST = Decimal("0.6")
 
 
 # ── 标题生成 ───────────────────────────────────────────────────
-TITLE_GENERATION_COST = Decimal("0.1")
+TITLE_GENERATION_COST = Decimal("0.2")
 
 
 def calc_title_generation_cost() -> Decimal:
@@ -452,7 +461,7 @@ def calc_title_generation_cost() -> Decimal:
 
 
 # ── 图片 AI 提示词（imagegen 场景） ─────────────────────────────
-IMAGEGEN_AI_PROMPT_COST = Decimal("0.2")
+IMAGEGEN_AI_PROMPT_COST = Decimal("0.4")
 
 
 def calc_imagegen_prompt_cost() -> Decimal:

@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ meta.title }}</title>
+<style>
+  /* ── 基础重置 ─────────────────────── */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #1f2937;
+    line-height: 1.75;
+    background: #fff;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  img { max-width: 100%; height: auto; display: block; }
+  a { color: inherit; text-decoration: none; }
+  blockquote { margin: 0; padding: 0; }
+
+  /* ── 通用工具 ─────────────────────── */
+  .page { padding: 24mm 18mm; max-width: 720px; margin: 0 auto; }
+
+  /* 海报模式：「标题卡 + 正文卡」两张独立卡片，中间留白形成视觉分隔
+     各模板的 .page 仍保留自身 background / shadow / radius / max-width，
+     无需修改即可在 PDF 里看到两块卡片之间的间隙。 */
+  .poster-doc {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  /* ── 全局正文首行缩进（所有模板统一行为）──────────────
+     - 章节首段、含 inline style 显式指定不缩进的段落、居中段落 不缩进
+     - 仅由"加粗"组成的伪标题段落不缩进
+     - 用户在编辑器里点了"首行缩进"按钮，会输出 style="text-indent:2em"
+       覆盖默认；点了取消按钮会输出 style="text-indent:0" 同样生效。
+     ────────────────────────────────────────────── */
+  .section-body p,
+  .article-body p {
+    text-indent: 2em;
+  }
+  .section-body p:first-child,
+  .article-body p:first-child,
+  .section-body p[style*="text-indent:0"],
+  .article-body p[style*="text-indent:0"],
+  .section-body p[style*="text-align:center"],
+  .article-body p[style*="text-align:center"],
+  .section-body p:has(strong:only-child),
+  .article-body p:has(strong:only-child) {
+    text-indent: 0;
+  }
+  .section-body h1, .section-body h2, .section-body h3, .section-body h4,
+  .article-body h1, .article-body h2, .article-body h3, .article-body h4,
+  .section-body figure, .article-body figure,
+  .section-body blockquote, .article-body blockquote {
+    text-indent: 0;
+  }
+
+  /* 标题下作者 / 单位排版：作者一行用空格隔开，单位独占一行 */
+  .cover-meta { display: flex; flex-direction: column; gap: 2px; }
+  .cover-meta__authors {
+    font-size: 0.95em;
+    line-height: 1.5;
+    word-break: keep-all;
+  }
+  .cover-meta__name { font-weight: 500; }
+  .cover-meta__affiliation {
+    margin-top: 4px;
+    font-size: 0.85em;
+    opacity: 0.85;
+    line-height: 1.4;
+  }
+
+  .figure { margin: 1.6em auto; text-align: center; }
+  .figure img {
+    border-radius: 6px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    margin: 0 auto;
+  }
+  .figure figcaption {
+    font-size: 0.86em;
+    color: #6b7280;
+    margin-top: 0.55em;
+    font-style: italic;
+  }
+  .placeholder-figure {
+    background: #f3f4f6;
+    border: 2px dashed #d1d5db;
+    border-radius: 6px;
+    padding: 1.5em;
+    color: #9ca3af;
+    text-align: center;
+    margin: 1.2em auto;
+    font-size: 0.9em;
+  }
+</style>
+
+{# 子模板的额外样式：内容由子模板自带样式标签包裹（这里的注释刻意不写字面量 style 标签，否则 IDE 的 HTML 解析器会误将其后整段 Jinja 当成 CSS 来解析报错）#}
+{% block extra_styles %}{% endblock %}
+
+{% if editable %}
+{# 编辑模式专用样式：下方为独立样式块，仅 editable=1 时注入（PDF / 普通预览不带）#}
+<style>
+  body.editable { padding-bottom: 80px; }
+  [data-edit] {
+    transition: outline 0.12s ease, background 0.12s ease;
+    outline: 1px dashed transparent;
+    outline-offset: 2px;
+    cursor: text;
+  }
+  [data-edit]:hover { outline-color: rgba(37, 99, 235, 0.55); background: rgba(37, 99, 235, 0.04); }
+  [data-edit]:focus { outline: 2px solid #2563eb; background: rgba(37, 99, 235, 0.08); }
+  [data-edit][data-empty="1"]:not(:focus)::before {
+    content: attr(data-placeholder);
+    color: rgba(156, 163, 175, 0.7);
+    font-style: italic;
+    pointer-events: none;
+  }
+  /* 图片 hover toolbar */
+  .figure[data-slot-id] { position: relative; }
+  .figure[data-slot-id]:hover .slot-toolbar { opacity: 1; pointer-events: auto; }
+  .slot-toolbar {
+    position: absolute;
+    top: 6px; right: 6px;
+    background: rgba(17, 24, 39, 0.86);
+    color: #fff;
+    border-radius: 6px;
+    padding: 4px 6px;
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 5;
+    backdrop-filter: blur(6px);
+  }
+  .slot-toolbar button {
+    background: transparent;
+    border: 0;
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+  }
+  .slot-toolbar button:hover { background: rgba(255,255,255,0.2); }
+  .figure.slot-hidden {
+    opacity: 0.25;
+    filter: grayscale(0.85);
+    position: relative;
+  }
+  .figure.slot-hidden::after {
+    content: "已隐藏（导出时不出现）";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ef4444;
+    font-weight: 600;
+    font-size: 13px;
+    background: rgba(255,255,255,0.6);
+  }
+  .editable-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    background: rgba(17, 24, 39, 0.92);
+    color: #fff;
+    padding: 6px 14px;
+    border-radius: 16px;
+    font-size: 12px;
+    z-index: 9999;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+  }
+  .editable-toast.show { opacity: 1; }
+  @media print {
+    .slot-toolbar, .editable-toast { display: none !important; }
+    [data-edit] { outline: none !important; background: transparent !important; }
+  }
+</style>
+{% endif %}
+</head>
+<body{% if editable %} class="editable"{% endif %}>
+{% block body %}{% endblock %}
+
+{% if editable %}
+<div class="editable-toast" id="__poster_toast"></div>
+<script>
+(function () {
+  'use strict';
+  const POST = (msg) => {
+    try { window.parent && window.parent.postMessage(Object.assign({ source: 'poster-editor' }, msg), '*'); } catch (e) {}
+  };
+  const toast = (text) => {
+    const el = document.getElementById('__poster_toast');
+    if (!el) return;
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.remove('show'), 1400);
+  };
+
+  // 占位文案
+  const PLACEHOLDERS = {
+    'title': '点击输入标题',
+    'subtitle': '点击输入副标题（留空则不显示）',
+    'affiliation': '点击输入单位 / 机构',
+    'authors': '点击在此添加作者（用空格分隔多人）',
+    'section-title': '章节标题',
+    'section-body': '点击编辑本节正文',
+    'slot-caption': '点击输入图说（可留空）',
+  };
+  document.querySelectorAll('[data-edit]').forEach((el) => {
+    const t = el.getAttribute('data-edit');
+    if (PLACEHOLDERS[t]) el.setAttribute('data-placeholder', PLACEHOLDERS[t]);
+  });
+
+  // 让所有可编辑元素 contenteditable
+  const editableTypes = [
+    'title', 'subtitle', 'affiliation', 'section-title', 'section-body',
+    'slot-caption', 'reference-item', 'author-name',
+  ];
+  document.querySelectorAll('[data-edit]').forEach((el) => {
+    const t = el.getAttribute('data-edit');
+    if (editableTypes.includes(t)) {
+      el.setAttribute('contenteditable', 'true');
+      // section-body 允许换行；其他单行
+      if (t !== 'section-body' && t !== 'reference-item') {
+        el.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+        });
+      }
+    }
+  });
+
+  // 文字 blur 时上报
+  const reportTextChange = (el) => {
+    const t = el.getAttribute('data-edit');
+    const text = (t === 'section-body') ? el.innerHTML : el.textContent.trim();
+    el.removeAttribute('data-empty');
+    if (!text) el.setAttribute('data-empty', '1');
+
+    if (t === 'title' || t === 'subtitle' || t === 'affiliation') {
+      POST({ kind: 'meta', field: t, value: text });
+    } else if (t === 'section-title') {
+      POST({ kind: 'section_title', section_type: el.getAttribute('data-section-type') || '', value: text });
+    } else if (t === 'section-body') {
+      POST({ kind: 'section_body', section_type: el.getAttribute('data-section-type') || '', value: text });
+    } else if (t === 'slot-caption') {
+      POST({ kind: 'slot_caption', slot_id: el.getAttribute('data-slot-id') || '', value: text });
+    } else if (t === 'author-name') {
+      const idx = parseInt(el.getAttribute('data-author-index') || '0', 10) || 0;
+      const label = el.getAttribute('data-author-label') || '作者';
+      POST({ kind: 'author_name', index: idx, label: label, value: text });
+    } else if (t === 'authors') {
+      // 用户直接编辑了整个 authors 容器（可能是空容器添加新作者）
+      // 用空格 / 逗号 / 顿号 分割成多人
+      const tokens = text.split(/[\s,，、]+/).map(s => s.trim()).filter(Boolean);
+      POST({ kind: 'authors_bulk', names: tokens });
+    } else if (t === 'reference-item') {
+      const idx = parseInt(el.getAttribute('data-ref-index') || '0', 10) || 0;
+      POST({ kind: 'reference_item', index: idx, value: text });
+    }
+  };
+
+  document.querySelectorAll('[data-edit][contenteditable="true"]').forEach((el) => {
+    el.addEventListener('blur', () => reportTextChange(el));
+  });
+
+  // ─── 图片 toolbar：上移 / 下移 / 隐藏 / 显示 ───
+  const figures = Array.from(document.querySelectorAll('figure[data-slot-id]'));
+  const slotState = {}; // {slotId: {hidden, order}}
+  // 初始化 order：按 DOM 顺序，每节内部 0..N-1（章节聚合）
+  const orderBySection = {};
+  figures.forEach((fig) => {
+    const sid = fig.getAttribute('data-slot-id');
+    const sec = fig.closest('section') || document.body;
+    const key = sec.getAttribute('data-section-type') || '__';
+    orderBySection[key] = (orderBySection[key] || 0);
+    slotState[sid] = { hidden: false, order: orderBySection[key]++, sectionKey: key };
+  });
+
+  const reportSlotState = () => {
+    const out = {};
+    Object.keys(slotState).forEach(sid => {
+      const s = slotState[sid];
+      if (s.hidden) out[sid] = { hidden: true };
+      else if (s.order != null) out[sid] = { order: s.order };
+    });
+    POST({ kind: 'slot_overrides_bulk', value: out });
+  };
+
+  figures.forEach((fig) => {
+    const sid = fig.getAttribute('data-slot-id');
+    const tb = document.createElement('div');
+    tb.className = 'slot-toolbar';
+    tb.innerHTML = ''
+      + '<button data-act="up" title="上移">↑</button>'
+      + '<button data-act="down" title="下移">↓</button>'
+      + '<button data-act="toggle" title="显示 / 隐藏">👁</button>';
+    tb.addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      const act = btn.getAttribute('data-act');
+      const sec = fig.parentElement;
+      if (act === 'up') {
+        const prev = fig.previousElementSibling;
+        if (prev && prev.matches('figure[data-slot-id]')) {
+          sec.insertBefore(fig, prev);
+          recalcOrders(slotState[sid].sectionKey);
+          reportSlotState();
+          toast('已上移');
+        }
+      } else if (act === 'down') {
+        const next = fig.nextElementSibling;
+        if (next && next.matches('figure[data-slot-id]')) {
+          sec.insertBefore(next, fig);
+          recalcOrders(slotState[sid].sectionKey);
+          reportSlotState();
+          toast('已下移');
+        }
+      } else if (act === 'toggle') {
+        slotState[sid].hidden = !slotState[sid].hidden;
+        fig.classList.toggle('slot-hidden', slotState[sid].hidden);
+        reportSlotState();
+        toast(slotState[sid].hidden ? '已隐藏（仅本次导出）' : '已恢复');
+      }
+    });
+    fig.appendChild(tb);
+  });
+
+  function recalcOrders(sectionKey) {
+    let i = 0;
+    document.querySelectorAll(`figure[data-slot-id]`).forEach(f => {
+      const sid = f.getAttribute('data-slot-id');
+      if (slotState[sid].sectionKey !== sectionKey) return;
+      slotState[sid].order = i++;
+    });
+  }
+
+  // 启动后告知父窗：编辑器已 ready
+  POST({ kind: 'ready' });
+})();
+</script>
+{% endif %}
+</body>
+</html>

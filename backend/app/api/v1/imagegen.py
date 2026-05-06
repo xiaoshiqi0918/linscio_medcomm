@@ -830,79 +830,6 @@ def _infer_image_type(para: str) -> str:
     return "illustration"
 
 
-_EN_PROMPT_TEMPLATE = """你是一名专业的医学插画提示词撰写专家。请为以下中文段落各生成一条**纯英文**的AI绘图提示词（image generation prompt）。
-
-要求：
-- 纯英文，不含任何中文
-- 描述画面内容、构图、风格，可直接用于 Stable Diffusion / DALL-E
-- 每条 30-60 个英文单词
-- 只输出 JSON 数组，每项是一个字符串，顺序与输入段落对应
-
-段落列表：
-{paragraphs_json}
-"""
-
-
-async def _generate_en_prompts(descriptions: list[str], timeout: float = 15.0) -> list[str]:
-    """用 LLM 批量生成纯英文绘图提示词，超时返回空列表"""
-    import asyncio, json, logging
-    _log = logging.getLogger("uvicorn.error")
-    _log.info("[en_prompt] LLM generating for %d descriptions", len(descriptions))
-    try:
-        from app.services.llm.openai_client import chat_completion
-        from app.services.llm.manager import TaskTier
-        paras_json = json.dumps(descriptions, ensure_ascii=False)
-        prompt = _EN_PROMPT_TEMPLATE.format(paragraphs_json=paras_json)
-        messages = [{"role": "user", "content": prompt}]
-        raw = await asyncio.wait_for(
-            chat_completion(messages, task=TaskTier.FAST),
-            timeout=timeout,
-        )
-        text = raw.strip()
-        if text.startswith("```"):
-            text = _re.sub(r"^```\w*\n?", "", text)
-            text = _re.sub(r"\n?```$", "", text)
-        prompts = json.loads(text)
-        if isinstance(prompts, list) and all(isinstance(p, str) for p in prompts):
-            _log.info("[en_prompt] LLM success: %d prompts generated", len(prompts))
-            return prompts
-        _log.warning("[en_prompt] LLM unexpected format: %s", type(prompts))
-    except asyncio.TimeoutError:
-        _log.warning("[en_prompt] LLM timed out (%.0fs)", timeout)
-    except Exception as exc:
-        _log.warning("[en_prompt] LLM failed: %s", exc)
-    return []
-
-
-async def _upgrade_en_prompts_background(section_id: int, suggestions: list[dict]):
-    """后台尝试 LLM 升级英文提示词，成功则更新 DB（不阻塞主请求）"""
-    import json, logging
-    _log = logging.getLogger("uvicorn.error")
-    try:
-        descs = [s["description"] for s in suggestions]
-        en_prompts = await _generate_en_prompts(descs, timeout=15.0)
-        if not en_prompts:
-            return
-        updated = False
-        for idx, prompt_text in enumerate(en_prompts):
-            if idx < len(suggestions) and prompt_text:
-                suggestions[idx]["en_description"] = prompt_text
-                updated = True
-        if updated:
-            from app.core.database import AsyncSessionLocal
-            from sqlalchemy import update
-            async with AsyncSessionLocal() as sess:
-                await sess.execute(
-                    update(ArticleSection)
-                    .where(ArticleSection.id == section_id)
-                    .values(image_suggestions=suggestions)
-                )
-                await sess.commit()
-            _log.info("[en_prompt] background upgrade saved for section %d", section_id)
-    except Exception as exc:
-        _log.warning("[en_prompt] background upgrade failed: %s", exc)
-
-
 @router.get("/suggestions/{section_id}")
 async def get_suggestions(
     section_id: int,
@@ -984,46 +911,10 @@ async def get_suggestions(
             return False
         return any(s.get("_source") == "llm" for s in sug_list)
 
-    # --- LLM 生成（仅 enhance=1 时尝试，60 秒超时） ---
-    if enhance:
-        try:
-            from app.workflow.nodes.medcomm_nodes import suggest_images_node
-            sug_state = await asyncio.wait_for(
-                suggest_images_node({
-                    "article_id": article.id,
-                    "section_id": section.id,
-                    "verified_content": full_text,
-                    "topic": article.topic or "",
-                    "content_format": cf,
-                    "target_audience": article.target_audience or "public",
-                    "platform": article.platform or "wechat",
-                    "specialty": article.specialty or "",
-                }),
-                timeout=60,
-            )
-            suggestions = sug_state.get("image_suggestions") or []
-            if suggestions:
-                try:
-                    from sqlalchemy import update as _upd
-                    await db.execute(
-                        _upd(ArticleSection)
-                        .where(ArticleSection.id == section_id)
-                        .values(image_suggestions=suggestions)
-                    )
-                    await db.commit()
-                except Exception:
-                    pass
-                return {"suggestions": suggestions, "fallback": False}
-            _log.info("[suggestions] LLM returned empty for section %d", section_id)
-        except asyncio.TimeoutError:
-            _log.warning("[suggestions] LLM timed out (60s) for section %d", section_id)
-        except Exception as exc:
-            _log.warning("[suggestions] LLM failed for section %d: %s", section_id, exc)
-
-        # LLM 失败时，优先回退到 DB 已有的 LLM 结果（而非启发式覆盖）
-        if existing_suggestions and _is_llm_source(existing_suggestions):
-            _log.info("[suggestions] LLM failed, returning existing LLM suggestions from DB")
-            return {"suggestions": existing_suggestions, "fallback": False}
+    # enhance=1 时优先复用 DB 中已存在的 LLM 结果（章节生成期 SSE 流已写入）；
+    # 此入口不主动调用新的 LLM，避免在已结算的章节生成之外免费刷 LLM 请求
+    if enhance and existing_suggestions and _is_llm_source(existing_suggestions):
+        return {"suggestions": existing_suggestions, "fallback": False}
 
     # --- 启发式段落配图建议（仅在 DB 无建议时使用） ---
     from app.services.format_router import FORMAT_CONFIG
@@ -1056,6 +947,8 @@ async def get_suggestions(
     suggestions = suggestions[:5]
 
     # 仅在 DB 无建议时写入启发式结果，绝不覆盖已有的 LLM 结果
+    # 注意：不再触发后台 _upgrade_en_prompts_background（fire-and-forget LLM 调用
+    # 无法关联到 billing_session，且每次拿建议都会触发，会被免费刷量）
     if suggestions and not existing_suggestions:
         try:
             from sqlalchemy import update
@@ -1067,8 +960,5 @@ async def get_suggestions(
             await db.commit()
         except Exception:
             pass
-        asyncio.get_event_loop().create_task(
-            _upgrade_en_prompts_background(section_id, suggestions)
-        )
 
     return {"suggestions": suggestions, "fallback": True}

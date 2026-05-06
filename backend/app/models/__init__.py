@@ -24,6 +24,7 @@ from app.models.medpic_generation import MedPicGeneration
 from app.models.contest import ContestPack, ContestRule, UserContestRule
 from app.models.painting_intent import StylePreset, PaintingIntentExample, NegativeWordSet
 from app.models.article_image_slot import ArticleImageSlot
+from app.models.article_visual_anchor import ArticleVisualAnchor
 
 # SaaS 独有模型 — 桌面端打包时这些文件会被排除，条件导入避免 ImportError
 try:
@@ -51,4 +52,5 @@ __all__ = [
     "ContestPack", "ContestRule", "UserContestRule",
     "StylePreset", "PaintingIntentExample", "NegativeWordSet",
     "ArticleImageSlot",
+    "ArticleVisualAnchor",
 ]

@@ -1,0 +1,197 @@
+{% extends "_base.html" %}
+{% import "_macros.html" as M %}
+
+{% block extra_styles %}
+<style>
+  /* ── wechat_warm：公众号头条柔和版式 ────────────── */
+  body {
+    background: #fdf8f3;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: #2d1b08;
+  }
+  .page {
+    background: #fff;
+    max-width: 660px;
+    padding: 0;
+    border-radius: 6px;
+    box-shadow: 0 4px 24px rgba(194, 65, 12, 0.08);
+    overflow: hidden;
+  }
+
+  /* 头图（标题在图上） */
+  .cover {
+    position: relative;
+    height: 360px;
+    overflow: hidden;
+    background: linear-gradient(135deg, #fb923c 0%, #c2410c 100%);
+  }
+  .cover-hero {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center;
+  }
+  .cover::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, transparent 0%, transparent 40%, rgba(0,0,0,0.65) 100%);
+  }
+  .cover-overlay {
+    position: relative;
+    z-index: 2;
+    height: 100%;
+    padding: 32px 28px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    color: #fff;
+  }
+  .cover-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 500;
+    background: rgba(255,255,255,0.25) !important;
+    border: 1px solid rgba(255,255,255,0.4);
+    margin-bottom: 14px;
+    width: fit-content;
+    backdrop-filter: blur(8px);
+  }
+  .cover-title {
+    font-size: 26px;
+    font-weight: 700;
+    margin: 0 0 10px;
+    line-height: 1.4;
+    text-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  }
+  .cover-subtitle {
+    font-size: 14px;
+    opacity: 0.92;
+    margin-bottom: 12px;
+    font-weight: 300;
+  }
+  .cover-meta {
+    font-size: 12px;
+    opacity: 0.88;
+    display: flex;
+    gap: 8px;
+  }
+
+  /* 正文 */
+  .article-body {
+    padding: 28px 28px 32px;
+    font-size: 16px;
+    line-height: 1.85;
+    color: #422006;
+  }
+  .article-body p {
+    margin: 0.9em 0;
+  }
+
+  .section { margin-top: 1.6em; }
+  .section:first-child { margin-top: 0; }
+  .section-title {
+    font-size: 18px;
+    margin: 1.4em 0 0.7em;
+    color: #c2410c;
+    text-align: center;
+    position: relative;
+    padding: 0 1em;
+  }
+  .section-title::before,
+  .section-title::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 28px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #f97316, transparent);
+  }
+  .section-title::before { left: -8px; }
+  .section-title::after { right: -8px; transform: scaleX(-1); }
+
+  .section-body h3 { font-size: 16px; color: #7c2d12; margin: 1em 0 0.4em; }
+  .section-body ul, .section-body ol { padding-left: 1.6em; margin: 0.6em 0; }
+  .section-body li { margin: 0.3em 0; }
+  .section-body blockquote {
+    background: linear-gradient(90deg, #fed7aa 0%, #fff7ed 100%);
+    border-left: 3px solid #fb923c;
+    padding: 0.7em 1em;
+    margin: 1em 0;
+    border-radius: 0 6px 6px 0;
+    color: #7c2d12;
+    font-style: italic;
+  }
+  .section-body strong { color: #c2410c; }
+
+  /* 配图：温暖大图 */
+  .figure { margin: 1.6em -8px; }
+  .figure img {
+    max-width: 100%;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(194, 65, 12, 0.15);
+  }
+  .figure figcaption {
+    font-size: 13px;
+    color: #92400e;
+    margin-top: 0.6em;
+    font-style: normal;
+  }
+
+  /* 参考文献 */
+  .references-block {
+    margin-top: 2.4em;
+    padding: 1.2em;
+    background: #fff7ed;
+    border-radius: 6px;
+  }
+  .references-block .section-title {
+    text-align: left;
+    padding: 0;
+    margin-top: 0;
+    font-size: 15px;
+  }
+  .references-block .section-title::before,
+  .references-block .section-title::after { display: none; }
+  .references-list {
+    font-size: 12.5px;
+    color: #92400e;
+    padding-left: 1.6em;
+    line-height: 1.7;
+  }
+  .references-list li { margin: 0.3em 0; }
+
+  /* AI 声明 */
+  .ai-footer {
+    margin-top: 1.5em;
+    padding: 0.7em 0.9em;
+    background: #fed7aa;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #7c2d12;
+    text-align: center;
+  }
+  .ai-footer__label { font-weight: 600; margin-right: 0.4em; }
+
+  @media print {
+    .page { box-shadow: none; }
+    .figure { page-break-inside: avoid; }
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="poster-doc">
+  <div class="page page--hero">
+    {{ M.render_hero(meta, hero, '#c2410c') }}
+  </div>
+  <div class="page page--body">
+    <div class="article-body">
+      {% for sec in sections %}
+        {{ M.render_section(sec, slots_at_top=loop.index0 == 0) }}
+      {% endfor %}
+      {{ M.render_references(references) }}
+      {{ M.render_ai_declaration(meta) }}
+    </div>
+  </div>
+</div>
+{% endblock %}

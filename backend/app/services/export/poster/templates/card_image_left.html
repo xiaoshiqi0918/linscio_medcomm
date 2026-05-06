@@ -1,0 +1,198 @@
+{% extends "_base.html" %}
+{% import "_macros.html" as M %}
+
+{% block extra_styles %}
+<style>
+  /* ── card_image_left：左图右文 卡片版式 ────────────── */
+  body {
+    background: #f5f7fb;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: #1f2937;
+    padding: 24px 0;
+  }
+  .page {
+    background: #fff;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 0;
+    border-radius: 14px;
+    box-shadow: 0 6px 24px rgba(15, 58, 139, 0.10);
+    overflow: hidden;
+  }
+
+  /* 封面 */
+  .cover {
+    background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+    padding: 32px 32px 28px;
+    color: #fff;
+    position: relative;
+  }
+  .cover-hero {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    opacity: 0.18;
+    filter: saturate(1.05);
+  }
+  .cover-overlay { position: relative; z-index: 2; }
+  .cover-title {
+    font-size: 28px;
+    font-weight: 700;
+    margin: 0 0 6px;
+    line-height: 1.32;
+  }
+  .cover-subtitle {
+    font-size: 14px;
+    opacity: 0.9;
+    margin-bottom: 14px;
+  }
+  .cover-meta { font-size: 13px; opacity: 0.92; }
+  .cover-meta__authors {
+    display: flex; gap: 10px; flex-wrap: wrap;
+  }
+  .cover-meta__name { font-weight: 500; }
+  .cover-meta__affiliation { margin-top: 4px; opacity: 0.85; }
+
+  /* 正文 */
+  .article-body {
+    padding: 28px 32px 32px;
+    font-size: 15px;
+    line-height: 1.85;
+  }
+
+  /* ── 卡片式章节核心样式 ── */
+  .card-section {
+    background: #fff;
+    border-radius: 12px;
+    padding: 18px 18px;
+    margin: 16px 0;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 2px 8px rgba(15, 58, 139, 0.04);
+  }
+  .card-section:first-child { margin-top: 0; }
+  .card-section .section-title {
+    font-size: 16px;
+    color: #1e3a8a;
+    margin: 0 0 12px;
+    font-weight: 700;
+    padding-left: 10px;
+    border-left: 3px solid #2563eb;
+  }
+  .card-row {
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+  }
+  /* 左图右文 */
+  .card-section--image-left .card-row { flex-direction: row; }
+  /* 左文右图 */
+  .card-section--image-right .card-row { flex-direction: row-reverse; }
+  /* 无图：文字撑满 */
+  .card-section--no-image .card-row { flex-direction: column; }
+
+  .card-row__image {
+    flex: 0 0 38%;
+    margin: 0;
+    text-align: center;
+  }
+  .card-row__image img {
+    width: 100%;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(15, 58, 139, 0.08);
+  }
+  .card-row__image figcaption {
+    font-size: 12px;
+    color: #6b7280;
+    margin-top: 0.45em;
+    font-style: italic;
+    text-align: center;
+  }
+  .card-row__text { flex: 1 1 auto; min-width: 0; }
+  .card-row__text .section-body p { margin: 0.55em 0; }
+  .card-row__text .section-body p:first-child { margin-top: 0; }
+  .card-row__text .section-body p:last-child { margin-bottom: 0; }
+
+  .section-body strong { color: #1e3a8a; }
+  .section-body ul, .section-body ol { padding-left: 1.4em; margin: 0.5em 0; }
+  .section-body li { margin: 0.3em 0; }
+  .section-body blockquote {
+    border-left: 3px solid #93c5fd;
+    background: #eff6ff;
+    padding: 0.6em 0.9em;
+    margin: 0.8em 0;
+    border-radius: 0 8px 8px 0;
+    color: #1e40af;
+  }
+
+  /* 章节内嵌的非主图（多图情形） */
+  .card-section .figure:not(.card-row__image) {
+    margin: 1em 0;
+  }
+
+  /* 参考文献 */
+  .references-block {
+    margin-top: 1.4em;
+    padding: 14px 16px;
+    background: #f8fafc;
+    border-radius: 10px;
+    border: 1px solid #e2e8f0;
+  }
+  .references-block .section-title {
+    margin: 0 0 8px;
+    font-size: 14px;
+    color: #0f3a8b;
+    border-left: 3px solid #2563eb;
+    padding-left: 10px;
+  }
+  .references-list {
+    font-size: 12px;
+    color: #475569;
+    padding-left: 1.4em;
+    line-height: 1.6;
+    margin: 0.4em 0 0;
+  }
+  .references-list li { margin: 0.25em 0; }
+
+  /* AI 声明 */
+  .ai-footer {
+    margin: 1em 0 0;
+    padding: 0.7em 0.9em;
+    background: #eef2ff;
+    border-radius: 8px;
+    font-size: 11px;
+    color: #3730a3;
+    text-align: center;
+  }
+  .ai-footer__label { font-weight: 600; margin-right: 0.4em; }
+
+  /* 窄屏 / 打印自适应：宽度不够时图片改为顶置全宽 */
+  @media (max-width: 600px) {
+    .card-row { flex-direction: column !important; }
+    .card-row__image { flex: 1 1 auto; width: 100%; }
+  }
+
+  @media print {
+    body { background: #fff; padding: 0; }
+    .page { box-shadow: none; max-width: 100%; }
+    .card-section { page-break-inside: avoid; }
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="poster-doc">
+  <div class="page page--hero">
+    {{ M.render_hero(meta, hero, '#2563eb') }}
+  </div>
+  <div class="page page--body">
+    <div class="article-body">
+      {% for sec in sections %}
+        {{ M.render_card_section(sec, image_side='left') }}
+      {% endfor %}
+      {{ M.render_references(references) }}
+      {{ M.render_ai_declaration(meta) }}
+    </div>
+  </div>
+</div>
+{% endblock %}

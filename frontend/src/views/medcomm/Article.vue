@@ -1,5 +1,11 @@
 <template>
-  <div class="article-editor">
+  <div
+    class="article-editor"
+    :class="{
+      'is-contest-format': article?.content_format === 'contest_article',
+      'has-image-panels': hasImageSlotCapability,
+    }"
+  >
     <div class="editor-header">
       <div class="back-row">
         <el-button text @click="router.push('/medcomm/new')">
@@ -19,35 +25,40 @@
           AI 总结标题
         </el-button>
       </div>
-      <p v-if="article?.topic" class="topic-hint">主题：{{ article.topic }}</p>
       <div class="tags">
         <FormatBadge :format-id="article?.content_format || 'article'" />
         <PlatformBadge v-if="article?.platform" :platform-id="article.platform" />
-      </div>
-      <div v-if="hasContestRules" class="contest-status-bar">
-        <div class="contest-status-left">
+        <el-tooltip
+          v-if="hasContestRules"
+          placement="top"
+          :content="`赛制：${contestStatusText}${article?.topic ? ' · 主题：' + article.topic : ''}`"
+        >
           <el-tag
-            :type="article.contest_rule_source ? 'success' : 'warning'"
+            :type="article?.contest_rule_source ? 'success' : 'warning'"
             size="small"
             effect="plain"
-          >{{ contestStatusText }}</el-tag>
-          <span v-if="contestWordLimit" class="contest-word-progress">
-            字数：{{ article.word_count || 0 }} / {{ contestWordLimit }}
-            <el-tag
-              v-if="(article.word_count || 0) > contestWordLimit"
-              type="danger"
-              size="small"
-              effect="dark"
-            >已超出</el-tag>
-          </span>
-        </div>
+          >
+            <el-icon style="vertical-align: -2px;"><CircleCheck v-if="article?.contest_rule_source" /><Warning v-else /></el-icon>
+            赛制
+          </el-tag>
+        </el-tooltip>
+        <span v-if="hasContestRules && contestWordLimit" class="word-progress-inline">
+          字数 {{ article?.word_count || 0 }}/{{ contestWordLimit }}
+          <el-tag
+            v-if="(article?.word_count || 0) > contestWordLimit"
+            type="danger"
+            size="small"
+            effect="dark"
+          >超</el-tag>
+        </span>
       </div>
       <StageProgressBar
+        v-if="article?.content_format !== 'contest_article'"
         :current-stage="article?.current_stage"
         :image-stage="article?.image_stage"
       />
     </div>
-    <div class="toolbar">
+    <div class="toolbar" :class="{ 'is-editor-folded': editorFolded }">
       <el-dropdown trigger="click" @command="handleExport">
         <el-button size="small">导出</el-button>
         <template #dropdown>
@@ -57,7 +68,6 @@
             <el-dropdown-item command="docx">DOCX</el-dropdown-item>
             <el-dropdown-item command="pdf">PDF</el-dropdown-item>
             <el-dropdown-item command="txt">TXT</el-dropdown-item>
-            <el-dropdown-item v-if="isVisualExportFormat" command="json" divided>JSON（结构化数据）</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -82,6 +92,7 @@
         </template>
       </el-dropdown>
       <el-button
+        v-if="article?.content_format !== 'contest_article'"
         type="primary"
         size="small"
         plain
@@ -100,33 +111,47 @@
       >
         {{ fullDocGenerating ? `生成中 ${fullDocDoneCount}/${fullDocTotalCount}` : '一键生成全文' }}
       </el-button>
-      <ProviderHint workflow="writing" />
-    </div>
-    <div v-if="article?.sections?.length && article.sections.length > 1" class="section-strip">
-      <span class="section-strip-label">当前章节</span>
-      <el-select
-        class="section-strip-select"
-        :model-value="currentSectionId"
-        filterable
-        placeholder="选择章节"
+      <el-button
+        v-if="hasImageSlotCapability"
         size="small"
-        @update:model-value="onPickSection($event)"
+        plain
+        @click="goToIllustration"
       >
-        <el-option
-          v-for="s in sortedSectionsForStrip"
-          :key="s.id"
-          :label="sectionStripLabel(s)"
-          :value="s.id"
-        />
-      </el-select>
-      <span v-if="currentSectionTitleHint" class="section-strip-meta">{{ currentSectionTitleHint }}</span>
-    </div>
-    <el-collapse v-model="activeCollapseItems" class="bindings-panel">
-      <el-collapse-item name="refs">
-        <template #title>
-          <span>参考文献</span>
-          <el-tag v-if="bindings.length" size="small" type="success" style="margin-left: 0.5rem;">已绑定 {{ bindings.length }} 篇</el-tag>
-          <el-tag v-else size="small" type="warning" style="margin-left: 0.5rem;">未绑定</el-tag>
+        🎨 配图工作台
+      </el-button>
+      <el-button
+        v-if="article?.content_format === 'comic_strip'"
+        type="success"
+        size="small"
+        plain
+        :loading="batchGenerating"
+        :disabled="batchGenerating"
+        @click="handleBatchComicGenerate"
+      >
+        {{ batchGenerating ? `条漫批量出图 ${batchDoneCount}/${batchTotalCount}` : '条漫批量出图' }}
+      </el-button>
+      <el-popover
+        trigger="click"
+        :width="540"
+        placement="bottom-start"
+        popper-class="bindings-popover"
+      >
+        <template #reference>
+          <el-button size="small">
+            参考文献
+            <el-tag
+              v-if="bindings.length"
+              size="small"
+              type="success"
+              style="margin-left: 0.35rem;"
+            >{{ bindings.length }}</el-tag>
+            <el-tag
+              v-else
+              size="small"
+              type="info"
+              style="margin-left: 0.35rem;"
+            >0</el-tag>
+          </el-button>
         </template>
         <div class="bindings-content">
           <div class="bindings-toolbar">
@@ -136,9 +161,7 @@
             </el-radio-group>
             <div class="bindings-toolbar-actions">
               <el-button size="small" @click="showBindDialog = true">补充文献</el-button>
-              <el-button size="small" type="primary" plain @click="openExternalSearch">
-                检索支撑文献
-              </el-button>
+              <el-button size="small" type="primary" plain @click="openExternalSearch">检索支撑文献</el-button>
             </div>
           </div>
           <ul v-if="bindings.length" class="bindings-list">
@@ -164,8 +187,38 @@
           </ul>
           <div v-else class="bindings-empty">暂无绑定文献，请在新建向导中选择或点击「补充文献」</div>
         </div>
-      </el-collapse-item>
-    </el-collapse>
+      </el-popover>
+      <ProviderHint workflow="writing" />
+      <div class="toolbar-spacer"></div>
+      <el-tooltip :content="editorFolded ? '展开全文编辑器' : '收起全文编辑器，让下方面板拉满' " placement="top" :show-after="300">
+        <el-button text size="small" @click="editorFolded = !editorFolded">
+          {{ editorFolded ? '展开编辑器 ⌄' : '收起编辑器 ⌃' }}
+          <span v-if="editorFolded && articleWordCountHint" class="toolbar-fold-meta">· {{ articleWordCountHint }}</span>
+        </el-button>
+      </el-tooltip>
+    </div>
+    <div
+      v-if="article?.sections?.length && article.sections.length > 1 && article?.content_format !== 'contest_article'"
+      class="section-strip"
+    >
+      <span class="section-strip-label">当前章节</span>
+      <el-select
+        class="section-strip-select"
+        :model-value="currentSectionId"
+        filterable
+        placeholder="选择章节"
+        size="small"
+        @update:model-value="onPickSection($event)"
+      >
+        <el-option
+          v-for="s in sortedSectionsForStrip"
+          :key="s.id"
+          :label="sectionStripLabel(s)"
+          :value="s.id"
+        />
+      </el-select>
+      <span v-if="currentSectionTitleHint" class="section-strip-meta">{{ currentSectionTitleHint }}</span>
+    </div>
     <el-dialog v-model="showBindDialog" title="添加参考文献" width="520px">
       <el-input v-model="bindSearchQ" placeholder="搜索文献（回车搜索）" clearable style="margin-bottom: 0.5rem;" @keyup.enter="searchPapersForBind" />
       <el-table
@@ -470,124 +523,17 @@
         <el-button type="warning" :disabled="!selectedRollbackId" @click="confirmRollbackBySelection">回滚</el-button>
       </template>
     </el-dialog>
-    <el-collapse v-if="showSeriesVisualPanel" class="series-visual-collapse">
-      <el-collapse-item title="图示连贯性（条漫 / 分镜 / 卡片系列）" name="series-visual">
-        <p class="series-visual-hint">
-          锁定文案会注入每一张生成图的正向提示词；系列种子基准在 ComfyUI 等支持种子的后端下可区分各格随机性。像素级一致需工作流内参考图 / LoRA。
-        </p>
-        <el-input
-          v-model="visualContinuityDraft"
-          type="textarea"
-          :rows="4"
-          placeholder="例如：同一角色形象与配色、线条风格、禁止写实照片…（中/英均可）"
-        />
-        <div class="series-seed-row">
-          <span class="series-seed-label">系列种子基准（留空则各格随机）</span>
-          <el-input-number
-            v-model="imageSeriesSeedBaseDraft"
-            :min="0"
-            :max="2147483647"
-            :step="1"
-            controls-position="right"
-            placeholder="可选"
-          />
-        </div>
-        <div class="series-visual-actions">
-          <el-button type="primary" size="small" :loading="savingVisualContinuity" @click="saveVisualContinuity">
-            保存到文章
-          </el-button>
-          <el-button
-            v-if="article?.content_format === 'comic_strip'"
-            type="success"
-            size="small"
-            :loading="batchGenerating"
-            :disabled="batchGenerating"
-            @click="handleBatchComicGenerate"
-          >
-            {{ batchGenerating ? `生成中 ${batchDoneCount}/${batchTotalCount}` : '一键批量出图' }}
-          </el-button>
-        </div>
-        <div v-if="batchGenerating || batchResults.length" class="batch-progress">
-          <el-progress
-            :percentage="batchTotalCount ? Math.round(batchDoneCount / batchTotalCount * 100) : 0"
-            :status="batchFailCount > 0 ? 'warning' : (batchDoneCount === batchTotalCount && batchTotalCount > 0 ? 'success' : undefined)"
-          />
-          <div class="batch-stats">
-            <span>总计 {{ batchTotalCount }} 格</span>
-            <span v-if="batchDoneCount" class="batch-stat-ok">成功 {{ batchDoneCount - batchFailCount }}</span>
-            <span v-if="batchFailCount" class="batch-stat-fail">失败 {{ batchFailCount }}</span>
-          </div>
-        </div>
-      </el-collapse-item>
-    </el-collapse>
-    <el-collapse v-if="hasImageSlotCapability" ref="bindingsPanelRef" v-model="contestCollapseItems" class="bindings-panel">
-      <el-collapse-item name="painting">
-        <template #title>
-          <span>配图管理</span>
-          <el-tag v-if="contestImageSlotCount > 0" size="small" type="success" style="margin-left: 0.5rem;">
-            {{ contestImageUploadedCount }}/{{ paintableSectionCount || contestImageSlotCount }} 已上传
-          </el-tag>
-        </template>
-        <div class="slot-batch-bar">
-          <div class="slot-batch-bar__main">
-            <el-select
-              v-model="slotBatchEngine"
-              size="small"
-              style="width: 220px;"
-              placeholder="生图引擎"
-              @change="onSlotBatchEngineChange"
-            >
-              <el-option label="跟随默认（自动选择）" value="" />
-              <el-option
-                v-for="opt in slotBatchEngineOptions"
-                :key="opt.value"
-                :label="slotBatchEngineLabel(opt)"
-                :value="opt.value"
-                :disabled="!slotBatchEngineReady(opt.value)"
-              />
-            </el-select>
-            <el-button
-              type="primary"
-              size="small"
-              :loading="slotBatchGenerating"
-              :disabled="slotBatchGenerating || !paintableSectionCount"
-              @click="handleBatchSlotGenerate"
-            >
-              {{ slotBatchGenerating ? `生成中 ${slotBatchDone}/${slotBatchTotal}` : `一键全文配图（${paintableSectionCount} 节）` }}
-            </el-button>
-            <el-button
-              size="small"
-              :disabled="slotBatchGenerating || !nextUnpaintedSectionId"
-              @click="handleJumpToNextUnpaintedSection"
-            >
-              {{ nextUnpaintedSectionId ? '下一未配图章节' : '全部已配图' }}
-            </el-button>
-          </div>
-          <div v-if="slotBatchGenerating || slotBatchDone > 0" class="slot-batch-bar__progress">
-            <el-progress
-              :percentage="slotBatchTotal ? Math.round(slotBatchDone / slotBatchTotal * 100) : 0"
-              :status="slotBatchFail > 0 ? 'warning' : (slotBatchDone === slotBatchTotal && slotBatchTotal > 0 ? 'success' : undefined)"
-            />
-            <div class="slot-batch-bar__stats">
-              <span>{{ slotBatchDone }}/{{ slotBatchTotal }}</span>
-              <span v-if="slotBatchFail" class="slot-batch-bar__fail">失败 {{ slotBatchFail }}</span>
-              <span v-if="slotBatchSkipped" class="slot-batch-bar__skip">跳过 {{ slotBatchSkipped }}</span>
-            </div>
-          </div>
-        </div>
-        <PaintingIntentPanel
-          v-if="articleId && currentSectionId"
-          :article-id="articleId"
-          :section-id="currentSectionId"
-          :section-text="currentSectionText"
-          :topic="article?.topic"
-          :section-type="currentSectionType"
-          :required-image-format="contestRequiredImageFormat"
-          @slot-updated="onImageSlotUpdated"
-        />
-        <div v-else class="painting-empty">请先选中一个章节</div>
-      </el-collapse-item>
-    </el-collapse>
+    <div v-if="batchGenerating || batchResults.length" class="batch-progress">
+      <el-progress
+        :percentage="batchTotalCount ? Math.round(batchDoneCount / batchTotalCount * 100) : 0"
+        :status="batchFailCount > 0 ? 'warning' : (batchDoneCount === batchTotalCount && batchTotalCount > 0 ? 'success' : undefined)"
+      />
+      <div class="batch-stats">
+        <span>条漫批量出图 · 总计 {{ batchTotalCount }} 格</span>
+        <span v-if="batchDoneCount" class="batch-stat-ok">成功 {{ batchDoneCount - batchFailCount }}</span>
+        <span v-if="batchFailCount" class="batch-stat-fail">失败 {{ batchFailCount }}</span>
+      </div>
+    </div>
     <div v-if="streamedText || streamPhase === 'rewriting'" class="stream-preview">
       <div class="stream-preview-header">
         <span class="stream-preview-icon">{{ streamPhase === 'rewriting' ? '🔄' : '✍️' }}</span>
@@ -596,6 +542,7 @@
       <div v-if="streamedText" class="stream-preview-body">{{ streamedText }}</div>
     </div>
     <div
+      v-show="!editorFolded"
       class="editor-area"
       :class="{
         'editor-area--empty': isEditorEmpty,
@@ -816,11 +763,10 @@ import { useRoute, useRouter } from 'vue-router'
 import MedCommEditor from '@/components/editor/MedCommEditor.vue'
 import FormatBadge from '@/components/common/FormatBadge.vue'
 import PlatformBadge from '@/components/common/PlatformBadge.vue'
-import PaintingIntentPanel from '@/components/contest/PaintingIntentPanel.vue'
 import ProviderHint from '@/components/common/ProviderHint.vue'
 import StageProgressBar from '@/components/layout/StageProgressBar.vue'
-import { ArrowDown, ArrowLeft, Loading } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown, ArrowLeft, CircleCheck, Document, Loading, Warning } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { api, axiosErrorDetail, API_BASE, getAuthToken, getLocalApiKeyHeaderForFetch } from '@/api'
 import { useStreamGenerate } from '@/composables/useStreamGenerate'
 import { useAuthGuard } from '@/composables/useAuthGuard'
@@ -855,6 +801,12 @@ const contentJson = ref<any>(null)
 const editorRevision = ref(0)
 const saving = ref(false)
 const contentDirty = ref(false)
+const editorFolded = ref(false)
+const articleWordCountHint = computed(() => {
+  const wc = article.value?.word_count
+  if (typeof wc !== 'number' || wc <= 0) return ''
+  return `字数 ${wc}`
+})
 const isEditorEmpty = computed(() => {
   const cj = contentJson.value
   if (!cj) return true
@@ -869,103 +821,6 @@ const isEditorEmpty = computed(() => {
   }
   return false
 })
-const visualContinuityDraft = ref('')
-const imageSeriesSeedBaseDraft = ref<number | null>(null)
-const savingVisualContinuity = ref(false)
-
-const showSeriesVisualPanel = computed(() => {
-  const cf = article.value?.content_format
-  return cf === 'comic_strip' || cf === 'storyboard' || cf === 'card_series'
-})
-
-const VISUAL_EXPORT_FORMATS = ['comic_strip', 'card_series', 'poster', 'picture_book', 'long_image', 'storyboard']
-const isVisualExportFormat = computed(() => VISUAL_EXPORT_FORMATS.includes(article.value?.content_format))
-
-// ── Contest article state ──
-const contestCollapseItems = ref<string[]>(['painting'])
-const contestImageSlots = ref<any[]>([])
-const bindingsPanelRef = ref<any>(null)
-let _hasAutoScrolledToBindings = false
-
-// 元节（无需配图）— 只用于排除规划/封面等不需要正文配图的节
-const META_SECTION_TYPES = new Set([
-  'planner', 'series_plan', 'book_plan', 'image_plan', 'script_plan',
-  'drama_plan', 'anim_plan', 'handbook_plan', 'poster_brief', 'design_spec',
-  'prod_notes', 'filming_notes', 'cast_table', 'char_design',
-])
-
-const slotBatchEngine = ref<string>('')
-const slotBatchGenerating = ref(false)
-const slotBatchTotal = ref(0)
-const slotBatchDone = ref(0)
-const slotBatchFail = ref(0)
-const slotBatchSkipped = ref(0)
-const slotBatchProviders = ref<Record<string, boolean>>({})
-const slotBatchProvidersLoaded = ref(false)
-
-const slotBatchEngineOptions: Array<{ value: string; label: string }> = [
-  { value: 'gpt_image', label: 'GPT Image' },
-  { value: 'openai', label: 'DALL·E 3 / ChatGPT' },
-  { value: 'gemini_image', label: 'Google Gemini 图像' },
-  { value: 'moonshot_image', label: 'Kimi（Moonshot）图像' },
-  { value: 'midjourney', label: 'Midjourney' },
-  { value: 'kling', label: '可灵 AI' },
-  { value: 'jimeng', label: '即梦 AI（火山 Seedream）' },
-  { value: 'comfyui_local', label: 'ComfyUI（本地）' },
-  { value: 'comfyui_cloud', label: 'ComfyUI Cloud' },
-  { value: 'wanx', label: '通义万相' },
-  { value: 'siliconflow', label: '硅基流动' },
-  { value: 'wenxin', label: '文心一格' },
-]
-
-function slotBatchEngineReady(value: string): boolean {
-  if (!slotBatchProvidersLoaded.value) return true
-  if (!value) return true
-  if (value === 'comfyui_local') return !!slotBatchProviders.value.comfyui_local_running
-  return !!slotBatchProviders.value[value]
-}
-
-function slotBatchEngineLabel(opt: { value: string; label: string }) {
-  return slotBatchEngineReady(opt.value) ? opt.label : `${opt.label}（未接入）`
-}
-
-function onSlotBatchEngineChange(val: string) {
-  slotBatchEngine.value = val
-  if (val) settingsStore.setPreferredImageProvider(val)
-}
-
-async function loadSlotBatchProviders() {
-  try {
-    const res = await api.imageIntent.getImageProviders()
-    slotBatchProviders.value = res.data?.providers || {}
-  } catch {
-    slotBatchProviders.value = {}
-  } finally {
-    slotBatchProvidersLoaded.value = true
-  }
-}
-
-const paintableSections = computed(() => {
-  const list = article.value?.sections || []
-  return [...list]
-    .filter((s: any) => s?.has_content && !META_SECTION_TYPES.has(s.section_type || ''))
-    .sort((a: any, b: any) => Number(a.order_num || 0) - Number(b.order_num || 0))
-})
-
-const paintableSectionCount = computed(() => paintableSections.value.length)
-
-const nextUnpaintedSectionId = computed<number | null>(() => {
-  const slotsBySid: Record<number, any> = {}
-  for (const s of contestImageSlots.value) {
-    if (s?.section_id != null) slotsBySid[s.section_id] = s
-  }
-  for (const sec of paintableSections.value) {
-    const slot = slotsBySid[sec.id]
-    if (!slot || !slot.image_path) return sec.id
-  }
-  return null
-})
-
 const hasImageSlotCapability = computed(() =>
   FORMATS_WITH_IMAGE_SLOTS.has(article.value?.content_format || '')
 )
@@ -973,22 +828,15 @@ const hasContestRules = computed(() =>
   FORMATS_WITH_CONTEST_RULES.has(article.value?.content_format || '')
 )
 
-const contestImageSlotCount = computed(() => contestImageSlots.value.length)
-const contestImageUploadedCount = computed(() =>
-  contestImageSlots.value.filter((s: any) => s.image_status === 'uploaded').length
-)
+function goToIllustration() {
+  if (articleId.value) router.push(`/illustration/${articleId.value}`)
+}
 
 const contestWordLimit = computed(() => {
   const a = article.value
   if (!a || !FORMATS_WITH_CONTEST_RULES.has(a.content_format)) return 0
   if (a.contest_custom_rules?.word_limit) return parseInt(a.contest_custom_rules.word_limit)
   return a.target_word_count || 0
-})
-
-const contestRequiredImageFormat = computed(() => {
-  const a = article.value
-  if (!a) return undefined
-  return a.contest_custom_rules?.image_format || undefined
 })
 
 const contestStatusText = computed(() => {
@@ -999,234 +847,6 @@ const contestStatusText = computed(() => {
   if (a.contest_rule_source === 'manual') return '已配置（手工）'
   return '未绑定赛制'
 })
-
-const currentSectionText = computed(() => {
-  if (!contentJson.value) return ''
-  const doc = typeof contentJson.value === 'string' ? JSON.parse(contentJson.value) : contentJson.value
-  if (!doc?.content) return ''
-  return doc.content
-    .filter((n: any) => n.type === 'paragraph' || n.type === 'heading')
-    .map((n: any) => (n.content || []).map((c: any) => c.text || '').join(''))
-    .join('\n')
-})
-
-const currentSectionType = computed(() => {
-  if (!currentSectionId.value || !article.value?.sections) return ''
-  const sec = article.value.sections.find((s: any) => s.id === currentSectionId.value)
-  return sec?.section_type || ''
-})
-
-async function loadContestImageSlots() {
-  if (!articleId.value || !FORMATS_WITH_IMAGE_SLOTS.has(article.value?.content_format || '')) return
-  try {
-    const res = await api.imageIntent.getImageSlots(articleId.value)
-    contestImageSlots.value = res.data?.items || []
-  } catch { /* ignore */ }
-}
-
-function onImageSlotUpdated(slot: any) {
-  const idx = contestImageSlots.value.findIndex((s: any) => s.id === slot.id)
-  if (idx >= 0) {
-    contestImageSlots.value[idx] = slot
-  } else {
-    contestImageSlots.value.push(slot)
-  }
-}
-
-function _findSlotForSection(sectionId: number) {
-  return contestImageSlots.value.find((s: any) => s.section_id === sectionId) || null
-}
-
-function _sectionPlainText(sec: any): string {
-  if (!sec) return ''
-  if (typeof sec.content_text === 'string' && sec.content_text.trim()) return sec.content_text.trim()
-  if (sec.content_json) {
-    try {
-      const doc = typeof sec.content_json === 'string' ? JSON.parse(sec.content_json) : sec.content_json
-      if (doc?.content) {
-        return doc.content
-          .filter((n: any) => n.type === 'paragraph' || n.type === 'heading')
-          .map((n: any) => (n.content || []).map((c: any) => c.text || '').join(''))
-          .join('\n')
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-  return ''
-}
-
-async function _ensureSlotForSection(sectionId: number, intentText: string) {
-  const existing = _findSlotForSection(sectionId)
-  if (existing) return existing
-  try {
-    const res = await api.imageIntent.createImageSlot(articleId.value!, {
-      section_id: sectionId,
-      intent_text: intentText,
-      aspect_ratio: '16:9',
-    })
-    const slot = res.data
-    if (slot) contestImageSlots.value.push(slot)
-    return slot
-  } catch {
-    return null
-  }
-}
-
-async function _generateOneSection(sec: any): Promise<{ ok: boolean; skipped?: boolean; error?: string }> {
-  try {
-    let slot = _findSlotForSection(sec.id)
-    let intentText = slot?.intent_text || ''
-
-    if (!intentText) {
-      const sectionText = _sectionPlainText(sec)
-      if (!sectionText || sectionText.length < 8) {
-        return { ok: false, skipped: true, error: '正文过短，跳过' }
-      }
-      try {
-        const sgRes = await api.imageIntent.suggestIntent({
-          section_text: sectionText,
-          topic: article.value?.topic,
-          section_type: sec.section_type,
-        })
-        const first = sgRes.data?.suggestions?.[0]?.intent
-        if (first) intentText = String(first).trim()
-      } catch {
-        /* ignore — 走兜底 */
-      }
-      if (!intentText) {
-        const trimmed = sectionText.replace(/\s+/g, ' ').slice(0, 60)
-        intentText = `围绕「${sec.title || sec.section_type || article.value?.topic || '健康科普'}」配一张专业、温和、贴合医学语境的插画：${trimmed}`
-      }
-    }
-
-    if (!slot) {
-      slot = await _ensureSlotForSection(sec.id, intentText)
-    } else if (!slot.intent_text) {
-      try {
-        const upd = await api.imageIntent.updateImageSlot(slot.id, { intent_text: intentText })
-        slot = upd.data || { ...slot, intent_text: intentText }
-        const idx = contestImageSlots.value.findIndex((s: any) => s.id === slot.id)
-        if (idx >= 0) contestImageSlots.value[idx] = slot
-      } catch {
-        /* ignore */
-      }
-    }
-    if (!slot) return { ok: false, error: '建画位失败' }
-
-    if (!slot.prompt_zh && !slot.prompt_en) {
-      const pr = await api.imageIntent.generateSlotPrompt(slot.id)
-      slot = pr.data?.slot || slot
-      const idx = contestImageSlots.value.findIndex((s: any) => s.id === slot.id)
-      if (idx >= 0) contestImageSlots.value[idx] = slot
-    }
-
-    const gen = await api.imageIntent.generateSlotImage(
-      slot.id,
-      slotBatchEngine.value ? { preferred_provider: slotBatchEngine.value } : undefined,
-    )
-    const newSlot = gen.data?.slot
-    if (newSlot) {
-      const idx = contestImageSlots.value.findIndex((s: any) => s.id === newSlot.id)
-      if (idx >= 0) contestImageSlots.value[idx] = newSlot
-      else contestImageSlots.value.push(newSlot)
-    }
-    return { ok: true }
-  } catch (e: any) {
-    const msg = e?.response?.data?.detail || e?.message || '生成失败'
-    return { ok: false, error: String(msg) }
-  }
-}
-
-async function handleBatchSlotGenerate() {
-  if (!articleId.value) return
-  const sections = paintableSections.value
-  if (!sections.length) {
-    ElMessage.warning('当前文章尚无可配图的章节正文，请先生成章节内容')
-    return
-  }
-
-  await loadContestImageSlots()
-  const alreadyPainted = sections.filter((sec: any) => {
-    const slot = _findSlotForSection(sec.id)
-    return slot?.image_path
-  })
-  if (alreadyPainted.length > 0) {
-    try {
-      await ElMessageBox.confirm(
-        `已有 ${alreadyPainted.length} 节配图，重新生成将覆盖。是否继续？（未配图的 ${sections.length - alreadyPainted.length} 节也会一起处理）`,
-        '一键全文配图',
-        { confirmButtonText: '全部重新生成', cancelButtonText: '取消', type: 'warning' },
-      )
-    } catch {
-      return
-    }
-  }
-
-  if (!slotBatchProvidersLoaded.value) await loadSlotBatchProviders()
-  if (slotBatchEngine.value && !slotBatchEngineReady(slotBatchEngine.value)) {
-    ElMessage.warning('所选引擎当前未接入，已切换为自动选择')
-    slotBatchEngine.value = ''
-  }
-
-  slotBatchGenerating.value = true
-  slotBatchTotal.value = sections.length
-  slotBatchDone.value = 0
-  slotBatchFail.value = 0
-  slotBatchSkipped.value = 0
-
-  const CONCURRENCY = 2
-  const queue = [...sections]
-  const errors: string[] = []
-
-  async function worker() {
-    while (queue.length) {
-      const sec = queue.shift()
-      if (!sec) break
-      const r = await _generateOneSection(sec)
-      slotBatchDone.value++
-      if (!r.ok) {
-        if (r.skipped) slotBatchSkipped.value++
-        else slotBatchFail.value++
-        if (r.error) errors.push(`${sec.title || sec.section_type}：${r.error}`)
-      }
-    }
-  }
-
-  try {
-    await Promise.allSettled(Array.from({ length: CONCURRENCY }, () => worker()))
-    await loadContestImageSlots()
-    const ok = slotBatchDone.value - slotBatchFail.value - slotBatchSkipped.value
-    if (slotBatchFail.value === 0 && slotBatchSkipped.value === 0) {
-      ElMessage.success(`全文配图完成：${ok}/${slotBatchTotal.value}`)
-    } else if (slotBatchFail.value === 0) {
-      ElMessage.warning(`完成 ${ok} 节，跳过 ${slotBatchSkipped.value} 节（章节正文过短）`)
-    } else {
-      ElMessage.warning(`完成 ${ok} 节，失败 ${slotBatchFail.value} 节${slotBatchSkipped.value ? `，跳过 ${slotBatchSkipped.value} 节` : ''}`)
-      if (errors.length) {
-        console.warn('[batch-slot-generate] errors:', errors)
-      }
-    }
-  } finally {
-    slotBatchGenerating.value = false
-  }
-}
-
-function handleJumpToNextUnpaintedSection() {
-  const sid = nextUnpaintedSectionId.value
-  if (sid == null) {
-    ElMessage.success('全部章节已配图')
-    return
-  }
-  if (sid === currentSectionId.value) return
-  currentSectionId.value = sid
-  if (!contestCollapseItems.value.includes('painting')) {
-    contestCollapseItems.value = [...contestCollapseItems.value, 'painting']
-  }
-  nextTick(() => {
-    bindingsPanelRef.value?.$el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
-  })
-}
 
 const batchGenerating = ref(false)
 const batchTotalCount = ref(0)
@@ -1445,7 +1065,6 @@ const awaitLocateFeedback = ref(false)
 const bindings = ref<any[]>([])
 const externalRefs = ref<any[]>([])
 const bindingScope = ref<'section' | 'article'>('article')
-const activeCollapseItems = ref<string[]>(['refs'])
 const showBindDialog = ref(false)
 const papersForBind = ref<any[]>([])
 const bindSearchQ = ref('')
@@ -1661,9 +1280,6 @@ async function loadArticle(sectionId?: number) {
     editorRevision.value++
     await nextTick()
     _skipNextAutoSave = false
-    visualContinuityDraft.value = res.data?.visual_continuity_prompt || ''
-    imageSeriesSeedBaseDraft.value =
-      res.data?.image_series_seed_base != null ? Number(res.data.image_series_seed_base) : null
     void loadImageSuggestions()
 
     const vr = res.data?.verify_report
@@ -1675,22 +1291,6 @@ async function loadArticle(sectionId?: number) {
         }
       }).catch(() => {})
     }
-    void loadContestImageSlots().then(() => {
-      if (
-        !_hasAutoScrolledToBindings &&
-        hasImageSlotCapability.value &&
-        contestImageUploadedCount.value === 0 &&
-        paintableSectionCount.value > 0 &&
-        bindingsPanelRef.value?.$el
-      ) {
-        _hasAutoScrolledToBindings = true
-        nextTick(() => {
-          try {
-            bindingsPanelRef.value.$el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          } catch { /* ignore */ }
-        })
-      }
-    })
   } catch {
     article.value = null
   }
@@ -1714,26 +1314,6 @@ async function loadImageSuggestions() {
     }
   } catch {
     if (!articleStore.imageSuggestions.length) articleStore.setImageSuggestions([])
-  }
-}
-
-async function saveVisualContinuity() {
-  if (!articleId.value) return
-  savingVisualContinuity.value = true
-  try {
-    const res = await api.medcomm.patchArticleVisualContinuity(articleId.value, {
-      visual_continuity_prompt: visualContinuityDraft.value.trim(),
-      image_series_seed_base: imageSeriesSeedBaseDraft.value,
-    })
-    if (res.data) {
-      article.value = { ...article.value, ...res.data }
-      articleStore.setCurrent(article.value)
-    }
-    ElMessage.success('已保存图示连贯性配置')
-  } catch (e: any) {
-    ElMessage.error(await axiosErrorDetail(e) || '保存失败')
-  } finally {
-    savingVisualContinuity.value = false
   }
 }
 
@@ -1776,7 +1356,7 @@ async function handleBatchComicGenerate() {
         dialogue: p.dialogue || undefined,
       })),
       style: 'comic',
-      seed_base: imageSeriesSeedBaseDraft.value ?? undefined,
+      seed_base: article.value?.image_series_seed_base ?? undefined,
       ...providerOpts,
     }
     const res = await api.imagegen.comicBatch(batchPayload)
@@ -3391,13 +2971,11 @@ function debouncedSave(json: any) {
 async function persistContent(json: any) {
   if (!articleId.value || !json) return
   saving.value = true
-  const cf = article.value?.content_format || 'article'
+  // 编辑器始终展示后端拼好的 full_content_json（合并视图）
+  // 因此任何格式都按"合并视图"语义保存：写入到一个规范化章节，并将其他章节的 is_current 置为 false。
+  // 这样下一次重新加载 / 导出时，full_content_json 与导出内容都跟编辑器实时所见一致。
   try {
-    if (cf === 'article') {
-      await api.medcomm.saveFullContent(articleId.value, json)
-    } else if (currentSectionId.value) {
-      await api.medcomm.updateArticleContent(articleId.value, json, currentSectionId.value)
-    }
+    await api.medcomm.saveFullContent(articleId.value, json)
     contentDirty.value = false
   } catch {
     ElMessage.error('自动保存失败，请手动保存')
@@ -3415,8 +2993,11 @@ async function handleManualSave() {
 }
 
 async function saveBeforeExport(): Promise<boolean> {
-  if (!contentDirty.value) return true
+  // 始终把当前编辑器内容固化一次（saveFullContent 会清掉其他章节的 is_current
+  // 标记），确保导出读到的就是用户此刻看到的合并视图——也用于自动迁移历史上
+  // "整篇被塞进单个章节"导致的数据冗余。
   if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null }
+  if (!contentJson.value) return true
   await persistContent(contentJson.value)
   return !contentDirty.value
 }
@@ -3436,9 +3017,16 @@ onMounted(() => {
   const querySectionId = getSectionIdFromQuery()
   if (querySectionId) currentSectionId.value = querySectionId
   externalQuery.value = String(article.value?.topic || article.value?.title || '')
-  slotBatchEngine.value = settingsStore.preferredImageProvider === 'auto' ? '' : (settingsStore.preferredImageProvider || '')
-  void loadSlotBatchProviders()
-  loadArticle(querySectionId ?? undefined)
+  loadArticle(querySectionId ?? undefined).then(() => {
+    if (route.query.auto_comic_batch === '1' && article.value?.content_format === 'comic_strip') {
+      // 等编辑器渲染完毕再触发条漫批量出图
+      nextTick(() => {
+        setTimeout(() => {
+          if (!batchGenerating.value) void handleBatchComicGenerate()
+        }, 500)
+      })
+    }
+  })
   loadBindings()
   syncCitationRefsInEditor()
   window.addEventListener(AUTH_USER_CHANGED_EVENT, handleAuthUserChanged as EventListener)
@@ -3575,11 +3163,42 @@ async function handleAuthUserChanged() {
   font-size: 12px;
   white-space: nowrap;
 }
-.bindings-panel {
-  margin: 0 1rem 0.5rem;
-}
-.bindings-panel :deep(.el-collapse-item__header) { padding-left: 0; }
 .bindings-content { padding: 0.25rem 0; }
+
+/* 可折叠面板（配图管理 / 自定义绘图）— 风格与编辑器折叠条一致 */
+.fold-panel {
+  margin: 0 1rem 0.5rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+.fold-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: #fafafa;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.9rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+.fold-panel__head:hover { background: #f3f4f6; }
+.fold-panel__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #374151;
+  font-weight: 500;
+}
+.fold-panel--folded .fold-panel__head {
+  border-bottom: none;
+}
+.fold-panel__body {
+  padding: 0.5rem 0.75rem 0.75rem;
+}
 .slot-batch-bar {
   display: flex;
   flex-direction: column;
@@ -3604,6 +3223,52 @@ async function handleAuthUserChanged() {
 }
 .slot-batch-bar__fail { color: var(--el-color-danger); }
 .slot-batch-bar__skip { color: var(--el-color-warning); }
+.slot-batch-bar__enrich {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.25rem 0;
+}
+.enrich-toggle__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+.enrich-toggle__sparkle {
+  background: linear-gradient(90deg, #6366f1, #ec4899);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 700;
+}
+.enrich-toggle__cost {
+  font-size: 12px;
+  color: #6b7280;
+  cursor: help;
+}
+.slot-batch-bar__storyboard {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.25rem 0;
+}
+.storyboard-toggle__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+.storyboard-toggle__icon {
+  font-size: 14px;
+}
+.storyboard-toggle__hint {
+  font-size: 12px;
+  color: #6b7280;
+  cursor: help;
+}
 .bindings-toolbar {
   display: flex;
   align-items: center;
@@ -3887,6 +3552,37 @@ async function handleAuthUserChanged() {
   min-height: 60px;
   flex: 0 1 auto;
 }
+
+/* toolbar 末尾的展开/收起按钮 + 字数提示 */
+.toolbar-spacer { flex: 1 1 auto; }
+.toolbar-fold-meta {
+  color: #9ca3af;
+  font-size: 0.8rem;
+  margin-left: 0.35rem;
+}
+
+/* toolbar 与 editor-area 视觉合并：toolbar 充当编辑器顶部条 */
+.toolbar {
+  border-radius: 8px 8px 0 0;
+  margin: 0 1rem;
+  border: 1px solid #e5e7eb;
+  border-bottom: none;
+}
+/* contest_article 下 toolbar 直接贴顶（编辑器置顶），保留圆角和边框 */
+.article-editor.is-contest-format .toolbar {
+  margin-top: 0;
+}
+/* 编辑器与 toolbar 合并：去掉重复的顶部边框，改用上面 toolbar 的下边 */
+.editor-area {
+  margin-top: 0;
+  border-top: none;
+  border-radius: 0 0 8px 8px;
+}
+/* 折叠态：toolbar 改回独立的圆角矩形（看起来像一个紧凑的条） */
+.toolbar.is-editor-folded {
+  border-bottom: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
 /* 新建文章时整块收缩，避免空白占满屏 */
 .editor-area--empty {
   flex: 0;
@@ -3991,32 +3687,55 @@ async function handleAuthUserChanged() {
   align-items: baseline;
 }
 
-.contest-status-bar {
-  display: flex;
+/* 紧凑徽章行内的字数进度（替代旧 contest-status-bar） */
+.word-progress-inline {
+  font-size: 0.8rem;
+  color: #6b7280;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.4rem 0.75rem;
-  background: #fef9c3;
-  border: 1px solid #fde68a;
-  border-radius: 6px;
-  margin-top: 0.5rem;
+  gap: 0.35rem;
 }
 
-.contest-status-left {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
+/* 参赛图文科普形式：编辑器置顶，配图管理/章节条放到编辑器之后 */
+.article-editor.is-contest-format .editor-header { order: 0; }
+.article-editor.is-contest-format .toolbar { order: 1; }
+.article-editor.is-contest-format .stream-preview { order: 2; }
+.article-editor.is-contest-format .editor-area { order: 3; }
+.article-editor.is-contest-format .section-strip { order: 4; }
+.article-editor.is-contest-format .series-visual-collapse { order: 5; }
+.article-editor.is-contest-format .fold-panel { order: 6; }
+.article-editor.is-contest-format .bindings-panel { order: 7; }
+/* 任何带「配图管理 / 自定义绘图」面板的 format（contest_article / article /
+   patient_handbook）都改为整页纵向可滚，让下方折叠面板可完整查看。 */
+.article-editor.has-image-panels {
+  height: auto;
+  min-height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* editor-area 不再独占剩余空间（否则会把下方面板挤出视口），
+   改为按内容自然撑高 + 自身设最大高度，保留富文本编辑器内部滚动。 */
+.article-editor.has-image-panels .editor-area {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 360px;
+}
+.article-editor.has-image-panels .editor-area__main {
+  max-height: 70vh;
+  overflow: auto;
+}
+/* 折叠面板自身限定最大高度并内部滚动，避免一屏只能看到第一节配图。
+   头部（标题 + 收起按钮）保持在外层不动，body 内部独立滚动。 */
+.article-editor.has-image-panels .fold-panel__body {
+  max-height: 70vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 给滚动条留出舒适的右内边距 */
+  padding-right: 0.85rem;
+  /* iOS / 触控板惯性滚动 */
+  -webkit-overflow-scrolling: touch;
+  /* 让 ContestImageOverview 内部 sticky 元素（如批量栏）有滚动容器 */
+  scroll-padding-top: 0.5rem;
 }
 
-.contest-word-progress {
-  font-size: 0.85rem;
-  color: #666;
-}
-
-.painting-empty {
-  text-align: center;
-  color: #999;
-  padding: 1rem;
-  font-size: 0.85rem;
-}
 </style>

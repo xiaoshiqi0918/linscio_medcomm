@@ -1,0 +1,154 @@
+{% extends "_base.html" %}
+{% import "_macros.html" as M %}
+
+{% block extra_styles %}
+<style>
+  /* ── clinical_strict：医学正式版式 ────────────── */
+  body {
+    background: #fff;
+    font-family: "Source Han Serif SC", "Songti SC", "STSong", "PingFang SC", "Microsoft YaHei", serif;
+    color: #111827;
+  }
+  .page { padding: 28mm 22mm 24mm; max-width: 720px; }
+
+  /* 极简标题 */
+  .cover {
+    margin-bottom: 36px;
+    padding-bottom: 22px;
+    border-bottom: 2px solid #1f4e79;
+  }
+  .cover-hero { display: none; }
+  .cover-overlay {
+    position: relative;
+    color: #1f4e79;
+  }
+  .cover-badge {
+    display: inline-block;
+    font-size: 11px;
+    color: #1f4e79;
+    background: transparent !important;
+    border: 1px solid #1f4e79;
+    padding: 2px 9px;
+    border-radius: 2px;
+    letter-spacing: 0.1em;
+    margin-bottom: 14px;
+  }
+  .cover-title {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0 0 10px;
+    color: #111827;
+    line-height: 1.4;
+    letter-spacing: 0;
+  }
+  .cover-subtitle {
+    font-size: 14px;
+    color: #4b5563;
+    margin-bottom: 12px;
+    font-weight: 400;
+  }
+  .cover-meta {
+    font-size: 12px;
+    color: #6b7280;
+    display: flex;
+    gap: 8px;
+  }
+
+  /* 正文 */
+  .section-title {
+    font-size: 17px;
+    color: #1f4e79;
+    margin: 2em 0 0.6em;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .section-title::before {
+    content: '§ ';
+    color: #c5d3eb;
+    font-weight: 400;
+  }
+  .section-body {
+    font-size: 14.5px;
+    line-height: 1.95;
+    text-align: justify;
+  }
+  .section-body p {
+    margin: 0.8em 0;
+    text-indent: 2em;
+  }
+  .section-body p:first-child { text-indent: 0; }
+  .section-body h3 {
+    font-size: 15px;
+    color: #1f2937;
+    margin: 1.2em 0 0.4em;
+    font-weight: 600;
+  }
+  .section-body ul, .section-body ol {
+    padding-left: 2em;
+    margin: 0.6em 0;
+    font-size: 14px;
+  }
+  .section-body blockquote {
+    border-left: 2px solid #1f4e79;
+    margin: 1em 0;
+    padding: 0.4em 1em;
+    background: #f8fafc;
+    color: #374151;
+    font-size: 14px;
+  }
+
+  /* 配图：克制居中 */
+  .figure { margin: 1.4em auto; }
+  .figure img { max-width: 78%; border-radius: 0; box-shadow: none; border: 1px solid #e5e7eb; }
+  .figure figcaption { font-size: 12px; color: #4b5563; margin-top: 0.5em; font-style: normal; }
+
+  /* 参考文献 */
+  .references-block {
+    margin-top: 2.5em;
+    padding-top: 1.4em;
+    border-top: 1px solid #1f4e79;
+  }
+  .references-list {
+    font-size: 12px;
+    color: #4b5563;
+    padding-left: 1.6em;
+    line-height: 1.6;
+  }
+  .references-list li { margin: 0.3em 0; }
+
+  /* AI 声明 */
+  .ai-footer {
+    margin-top: 2em;
+    padding: 0.6em 0;
+    border-top: 1px dashed #c5d3eb;
+    font-size: 11px;
+    color: #6b7280;
+    text-align: center;
+  }
+  .ai-footer__label {
+    font-weight: 600;
+    margin-right: 0.5em;
+    color: #1f4e79;
+  }
+
+  @media print {
+    .section-title { page-break-after: avoid; }
+    .figure { page-break-inside: avoid; }
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="poster-doc">
+  <div class="page page--hero">
+    {{ M.render_hero(meta, hero, '#1f4e79') }}
+  </div>
+  <div class="page page--body">
+    {% for sec in sections %}
+      {{ M.render_section(sec, slots_at_top=false) }}
+    {% endfor %}
+    {{ M.render_references(references) }}
+    {{ M.render_ai_declaration(meta) }}
+  </div>
+</div>
+{% endblock %}

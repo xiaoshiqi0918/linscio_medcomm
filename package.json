@@ -32,7 +32,11 @@
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {
+    "@tiptap/extension-font-family": "^2.27.2",
     "@tiptap/extension-placeholder": "^2.1.0",
+    "@tiptap/extension-text-align": "^2.27.2",
+    "@tiptap/extension-text-style": "^2.27.2",
+    "@tiptap/extension-underline": "^2.27.2",
     "@tiptap/starter-kit": "^2.1.0",
     "@tiptap/vue-3": "^2.1.0",
     "adm-zip": "^0.5.16",
@@ -75,7 +79,6 @@
       "build/wheels/**/*",
       "assets/**/*",
       "workflows/**/*",
-
       "!backend/app/services/payment/**",
       "!backend/app/services/credit/**",
       "!backend/app/services/moderation/**",
@@ -103,7 +106,6 @@
       "backend/**/*",
       "build/wheels/**/*",
       "workflows/**/*",
-
       "!backend/app/services/payment/**",
       "!backend/app/services/credit/**",
       "!backend/app/services/moderation/**",

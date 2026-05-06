@@ -1,4 +1,5 @@
 """参赛图文科普 API — 赛制包、画意范例、风格预设、提示词生成、负向词"""
+import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from app.models.article_image_slot import ArticleImageSlot
 from app.models.article import Article, ArticleSection
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 async def get_db():
@@ -66,10 +68,23 @@ class GeneratePromptRequest(BaseModel):
     aspect_ratio: str = "16:9"
     adjustments: dict | None = None
     topic_category: str | None = None
+    preferred_provider: str | None = None
+    target_language: str | None = None  # 'zh' / 'en' / 'both'
 
 
 class SuggestIntentRequest(BaseModel):
     section_text: str
+    topic: str | None = None
+    section_type: str | None = None
+    section_title: str | None = None
+    prior_intents: list[str] | None = None
+
+
+class EnrichIntentRequest(BaseModel):
+    intent_text: str
+    style_preset: str | None = None
+    aspect_ratio: str = "16:9"
+    section_text: str | None = None
     topic: str | None = None
     section_type: str | None = None
 
@@ -322,6 +337,8 @@ async def suggest_intent(req: SuggestIntentRequest, request: Request = None):
             section_text=req.section_text,
             topic=req.topic,
             section_type=req.section_type,
+            section_title=req.section_title,
+            prior_intents=req.prior_intents,
         )
     except Exception:
         if billing_sid and is_saas():
@@ -338,6 +355,89 @@ async def suggest_intent(req: SuggestIntentRequest, request: Request = None):
             await sdb.commit()
 
     return {"suggestions": suggestions}
+
+
+@router.post("/intent-examples/enrich")
+async def enrich_intent(req: EnrichIntentRequest, request: Request = None):
+    """AI 智能扩写：把简短画意扩写为剧本式场景描述（含 hints 与 preserved）。
+
+    计费：0.3 积分（contest_llm.intent_enrich）。同输入 24h 内复用缓存，命中缓存不计费。
+    """
+    intent_text = (req.intent_text or "").strip()
+    if not intent_text:
+        raise HTTPException(status_code=400, detail="画意为空")
+    if len(intent_text) < 4:
+        raise HTTPException(status_code=400, detail="画意太短，无法扩写（至少 4 字）")
+
+    from app.core.config import is_saas
+    from app.services.contest.prompt_engine import enrich_intent_to_scene, _hash_intent_input, _cache_get
+    from app.services.credit.pricing import calc_contest_llm_cost
+
+    cost = calc_contest_llm_cost("intent_enrich")
+
+    # 提前查缓存：命中则免费返回（不开 billing_session）
+    cache_key = _hash_intent_input(
+        intent_text, req.style_preset, req.aspect_ratio, (req.section_text or "")
+    )
+    cached = _cache_get(cache_key)
+    if cached:
+        result = dict(cached)
+        result["from_cache"] = True
+        result["original_intent"] = intent_text
+        result["cost"] = 0.0
+        return result
+
+    billing_sid: str | None = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.service import InsufficientCreditsError
+        async with AsyncSessionLocal() as db:
+            user = await get_current_user(request, db)
+            try:
+                billing_sid = await open_billing_session(
+                    user.id, "contest_llm", cost, db,
+                    business_ref={"action": "intent_enrich"},
+                )
+                await db.commit()
+            except InsufficientCreditsError as e:
+                raise HTTPException(status_code=402, detail=str(e))
+
+    try:
+        result = await enrich_intent_to_scene(
+            intent_text,
+            style_preset=req.style_preset,
+            aspect_ratio=req.aspect_ratio,
+            section_text=req.section_text or "",
+            topic=req.topic or "",
+            section_type=req.section_type or "",
+        )
+    except Exception:
+        if billing_sid and is_saas():
+            async with AsyncSessionLocal() as sdb:
+                from app.services.billing.dependency import close_billing_session
+                await close_billing_session(billing_sid, sdb, success=False)
+                await sdb.commit()
+        raise
+
+    # rejected / error 都不扣分；ok 才扣
+    if result.get("status") != "ok":
+        if billing_sid and is_saas():
+            async with AsyncSessionLocal() as sdb:
+                from app.services.billing.dependency import close_billing_session
+                await close_billing_session(billing_sid, sdb, success=False)
+                await sdb.commit()
+        result["cost"] = 0.0
+        return result
+
+    if billing_sid and is_saas():
+        async with AsyncSessionLocal() as sdb:
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, sdb, success=True, override_cost=cost)
+            await sdb.commit()
+
+    result["cost"] = float(cost)
+    return result
 
 
 # ══════════════════════════════════════════════════════════════
@@ -382,6 +482,8 @@ async def generate_prompt(req: GeneratePromptRequest, request: Request = None, d
             adjustments=req.adjustments,
             topic_category=req.topic_category,
             db=db,
+            preferred_provider=req.preferred_provider,
+            target_language=req.target_language,
         )
     except Exception:
         if billing_sid and is_saas():
@@ -633,23 +735,60 @@ async def update_image_slot(
 
 
 @router.delete("/image-slots/{slot_id}")
-async def delete_image_slot(slot_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_image_slot(
+    slot_id: int,
+    purge_history: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """删除配图槽位。
+
+    purge_history=True 时，同步清理 generated_images 表里同 (article_id, section_id)
+    的历史重绘记录（仅删数据库索引，不动物理文件，避免误伤已被锚点引用的图）。
+    """
     result = await db.execute(select(ArticleImageSlot).where(ArticleImageSlot.id == slot_id))
     slot = result.scalar_one_or_none()
     if not slot:
         raise HTTPException(404, "配图槽位不存在")
+
+    article_id = slot.article_id
+    section_id = slot.section_id
+
+    purged = 0
+    if purge_history and article_id is not None:
+        from app.models.image import GeneratedImage
+        from sqlalchemy import delete as sa_delete, and_
+        cond = [GeneratedImage.article_id == article_id]
+        if section_id is not None:
+            cond.append(GeneratedImage.section_id == section_id)
+        else:
+            cond.append(GeneratedImage.section_id.is_(None))
+        try:
+            res = await db.execute(sa_delete(GeneratedImage).where(and_(*cond)))
+            purged = res.rowcount or 0
+        except Exception as e:
+            logger.warning("purge generated_images failed: %s", e)
+
     await db.delete(slot)
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "purged_history": purged}
+
+
+class GenerateSlotPromptRequest(BaseModel):
+    # 用户当前选择的图像引擎（如 kling / jimeng / openai / midjourney / gpt_image …）。
+    # 后端据此推断目标 prompt 语言、是否需要独立负向词；为空 → 走双语兼容模式。
+    preferred_provider: str | None = None
+    # 强制覆盖目标语言：'zh' / 'en' / 'both'。一般留空让后端按 provider 决定。
+    target_language: str | None = None
 
 
 @router.post("/image-slots/{slot_id}/generate-prompt")
 async def generate_slot_prompt(
     slot_id: int,
+    req: GenerateSlotPromptRequest | None = None,
     request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
-    """为指定槽位生成/重新生成双语提示词"""
+    """为指定槽位生成/重新生成提示词（按 provider 选语言 + 智能负向词）"""
     result = await db.execute(select(ArticleImageSlot).where(ArticleImageSlot.id == slot_id))
     slot = result.scalar_one_or_none()
     if not slot:
@@ -689,14 +828,29 @@ async def generate_slot_prompt(
     article = art_result.scalar_one_or_none()
     topic_category = article.specialty if article else None
 
+    # ── 注入视觉锚点（角色卡 + 风格锁），保证全文图片一致性 ──
+    from app.services.contest.visual_anchor import (
+        get_or_create_anchor, inject_anchor_to_intent, has_meaningful_anchor,
+    )
+    anchor = await get_or_create_anchor(slot.article_id, db)
+    if has_meaningful_anchor(anchor):
+        intent_with_anchor = inject_anchor_to_intent(slot.intent_text, anchor)
+    else:
+        intent_with_anchor = slot.intent_text
+
+    preferred_provider = (req.preferred_provider if req else None) or None
+    target_language = (req.target_language if req else None) or None
+
     try:
         prompt_result = await generate_dual_prompt(
-            intent_text=slot.intent_text,
+            intent_text=intent_with_anchor,
             preset=preset,
             aspect_ratio=slot.aspect_ratio or "16:9",
             adjustments=slot.user_adjustments,
             topic_category=topic_category,
             db=db,
+            preferred_provider=preferred_provider,
+            target_language=target_language,
         )
     except Exception:
         if billing_sid and is_saas():
@@ -728,14 +882,18 @@ async def generate_slot_prompt(
 # ── 图像生成 ──────────────────────────────────────────────────
 
 _ASPECT_TO_PIXELS = {
-    "16:9": (1792, 1024),
-    "1:1":  (1024, 1024),
-    "3:4":  (1024, 1792),
+    "16:9":  (1792, 1024),
+    "1:1":   (1024, 1024),
+    "3:4":   (1024, 1792),
+    # 小图（缩略图 / 装饰位用，部分海外 API 最低 1024，调用方可在 provider 侧自动放大）
+    "small": (512, 512),
 }
 
 
 class GenerateSlotImageRequest(BaseModel):
     preferred_provider: str | None = None
+    # "normal"（默认）/ "high"（故事板模式：i2i provider 启用最强角色保持档）
+    consistency_strength: str | None = None
 
 
 @router.post("/image-slots/{slot_id}/generate-image")
@@ -775,11 +933,117 @@ async def generate_slot_image(
             raise HTTPException(status_code=402, detail=str(e))
 
     from app.services.imagegen.engine import generate_image
+    from app.services.contest.visual_anchor import (
+        get_or_create_anchor, update_anchor_image_path,
+    )
 
-    prompt = slot.prompt_en or slot.prompt_zh
     negative = slot.negative_words or ""
     w, h = _ASPECT_TO_PIXELS.get(slot.aspect_ratio or "1:1", (1024, 1024))
     preferred = (req.preferred_provider if req else None) or None
+    consistency = (
+        (req.consistency_strength if req else None) or "normal"
+    ).strip().lower()
+    if consistency not in ("normal", "high"):
+        consistency = "normal"
+
+    # ── 视觉锚点：seed lock + reference image ──
+    anchor = await get_or_create_anchor(slot.article_id, db)
+    seed_to_use: int | None = anchor.base_seed if anchor and anchor.base_seed else None
+    ref_image: str | None = (
+        anchor.anchor_image_path
+        if anchor
+        and (anchor.anchor_source or "auto_first") != "disabled"
+        and anchor.anchor_image_path
+        else None
+    )
+    # 把相对路径转成 provider 可消费的形态：
+    #   - 公网 SITE_URL：拼成 https://.../api/v1/imagegen/serve?path=...，让 provider 自己拉
+    #   - dev / 私网 SITE_URL：直接读本地文件转 base64 data URI（Kling/Jimeng 都支持；MJ 不支持，会被 _midjourney 自动忽略）
+    if ref_image and not ref_image.startswith(("http://", "https://", "data:")):
+        from app.core.config import settings as _settings
+        from urllib.parse import urlparse
+        import ipaddress
+        site_url = (
+            getattr(_settings, "site_url", None)
+            or getattr(_settings, "SITE_URL", None)
+            or ""
+        ).rstrip("/")
+
+        def _is_public_site_url(u: str) -> bool:
+            if not u:
+                return False
+            try:
+                host = (urlparse(u).hostname or "").lower()
+            except Exception:
+                return False
+            if not host:
+                return False
+            if host in {"localhost", "0.0.0.0"} or host.endswith((".local", ".lan", ".internal")):
+                return False
+            try:
+                ip = ipaddress.ip_address(host)
+                return not (ip.is_private or ip.is_loopback or ip.is_link_local)
+            except ValueError:
+                # 形如 medcomm.example.com 这类非 IP 域名一律视为公网
+                return True
+
+        if _is_public_site_url(site_url):
+            ref_image = f"{site_url}/api/v1/imagegen/serve?path={ref_image}"
+        else:
+            # 本地 dev / 私网 → 转 data URI 让 provider 直接吃二进制
+            try:
+                from app.services.export.html_docx import image_to_data_uri
+                data_uri = image_to_data_uri(ref_image)
+                if data_uri:
+                    ref_image = data_uri
+                else:
+                    logger.warning(
+                        "锚点图无法转为 data URI（路径无效或读取失败）: %s", ref_image
+                    )
+                    ref_image = None
+            except Exception as _e:
+                logger.warning("锚点图转 base64 失败: %s", _e)
+                ref_image = None
+
+    # ── 选择最终送给图像引擎的 prompt ──
+    # 优先使用经过【风格预设 + 视觉锚点】拼装的 prompt_en / prompt_zh：
+    #   - 中文系 provider（即梦/可灵/文心/万相/Moonshot/GPT Image）优先用 prompt_zh
+    #   - 海外系 provider（DALL-E/SD/FLUX/MJ/ComfyUI/SiliconFlow…）优先用 prompt_en
+    #   - 双向 fallback：所选语言为空时退到另一语言；都没有再退到 intent_text
+    from app.services.contest.prompt_engine import resolve_target_language
+    _lang_pref = resolve_target_language(preferred)
+    if _lang_pref == "zh":
+        prompt = slot.prompt_zh or slot.prompt_en or (slot.intent_text or "").strip()
+    else:
+        # 'en' 与 'both' 都按"英文优先"，与历史行为一致
+        prompt = slot.prompt_en or slot.prompt_zh or (slot.intent_text or "").strip()
+
+    if slot.prompt_en or slot.prompt_zh:
+        prompt_source = (
+            f"prompt_{_lang_pref}(i2i with style)" if ref_image else f"prompt_{_lang_pref}(t2i with anchor)"
+        )
+    else:
+        prompt_source = "intent_text(fallback, no prompt yet)"
+
+    # 诊断日志：方便用户在终端确认锚点是否真的传给了生图引擎
+    if ref_image:
+        ref_kind = (
+            "base64_data_uri" if ref_image.startswith("data:")
+            else "url" if ref_image.startswith(("http://", "https://"))
+            else "local_path"
+        )
+        logger.info(
+            "[visual_anchor] slot=%s article=%s 应用锚点图 (kind=%s, seed=%s, provider=%s, consistency=%s, prompt=%s)",
+            slot.id, slot.article_id, ref_kind, seed_to_use, preferred or "auto", consistency, prompt_source,
+        )
+    else:
+        logger.info(
+            "[visual_anchor] slot=%s article=%s 未应用锚点图 (anchor_source=%s, has_image=%s, prompt=%s)",
+            slot.id, slot.article_id,
+            (anchor.anchor_source if anchor else None),
+            bool(anchor and anchor.anchor_image_path),
+            prompt_source,
+        )
 
     try:
         urls, is_fallback, meta = await generate_image(
@@ -790,6 +1054,9 @@ async def generate_slot_image(
             preferred_provider=preferred,
             negative_prompt=negative,
             skip_style_envelope=True,
+            seed=seed_to_use,
+            reference_image=ref_image,
+            consistency_strength=consistency,
         )
     except Exception as exc:
         if billing_sid and is_saas():
@@ -819,6 +1086,12 @@ async def generate_slot_image(
     await db.commit()
     await db.refresh(slot)
 
+    # 首图生效后自动设为锚点图（仅当 anchor_source=auto_first 且当前为空）
+    try:
+        await update_anchor_image_path(slot.article_id, rel_path, db, only_if_empty=True)
+    except Exception as _e:
+        logger.warning("update anchor image failed: %s", _e)
+
     return {
         "slot": _slot_to_dict(slot),
         "provider": meta.get("provider"),
@@ -836,6 +1109,332 @@ async def get_image_providers():
         if k not in ("comfyui_local_running",)
     )
     return {"providers": providers, "any_available": any_available}
+
+
+# ══════════════════════════════════════════════════════════════
+#  视觉锚点（角色卡 + 风格锁 + Seed）
+# ══════════════════════════════════════════════════════════════
+
+
+class VisualAnchorExtractFromImageRequest(BaseModel):
+    """vision 抽取角色锚点请求体。
+
+    image_path 可选：
+      - 不传：自动取 anchor.anchor_image_path 或文章首张已生成的图
+      - 传：使用指定图片（一般来自前端"全章配图概览"中用户选定的图）
+    merge_mode：
+      - replace（默认）：直接覆盖现有角色
+      - append：在现有角色后追加（按 role 去重，总数 ≤ 5）
+    """
+    image_path: str | None = None
+    merge_mode: str | None = "replace"
+
+
+class VisualAnchorUpdateRequest(BaseModel):
+    characters: list[dict] | None = None
+    style_lock: dict | None = None
+    base_seed: int | None = None
+    anchor_source: str | None = None  # auto_first / manual_pick / disabled
+    anchor_image_path: str | None = None
+
+
+@router.get("/articles/{article_id}/visual-anchor")
+async def get_visual_anchor(article_id: int, db: AsyncSession = Depends(get_db)):
+    """获取文章的视觉锚点配置（不存在时自动创建空记录）。"""
+    art = (
+        await db.execute(select(Article).where(Article.id == article_id))
+    ).scalar_one_or_none()
+    if not art:
+        raise HTTPException(404, "文章不存在")
+
+    from app.services.contest.visual_anchor import (
+        get_or_create_anchor, anchor_to_dict,
+    )
+    anchor = await get_or_create_anchor(article_id, db)
+    return anchor_to_dict(anchor)
+
+
+@router.post("/articles/{article_id}/visual-anchor/extract")
+async def extract_visual_anchor(
+    article_id: int,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """AI 抽取角色卡 + 风格基调（计费 0.6 积分，1h 缓存内同文章不重复扣）。"""
+    art = (
+        await db.execute(select(Article).where(Article.id == article_id))
+    ).scalar_one_or_none()
+    if not art:
+        raise HTTPException(404, "文章不存在")
+
+    from app.core.config import is_saas
+    from app.services.contest.visual_anchor import (
+        extract_visual_anchor_for_article,
+        get_or_create_anchor,
+        anchor_to_dict,
+    )
+    from app.services.credit.pricing import calc_contest_llm_cost
+
+    cost = calc_contest_llm_cost("visual_anchor_extract")
+
+    # 先确保 anchor 记录存在
+    anchor = await get_or_create_anchor(article_id, db)
+
+    billing_sid: str | None = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.service import InsufficientCreditsError
+        user = await get_current_user(request, db)
+        try:
+            billing_sid = await open_billing_session(
+                user.id, "contest_llm", cost, db,
+                business_ref={"action": "visual_anchor_extract", "article_id": article_id},
+            )
+            await db.commit()
+        except InsufficientCreditsError as e:
+            raise HTTPException(status_code=402, detail=str(e))
+
+    try:
+        result = await extract_visual_anchor_for_article(article_id, db, force=False)
+    except Exception:
+        if billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, db, success=False)
+            await db.commit()
+        raise
+
+    if result.get("status") != "ok":
+        if billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, db, success=False)
+            await db.commit()
+        return {**result, "anchor": anchor_to_dict(anchor), "cost": 0.0}
+
+    # 命中缓存：免费返回
+    if result.get("from_cache"):
+        if billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, db, success=False)
+            await db.commit()
+        anchor.characters = result.get("characters") or anchor.characters
+        anchor.style_lock = result.get("style_lock") or anchor.style_lock
+        anchor.last_modified_by = "ai"
+        from datetime import datetime as _dt
+        anchor.auto_extracted_at = _dt.utcnow()
+        await db.commit()
+        await db.refresh(anchor)
+        return {
+            **result,
+            "anchor": anchor_to_dict(anchor),
+            "cost": 0.0,
+        }
+
+    # 写库
+    anchor.characters = result.get("characters") or []
+    anchor.style_lock = result.get("style_lock") or {}
+    anchor.last_modified_by = "ai"
+    from datetime import datetime as _dt
+    anchor.auto_extracted_at = _dt.utcnow()
+    await db.commit()
+    await db.refresh(anchor)
+
+    if billing_sid and is_saas():
+        from app.services.billing.dependency import close_billing_session
+        await close_billing_session(billing_sid, db, success=True, override_cost=cost)
+        await db.commit()
+
+    return {
+        **result,
+        "anchor": anchor_to_dict(anchor),
+        "cost": float(cost),
+    }
+
+
+@router.post("/articles/{article_id}/visual-anchor/extract-from-image")
+async def extract_visual_anchor_from_image_api(
+    article_id: int,
+    req: VisualAnchorExtractFromImageRequest = None,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """用 GPT-4o vision 从已生成图片识别角色 + 风格（计费 0.6 积分）。
+
+    适用场景：
+      - 文章字数太少、文本抽取效果不理想
+      - 用户对首图非常满意，想让"图说了算"，让其它配图复刻这位主角
+      - 多角色图：识别 1~5 个角色作为统一锚点
+    """
+    art = (
+        await db.execute(select(Article).where(Article.id == article_id))
+    ).scalar_one_or_none()
+    if not art:
+        raise HTTPException(404, "文章不存在")
+
+    body = req or VisualAnchorExtractFromImageRequest()
+    merge_mode = (body.merge_mode or "replace").lower()
+    if merge_mode not in ("replace", "append"):
+        merge_mode = "replace"
+
+    from app.core.config import is_saas
+    from app.services.contest.visual_anchor import (
+        extract_visual_anchor_from_image,
+        get_or_create_anchor,
+        anchor_to_dict,
+        merge_characters,
+    )
+    from app.services.credit.pricing import calc_contest_llm_cost
+
+    cost = calc_contest_llm_cost("visual_anchor_extract")
+
+    anchor = await get_or_create_anchor(article_id, db)
+
+    billing_sid: str | None = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user
+        from app.services.billing.dependency import open_billing_session
+        from app.services.credit.service import InsufficientCreditsError
+        user = await get_current_user(request, db)
+        try:
+            billing_sid = await open_billing_session(
+                user.id, "contest_llm", cost, db,
+                business_ref={
+                    "action": "visual_anchor_extract_vision",
+                    "article_id": article_id,
+                    "merge_mode": merge_mode,
+                },
+            )
+            await db.commit()
+        except InsufficientCreditsError as e:
+            raise HTTPException(status_code=402, detail=str(e))
+
+    try:
+        result = await extract_visual_anchor_from_image(
+            article_id, db, image_path=body.image_path
+        )
+    except Exception:
+        if billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, db, success=False)
+            await db.commit()
+        raise
+
+    if result.get("status") != "ok":
+        if billing_sid and is_saas():
+            from app.services.billing.dependency import close_billing_session
+            await close_billing_session(billing_sid, db, success=False)
+            await db.commit()
+        return {**result, "anchor": anchor_to_dict(anchor), "cost": 0.0}
+
+    # 合并 / 覆盖角色卡
+    merged_chars = merge_characters(
+        anchor.characters or [], result.get("characters") or [], mode=merge_mode
+    )
+    anchor.characters = merged_chars
+
+    # 风格锁：append 模式下仅在原值为空时填入；replace 模式下整体覆盖
+    new_style = result.get("style_lock") or {}
+    if merge_mode == "replace":
+        anchor.style_lock = new_style
+    else:
+        cur = anchor.style_lock or {}
+        anchor.style_lock = {
+            "color_palette": cur.get("color_palette") or new_style.get("color_palette", ""),
+            "lighting": cur.get("lighting") or new_style.get("lighting", ""),
+            "art_style_extra": cur.get("art_style_extra") or new_style.get("art_style_extra", ""),
+        }
+
+    anchor.last_modified_by = "ai_vision"
+    from datetime import datetime as _dt
+    anchor.auto_extracted_at = _dt.utcnow()
+    await db.commit()
+    await db.refresh(anchor)
+
+    if billing_sid and is_saas():
+        from app.services.billing.dependency import close_billing_session
+        await close_billing_session(billing_sid, db, success=True, override_cost=cost)
+        await db.commit()
+
+    return {
+        **result,
+        "characters": merged_chars,
+        "anchor": anchor_to_dict(anchor),
+        "cost": float(cost),
+        "merge_mode": merge_mode,
+    }
+
+
+@router.put("/articles/{article_id}/visual-anchor")
+async def update_visual_anchor(
+    article_id: int,
+    req: VisualAnchorUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """用户手动编辑视觉锚点。"""
+    art = (
+        await db.execute(select(Article).where(Article.id == article_id))
+    ).scalar_one_or_none()
+    if not art:
+        raise HTTPException(404, "文章不存在")
+
+    from app.services.contest.visual_anchor import (
+        get_or_create_anchor, anchor_to_dict,
+    )
+    anchor = await get_or_create_anchor(article_id, db)
+
+    if req.characters is not None:
+        cleaned: list[dict] = []
+        for idx, ch in enumerate((req.characters or [])[:5]):
+            if not isinstance(ch, dict):
+                continue
+            cid = str(ch.get("id") or chr(ord("A") + idx))[:4]
+            role = str(ch.get("role") or "").strip()[:30]
+            desc = str(ch.get("description") or "").strip()[:300]
+            try:
+                imp = int(ch.get("importance") or (5 - idx))
+            except Exception:
+                imp = 5 - idx
+            imp = max(1, min(5, imp))
+            if not role or not desc:
+                continue
+            cleaned.append({"id": cid, "role": role, "description": desc, "importance": imp})
+        anchor.characters = cleaned
+
+    if req.style_lock is not None:
+        sl = req.style_lock or {}
+        cleaned_style = {
+            "color_palette": str(sl.get("color_palette", "")).strip()[:80],
+            "lighting": str(sl.get("lighting", "")).strip()[:80],
+            "art_style_extra": str(sl.get("art_style_extra", "")).strip()[:120],
+        }
+        # 三个 value 都为空 → 直接存空 dict，避免 {"key":"","key":"","key":""}
+        # 这种"假空"残留导致 is_configured 永远判为 True。
+        if not any(cleaned_style.values()):
+            anchor.style_lock = {}
+        else:
+            anchor.style_lock = cleaned_style
+
+    if req.base_seed is not None:
+        try:
+            seed_val = int(req.base_seed)
+            if seed_val <= 0:
+                seed_val = 1
+            anchor.base_seed = min(seed_val, 2_147_483_647)
+        except Exception:
+            pass
+
+    if req.anchor_source is not None:
+        if req.anchor_source in ("auto_first", "manual_pick", "manual_upload", "disabled"):
+            anchor.anchor_source = req.anchor_source
+
+    if req.anchor_image_path is not None:
+        # 允许显式置空（清除锚点图）
+        anchor.anchor_image_path = req.anchor_image_path or None
+
+    anchor.last_modified_by = "user"
+    await db.commit()
+    await db.refresh(anchor)
+    return anchor_to_dict(anchor)
 
 
 @router.get("/articles/{article_id}/export-confirmation")
@@ -882,27 +1481,42 @@ async def upload_slot_image(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """上传配图到指定槽位"""
+    """上传配图到指定槽位。
+
+    保存路径与 AI 生成保持一致：相对路径 ``images/YYYY/MM/contest_xxx.ext``，
+    便于前端 ``/api/v1/imagegen/serve?path=...`` 直接访问。
+    历史版本曾把绝对路径写入 image_path，会导致 serve_image 返回 404，
+    现已统一为相对路径。
+    """
     result = await db.execute(select(ArticleImageSlot).where(ArticleImageSlot.id == slot_id))
     slot = result.scalar_one_or_none()
     if not slot:
         raise HTTPException(404, "配图槽位不存在")
 
     from app.core.config import settings
+    from datetime import datetime
+    from pathlib import Path
     import uuid
 
-    ext = os.path.splitext(file.filename or "img.jpg")[1] or ".jpg"
-    filename = f"contest_{slot.article_id}_{slot_id}_{uuid.uuid4().hex[:8]}{ext}"
-    save_dir = os.path.join(settings.app_data_root, "images", "contest")
-    os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, filename)
+    raw_ext = os.path.splitext(file.filename or "img.jpg")[1].lower()
+    if raw_ext not in (".jpg", ".jpeg", ".png", ".webp"):
+        raw_ext = ".jpg"
+
+    now = datetime.utcnow()
+    rel_dir = Path("images") / f"{now.year}" / f"{now.month:02d}"
+    abs_dir = Path(settings.app_data_root) / rel_dir
+    abs_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"contest_{slot.article_id}_{slot_id}_{uuid.uuid4().hex[:8]}{raw_ext}"
+    rel_path = (rel_dir / filename).as_posix()
+    abs_path = abs_dir / filename
 
     content = await file.read()
-    with open(save_path, "wb") as f:
-        f.write(content)
+    abs_path.write_bytes(content)
 
-    slot.image_path = save_path
+    slot.image_path = rel_path
     slot.image_status = "uploaded"
+    slot.image_provider = "manual_upload"
     await db.commit()
     await db.refresh(slot)
     return _slot_to_dict(slot)

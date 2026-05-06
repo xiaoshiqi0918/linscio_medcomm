@@ -8,8 +8,9 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import TYPE_CHECKING, AsyncIterator
+from typing import TYPE_CHECKING, Any, AsyncIterator
 
+import httpx
 from openai import AsyncOpenAI
 
 from app.services.llm.manager import get_domestic_base_url
@@ -34,6 +35,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger("uvicorn.error")
 
 
+def _openai_http_client_kwargs() -> dict[str, Any]:
+    """可选：忽略系统环境变量中的 HTTP(S)_PROXY，避免本机代理拦截/403 导致 Connection error。
+
+    设置 MEDCOMM_OPENAI_IGNORE_SYSTEM_PROXY=1（或 true/yes/on）后生效，需重启后端。
+    """
+    v = os.environ.get("MEDCOMM_OPENAI_IGNORE_SYSTEM_PROXY", "").strip().lower()
+    if v not in ("1", "true", "yes", "on"):
+        return {}
+    # 与长耗时 LLM 请求匹配；trust_env=False 不读取系统代理
+    timeout = httpx.Timeout(connect=30.0, read=180.0, write=60.0, pool=5.0)
+    return {
+        "http_client": httpx.AsyncClient(trust_env=False, timeout=timeout),
+    }
+
+
 def _strip_provider_prefix(model: str) -> str:
     """OpenRouter 模型名需要去掉 'openrouter/' 前缀，如 openrouter/openai/gpt-4o-mini → openai/gpt-4o-mini"""
     if model.startswith("openrouter/"):
@@ -45,6 +61,7 @@ def _strip_provider_prefix(model: str) -> str:
 
 def get_client(model: str | None = None) -> AsyncOpenAI:
     """根据 model 选择 API 端点；None 时用默认 OpenAI（或 OPENAI_BASE_URL 指定的代理）"""
+    _hc = _openai_http_client_kwargs()
     if model:
         base_url, api_key = get_domestic_base_url(model)
         if base_url and api_key:
@@ -56,8 +73,9 @@ def get_client(model: str | None = None) -> AsyncOpenAI:
                         "HTTP-Referer": "https://linscio.medcomm.local",
                         "X-Title": "LinScio MedComm",
                     },
+                    **_hc,
                 )
-            return AsyncOpenAI(api_key=api_key, base_url=base_url)
+            return AsyncOpenAI(api_key=api_key, base_url=base_url, **_hc)
     openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not openai_key:
         raise RuntimeError(
@@ -71,8 +89,8 @@ def get_client(model: str | None = None) -> AsyncOpenAI:
         "https://api.openai.com",
         "https://api.openai.com/v1",
     ):
-        return AsyncOpenAI(api_key=openai_key, base_url=openai_base_url)
-    return AsyncOpenAI(api_key=openai_key)
+        return AsyncOpenAI(api_key=openai_key, base_url=openai_base_url, **_hc)
+    return AsyncOpenAI(api_key=openai_key, **_hc)
 
 
 def _is_anthropic(model: str) -> bool:
@@ -117,16 +135,21 @@ async def chat_completion(
         else:
             result = await _openai_chat_once(messages, model, temperature=temperature)
         latency = int((time.monotonic() - t0) * 1000)
-        tokens_in = sum(len(m.get("content", "")) // 4 for m in messages)
-        tokens_out = len(result) // 4
+        # 估算（兜底）：4 chars ≈ 1 token；中文偏低，仅在 API 未返 usage 时使用
+        tokens_in_est = sum(len(m.get("content", "")) // 4 for m in messages)
+        tokens_out_est = len(result) // 4
+        # 真值：从 _last_usage 取 OpenAI/Anthropic 服务端 tokenizer 给的精确值
+        usage = get_last_usage()
         if _log_task_type:
             from app.services.llm.manager import log_llm_call
             await log_llm_call(
                 user_id=_log_user_id,
                 task_type=_log_task_type,
                 model=model,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
+                tokens_in=tokens_in_est,
+                tokens_out=tokens_out_est,
+                tokens_in_reported=usage.get("prompt_tokens"),
+                tokens_out_reported=usage.get("completion_tokens"),
                 latency_ms=latency,
                 status="success",
             )
@@ -227,7 +250,12 @@ async def _anthropic_chat_once(
     }
     if temperature is not None:
         kwargs["temperature"] = temperature
+    _last_usage["prompt_tokens"] = None
+    _last_usage["completion_tokens"] = None
     r = await client.messages.create(**kwargs)
+    if hasattr(r, "usage") and r.usage:
+        _last_usage["prompt_tokens"] = getattr(r.usage, "input_tokens", None)
+        _last_usage["completion_tokens"] = getattr(r.usage, "output_tokens", None)
     return (r.content[0].text if r.content else "") or ""
 
 
@@ -259,9 +287,19 @@ async def _anthropic_chat_stream(
     }
     if temperature is not None:
         kwargs["temperature"] = temperature
+    _last_usage["prompt_tokens"] = None
+    _last_usage["completion_tokens"] = None
     async with client.messages.stream(**kwargs) as stream_obj:
         async for t in stream_obj.text_stream:
             yield t
+        # stream 完成后 final_message 才有 usage
+        try:
+            final = await stream_obj.get_final_message()
+            if final and getattr(final, "usage", None):
+                _last_usage["prompt_tokens"] = getattr(final.usage, "input_tokens", None)
+                _last_usage["completion_tokens"] = getattr(final.usage, "output_tokens", None)
+        except Exception:
+            pass
 
 
 # ══════════════════════════════════════════════════════════════

@@ -1,5 +1,5 @@
 <template>
-  <div class="medcomm-editor">
+  <div class="medcomm-editor" :data-format="contentFormat || ''">
     <EditorToolbar :editor="editor || null" :content-format="contentFormat" />
     <editor-content :editor="editor" class="prose" />
     <bubble-menu
@@ -11,29 +11,28 @@
       class="corpus-bubble-root"
     >
       <div class="corpus-float-bar" @mousedown.prevent>
-        <div class="corpus-float-title">收录到个人语料</div>
-        <div class="corpus-float-preview" :title="selectionPreviewFull">{{ selectionPreviewShort }}</div>
-        <div class="corpus-float-row">
-          <span class="corpus-float-label">类型</span>
-          <el-select v-model="captureKind" size="small" class="corpus-float-select">
-            <el-option label="倾向表述" value="prefer" />
-            <el-option label="避免用语" value="avoid" />
-            <el-option label="备忘" value="note" />
-          </el-select>
+        <div class="corpus-float-preview" :title="selectionPreviewFull">
+          <span class="corpus-float-tag">收录</span>{{ selectionPreviewShort }}
         </div>
         <div class="corpus-float-row">
+          <el-select v-model="captureKind" size="small" class="corpus-float-select">
+            <el-option label="倾向" value="prefer" />
+            <el-option label="避免" value="avoid" />
+            <el-option label="备忘" value="note" />
+          </el-select>
           <el-input
             v-model="captureExtra"
             size="small"
-            placeholder="希望写法或说明（可选）"
-            clearable
+            placeholder="说明（可选）"
             class="corpus-float-input"
           />
-        </div>
-        <div class="corpus-float-actions">
-          <el-button type="primary" size="small" :loading="captureLoading" @click="submitCorpusCapture">
-            收录
-          </el-button>
+          <el-button
+            type="primary"
+            size="small"
+            :loading="captureLoading"
+            class="corpus-float-submit"
+            @click="submitCorpusCapture"
+          >收录</el-button>
         </div>
       </div>
     </bubble-menu>
@@ -83,7 +82,7 @@ const selectionPreviewShort = ref('')
 const corpusBubbleTippy = {
   duration: [120, 80],
   placement: 'top' as const,
-  maxWidth: 340,
+  maxWidth: 320,
   appendTo: () => document.body,
   zIndex: 5000,
   interactive: true,
@@ -105,7 +104,7 @@ function corpusBubbleShouldShow({
   const text = state.doc.textBetween(from, to, '\n').trim()
   if (text.length < 1 || text.length > CORPUS_SELECTION_MAX) return false
   selectionPreviewFull.value = text
-  selectionPreviewShort.value = text.length > 56 ? `${text.slice(0, 54)}…` : text
+  selectionPreviewShort.value = text.length > 28 ? `${text.slice(0, 26)}…` : text
   return true
 }
 
@@ -540,6 +539,28 @@ watch(
   margin: 0.5em 0;
 }
 
+/* 叙事/正文类格式：段落默认首行缩进 2em，与 docx / 海报模板保持一致 */
+.medcomm-editor[data-format="article"] :deep(.prose-editor p),
+.medcomm-editor[data-format="contest_article"] :deep(.prose-editor p),
+.medcomm-editor[data-format="story"] :deep(.prose-editor p),
+.medcomm-editor[data-format="debunk"] :deep(.prose-editor p),
+.medcomm-editor[data-format="qa_article"] :deep(.prose-editor p),
+.medcomm-editor[data-format="research_read"] :deep(.prose-editor p),
+.medcomm-editor[data-format="patient_handbook"] :deep(.prose-editor p),
+.medcomm-editor[data-format="quiz_article"] :deep(.prose-editor p) {
+  text-indent: 2em;
+}
+
+/* 例外：标题、列表、引用、首段、显式取消缩进的段落 不缩进 */
+.medcomm-editor :deep(.prose-editor p[data-indent="false"]),
+.medcomm-editor :deep(.prose-editor p[style*="text-indent:0"]),
+.medcomm-editor :deep(.prose-editor p[style*="text-indent: 0"]),
+.medcomm-editor :deep(.prose-editor p:first-child),
+.medcomm-editor :deep(.prose-editor blockquote p),
+.medcomm-editor :deep(.prose-editor li p) {
+  text-indent: 0;
+}
+
 .prose :deep(.prose-editor h1) {
   font-size: 1.5rem;
   font-weight: 600;
@@ -645,48 +666,69 @@ watch(
 }
 
 .corpus-float-bar {
-  min-width: 260px;
-  max-width: 320px;
-  padding: 10px 12px;
+  min-width: 240px;
+  max-width: 300px;
+  padding: 6px 8px;
   background: #fff;
   border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
-}
-.corpus-float-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #374151;
-  margin-bottom: 6px;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
 }
 .corpus-float-preview {
   font-size: 11px;
   color: #6b7280;
-  line-height: 1.4;
-  max-height: 3.6em;
+  line-height: 1.35;
+  max-height: 1.5em;
   overflow: hidden;
-  margin-bottom: 8px;
-  word-break: break-word;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.corpus-float-tag {
+  display: inline-block;
+  flex-shrink: 0;
+  padding: 0 5px;
+  height: 16px;
+  line-height: 16px;
+  border-radius: 3px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 10px;
+  font-weight: 600;
 }
 .corpus-float-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.corpus-float-label {
-  font-size: 12px;
-  color: #6b7280;
-  flex-shrink: 0;
+  gap: 5px;
 }
 .corpus-float-select {
-  flex: 1;
+  width: 64px;
+  flex-shrink: 0;
 }
 .corpus-float-input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
 }
-.corpus-float-actions {
-  display: flex;
-  justify-content: flex-end;
+.corpus-float-submit {
+  flex-shrink: 0;
+  padding-left: 9px;
+  padding-right: 9px;
+}
+.corpus-float-bar :deep(.el-input__wrapper),
+.corpus-float-bar :deep(.el-select__wrapper) {
+  padding: 0 6px;
+  min-height: 24px;
+}
+.corpus-float-bar :deep(.el-input__inner),
+.corpus-float-bar :deep(.el-select__placeholder) {
+  font-size: 12px;
+}
+.corpus-float-bar :deep(.el-button--small) {
+  padding: 4px 10px;
+  font-size: 12px;
+  height: 24px;
 }
 </style>

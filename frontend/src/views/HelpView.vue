@@ -353,9 +353,18 @@ const aiDetailRules = [
   // 文献筛选
   { operation: '文献 AI 筛选', model: 'DeepSeek', inputRule: '按文献篇数：≤10→0.5 / ≤20→1 / ≤30→1.5 / ≤50→2 / >50→3', outputRule: '—（筛选结果不产生长文本输出）', example: '≈ 0.5~3' },
   // 检索词智能设计
-  { operation: '检索词智能设计', model: 'DeepSeek', inputRule: '固定费用', outputRule: '—', example: '0.1' },
+  { operation: '检索词智能设计', model: 'DeepSeek', inputRule: '固定费用', outputRule: '—', example: '0.2' },
   // 配图 AI 提示词
-  { operation: '配图 AI 提示词', model: 'DeepSeek', inputRule: '固定费用（生成或优化每次）', outputRule: '—', example: '0.2' },
+  { operation: '配图 AI 提示词', model: 'DeepSeek', inputRule: '固定费用（生成或优化每次）', outputRule: '—', example: '0.4' },
+  // 标题生成
+  { operation: '标题生成', model: 'DeepSeek', inputRule: '固定费用', outputRule: '—', example: '0.2' },
+  // 图像生成
+  { operation: '图像生成（文生图 / 图生图）', model: '即梦 / 可灵 / DALL·E / Midjourney', inputRule: '按张数：每张固定 2 积分', outputRule: '—', example: '2/张' },
+  // 参赛 LLM 辅助
+  { operation: '参赛·建议画意', model: 'DeepSeek', inputRule: '固定费用', outputRule: '—', example: '0.3' },
+  { operation: '参赛·生成提示词', model: 'DeepSeek', inputRule: '固定费用', outputRule: '—', example: '0.4' },
+  { operation: '参赛·解析公告', model: 'DeepSeek', inputRule: '固定费用', outputRule: '—', example: '0.3' },
+  { operation: '参赛·AI 智能扩写画意', model: 'GPT-4o（标准档）', inputRule: '固定费用（24h 内同画意复用缓存不扣分）', outputRule: '—', example: '0.6' },
 ]
 
 function aiDetailSpan({ row, columnIndex }: { row: any; column: any; rowIndex: number; columnIndex: number }) {
@@ -372,7 +381,7 @@ const otherCostRules = [
 ]
 
 const estimateExample = [
-  { step: '1', operation: '检索词智能设计', model: 'DeepSeek', detail: '输入主题描述，AI 自动生成 PubMed 检索策略', cost: '0.1' },
+  { step: '1', operation: '检索词智能设计', model: 'DeepSeek', detail: '输入主题描述，AI 自动生成 PubMed 检索策略', cost: '0.2' },
   { step: '2', operation: '文献摘要分析 ×3', model: 'Kimi K2.5', detail: '3 篇 PubMed 摘要（输入 ~3K + 输出 ~9K 字符）', cost: '≈ 3' },
   { step: '3', operation: '一键生成全文', model: 'GPT-4o', detail: '2000 字图文（含引言/正文/结语 + 文献 Embedding）', cost: '≈ 5~8' },
   { step: '4', operation: '带水印导出', model: '—', detail: 'HTML / DOCX 格式导出', cost: '免费' },
@@ -380,7 +389,7 @@ const estimateExample = [
   { step: '5', operation: 'AI 翻译文献 ×3', model: 'DeepSeek', detail: '翻译 3 篇摘要（输入 ~3K + 输出 ~2K 字符）', cost: '≈ 0.5~1' },
   { step: '6', operation: 'AI 辅助写作 ×2', model: 'GPT-4o', detail: '选中段落续写/改写（输入 ~0.5K + 输出 ~0.5K ×2）', cost: '≈ 0.6' },
   { step: '7', operation: '润色优化 ×1', model: 'GPT-4o', detail: '对正文章节做一次润色（输入 ~1K + 输出 ~0.8K）', cost: '≈ 1.5' },
-  { step: '8', operation: '配图 AI 提示词 ×2', model: 'DeepSeek', detail: '为 2 张配图生成/优化提示词', cost: '0.4' },
+  { step: '8', operation: '配图 AI 提示词 ×2', model: 'DeepSeek', detail: '为 2 张配图生成/优化提示词', cost: '0.8' },
   { step: '9', operation: '无水印导出', model: '—', detail: '去除水印的正式版导出', cost: '3' },
 ]
 

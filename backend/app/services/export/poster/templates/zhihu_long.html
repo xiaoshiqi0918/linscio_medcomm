@@ -1,0 +1,197 @@
+{% extends "_base.html" %}
+{% import "_macros.html" as M %}
+
+{% block extra_styles %}
+<style>
+  /* ── zhihu_long：知乎长文极简版式 ────────────── */
+  body {
+    background: #f6f6f6;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: #1a1a1a;
+  }
+  .page {
+    background: #fff;
+    max-width: 690px;
+    margin: 0 auto;
+    padding: 32px 36px 40px;
+  }
+
+  /* 头部：极简 */
+  .cover {
+    margin-bottom: 28px;
+  }
+  .cover-hero { display: none; }
+  .cover-overlay {
+    position: relative;
+    color: #1a1a1a;
+  }
+  .cover-badge {
+    display: inline-block;
+    font-size: 12px;
+    color: #0284c7;
+    background: transparent !important;
+    border: none;
+    padding: 0;
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+  .cover-badge::before {
+    content: '#';
+    margin-right: 2px;
+  }
+  .cover-title {
+    font-size: 26px;
+    font-weight: 700;
+    margin: 0 0 12px;
+    line-height: 1.4;
+    color: #1a1a1a;
+    letter-spacing: 0;
+  }
+  .cover-subtitle {
+    font-size: 15px;
+    color: #4b5563;
+    margin-bottom: 14px;
+    line-height: 1.5;
+  }
+  .cover-meta {
+    font-size: 13px;
+    color: #8590a6;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+
+  /* 题图（如果有） */
+  .hero-image {
+    margin: 0 -12px 24px;
+    overflow: hidden;
+    border-radius: 4px;
+  }
+  .hero-image img {
+    width: 100%;
+    display: block;
+  }
+
+  /* 正文 */
+  .article-body {
+    font-size: 16px;
+    line-height: 1.8;
+    color: #1a1a1a;
+  }
+  .article-body p {
+    margin: 0.85em 0;
+    color: #1a1a1a;
+  }
+
+  .section { margin-top: 1.4em; }
+  .section:first-child { margin-top: 0; }
+  .section-title {
+    font-size: 19px;
+    font-weight: 700;
+    margin: 1.6em 0 0.7em;
+    color: #1a1a1a;
+    line-height: 1.4;
+  }
+  .section-body h3 {
+    font-size: 16px;
+    color: #1a1a1a;
+    margin: 1.2em 0 0.4em;
+    font-weight: 600;
+  }
+  .section-body strong { color: #1a1a1a; font-weight: 600; }
+  .section-body em { font-style: italic; color: #4b5563; }
+  .section-body a { color: #0284c7; }
+  .section-body ul, .section-body ol {
+    padding-left: 1.6em;
+    margin: 0.6em 0;
+  }
+  .section-body li { margin: 0.4em 0; }
+
+  /* 引用：知乎风 */
+  .section-body blockquote {
+    margin: 1.2em 0;
+    padding: 0 1.2em;
+    border-left: 3px solid #0284c7;
+    color: #4b5563;
+    font-size: 15px;
+    background: transparent;
+  }
+
+  /* 配图：极简留白 */
+  .figure { margin: 2em -12px; }
+  .figure img {
+    max-width: 100%;
+    border-radius: 4px;
+    box-shadow: none;
+  }
+  .figure figcaption {
+    font-size: 13px;
+    color: #8590a6;
+    margin-top: 0.6em;
+    text-align: center;
+    font-style: normal;
+  }
+
+  /* 参考文献：编号化 */
+  .references-block {
+    margin-top: 3em;
+    padding-top: 1.6em;
+    border-top: 1px solid #f0f0f0;
+  }
+  .references-block .section-title { font-size: 17px; }
+  .references-list {
+    font-size: 14px;
+    color: #4b5563;
+    padding-left: 1.6em;
+    line-height: 1.7;
+  }
+  .references-list li { margin: 0.4em 0; }
+
+  /* AI 声明 */
+  .ai-footer {
+    margin-top: 2.5em;
+    padding: 1em 1.2em;
+    background: #f6f8fa;
+    border-radius: 6px;
+    font-size: 13px;
+    color: #6b7280;
+    border-left: 3px solid #d1d5db;
+  }
+  .ai-footer__label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.3em;
+    color: #374151;
+  }
+
+  @media print {
+    body { background: #fff; }
+    .page { padding: 24mm 18mm; }
+    .figure { page-break-inside: avoid; }
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="poster-doc">
+  <div class="page page--hero">
+    {{ M.render_hero(meta, hero, '#0284c7') }}
+    {% if hero and hero.image_data_uri %}
+      <div class="hero-image">
+        <img src="{{ hero.image_data_uri }}" alt="{{ hero.intent_text|e }}" />
+      </div>
+    {% endif %}
+  </div>
+  <div class="page page--body">
+    <div class="article-body">
+      {% for sec in sections %}
+        {{ M.render_section(sec, slots_at_top=false) }}
+      {% endfor %}
+      {{ M.render_references(references) }}
+      {{ M.render_ai_declaration(meta) }}
+    </div>
+  </div>
+</div>
+{% endblock %}

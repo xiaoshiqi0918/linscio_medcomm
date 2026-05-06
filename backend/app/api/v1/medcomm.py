@@ -645,6 +645,8 @@ async def export_article_route(
         image_slots: list | None = None,
         section_id_to_type: dict | None = None,
         contest_pack: object | None = None,
+        json_parts: list | None = None,
+        ref_lines: list[str] | None = None,
     ) -> tuple[bytes, str, str]:
         """各章节合并后的通用导出"""
         cf = getattr(article, "content_format", None) or "article"
@@ -655,26 +657,50 @@ async def export_article_route(
         else:
             base_name = (article.topic or "article").replace("/", "-")
 
-        hide_headings = cf == "article"
-
         filtered = [
             (t, b, st) for t, b, st in parts
             if not _skip_article_legacy_intro(cf, st) and b.strip()
         ]
 
+        # 单章合并模式：编辑器里的整篇内容只存在一个 section 里（save-full-content 的预期形态）
+        # 此时不再把章节标题包到正文外层，避免出现"导言"H1 包住整篇的诡异输出
+        single_merged_mode = False
+        if json_parts:
+            _populated = [
+                (t, cj, st) for t, cj, st in json_parts
+                if not _skip_article_legacy_intro(cf, st)
+                and cj and (cj.get("content") or [])
+            ]
+            if len(_populated) == 1:
+                single_merged_mode = True
+        elif len(filtered) == 1:
+            single_merged_mode = True
+
+        hide_headings = (cf == "article") or single_merged_mode
+
         if image_slots and section_id_to_type:
+            from app.services.export.html_docx import image_to_data_uri as _img_to_uri
             type_to_slots: dict[str, list] = {}
             for sl in image_slots:
                 stype = section_id_to_type.get(sl.section_id, "__article__") if sl.section_id else "__article__"
                 type_to_slots.setdefault(stype, []).append(sl)
+            # md / html 都使用 ![](data:...) 标记，便于 to_html_with_images 渲染 <img>；
+            # 其它纯文本格式（txt/pdf 兜底）保留 [配图·xxx] 占位文字。
+            embed_md_images = export_fmt in ("md", "html")
             new_filtered = []
             for t, b, st in filtered:
                 slots_here = type_to_slots.get(st, [])
                 if slots_here:
-                    img_lines = []
+                    img_lines: list[str] = []
                     for sl in slots_here:
                         status = "已上传" if sl.image_status == "uploaded" else "待配图"
-                        desc = sl.intent_text or "（未填写画意）"
+                        desc = (sl.intent_text or "（未填写画意）").strip()
+                        if embed_md_images and getattr(sl, "image_path", None):
+                            data_uri = _img_to_uri(sl.image_path)
+                            if data_uri:
+                                img_lines.append(f"\n![{desc}]({data_uri})")
+                                continue
+                        # 兜底：保留原有占位文本（图片不存在 / 其它格式）
                         img_lines.append(f"\n[配图·{status}] {desc}")
                     b = b.rstrip() + "\n\n" + "\n".join(img_lines)
                 new_filtered.append((t, b, st))
@@ -709,27 +735,23 @@ async def export_article_route(
             plain_body += "\n\n" + strip_markdown(refs_text)
 
         if export_fmt == "html":
-            html = html_docx.to_html(article, plain_body)
+            # 当存在 image_slots 时，filtered 里已含 ![](data:...) 标记 → 走嵌图渲染
+            if image_slots:
+                html = html_docx.to_html_with_images(article, md_body)
+            else:
+                html = html_docx.to_html(article, plain_body)
             return html.encode("utf-8"), "text/html; charset=utf-8", f"{base_name}.html"
         if export_fmt == "docx":
             try:
-                if hide_headings:
-                    docx_parts = [("", strip_markdown(b)) for _, b, _ in filtered]
-                else:
-                    docx_parts = [(t, strip_markdown(b)) for t, b, _ in filtered]
-                if refs_text:
-                    docx_parts.append(("参考文献", strip_markdown(refs_text)))
-
                 font_cfg = None
                 layout_pref = None
+                ai_decl = ""
                 if cf == "contest_article":
                     from app.services.export.contest_export import (
                         build_ai_declaration_text,
                         get_contest_font_config,
                     )
-                    ai_decl = build_ai_declaration_text(getattr(article, 'ai_declaration', None))
-                    if ai_decl:
-                        docx_parts.append(("", ai_decl))
+                    ai_decl = build_ai_declaration_text(getattr(article, 'ai_declaration', None)) or ""
                     font_cfg = get_contest_font_config(article, contest_pack=contest_pack)
                     if contest_pack:
                         layout_pref = getattr(contest_pack, 'layout_preference', None)
@@ -737,9 +759,45 @@ async def export_article_route(
                 _docx_image_map: dict[int, list] = {}
                 if image_slots and section_id_to_type:
                     for sl in image_slots:
-                        idx_key = sl.section_id or 0
-                        _docx_image_map.setdefault(idx_key, []).append(sl)
+                        if sl.section_id is None:
+                            continue
+                        _docx_image_map.setdefault(sl.section_id, []).append(sl)
 
+                # 优先用 TipTap JSON 渲染（保留段落 / 标题 / 列表 / 加粗等格式）
+                if json_parts:
+                    cf_local = getattr(article, "content_format", None) or "article"
+                    filtered_json = [
+                        (t, cj, st) for t, cj, st in json_parts
+                        if not _skip_article_legacy_intro(cf_local, st) and cj
+                    ]
+                    trailing: list[str] = []
+                    if ai_decl:
+                        trailing.append(ai_decl)
+                    if is_saas() and watermark:
+                        trailing.append(_DISCLAIMER_TEXT)
+                    buf, fn = html_docx.to_docx_from_json(
+                        article,
+                        filtered_json,
+                        references=ref_lines or None,
+                        image_slots_by_section_id=_docx_image_map if _docx_image_map else None,
+                        section_id_to_type=section_id_to_type if _docx_image_map else None,
+                        font_config=font_cfg,
+                        layout_preference=layout_pref,
+                        trailing_paragraphs=trailing or None,
+                        hide_section_headings=hide_headings,
+                        base_name=base_name,
+                    )
+                    return buf, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", fn
+
+                # 兜底：沿用旧的扁平文本路径（json_parts 缺失时）
+                if hide_headings:
+                    docx_parts = [("", strip_markdown(b)) for _, b, _ in filtered]
+                else:
+                    docx_parts = [(t, strip_markdown(b)) for t, b, _ in filtered]
+                if refs_text:
+                    docx_parts.append(("参考文献", strip_markdown(refs_text)))
+                if ai_decl:
+                    docx_parts.append(("", ai_decl))
                 buf, fn = html_docx.to_docx(
                     article, docx_parts, font_config=font_cfg,
                     image_slots=_docx_image_map if _docx_image_map else None,
@@ -841,11 +899,36 @@ async def export_article_route(
                     .where(ArticleSection.article_id == article_id)
                 )
                 sec_id_to_type = {r[0]: r[1] for r in _sec_rows.fetchall()}
+
+            # 仅在 docx 路径需要 TipTap JSON / 结构化参考文献，避免无谓 IO
+            json_parts_for_docx = None
+            ref_lines_for_docx: list[str] | None = None
+            if use_fmt == "docx":
+                from app.services.export.utils import (
+                    load_article_sections_json,
+                    load_bound_references,
+                )
+                _, json_parts_for_docx = await load_article_sections_json(article_id, db)
+                ref_lines_for_docx = await load_bound_references(article_id, db) or []
+                ext_result = await db.execute(
+                    select(ArticleExternalReference)
+                    .where(ArticleExternalReference.article_id == article_id)
+                    .order_by(ArticleExternalReference.id.asc())
+                )
+                ext_refs = ext_result.scalars().all()
+                offset = len(ref_lines_for_docx)
+                for j, r in enumerate(ext_refs, 1):
+                    ref_lines_for_docx.append(
+                        f"[{offset + j}] {CitationFormatter.format_external_ref(r)}"
+                    )
+
             content, media_type, filename = _merged_export(
                 article, parts, use_fmt, refs_text=refs_text,
                 image_slots=contest_image_slots,
                 section_id_to_type=sec_id_to_type,
                 contest_pack=_contest_pack_obj,
+                json_parts=json_parts_for_docx,
+                ref_lines=ref_lines_for_docx,
             )
             return Response(content=content, media_type=media_type, headers={
                 "Content-Disposition": attachment_content_disposition(filename),
@@ -874,6 +957,542 @@ async def export_article_route(
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ════════════════════════════════════════════════════════════════
+#  海报模式导出（HTML 预览 + PDF 下载）
+# ════════════════════════════════════════════════════════════════
+
+@router.get("/poster-templates")
+async def list_poster_templates():
+    """列出所有可用的海报模板。供前端模板选择器使用。"""
+    from app.services.export.poster import list_templates
+    return {"items": list_templates()}
+
+
+@router.get("/articles/{article_id}/poster")
+async def render_poster(
+    article_id: int,
+    template: str = Query("contest_pro", description="模板 ID"),
+    fmt: str = Query("html", alias="format", description="html / pdf"),
+    first_author: str | None = Query(None, description="第一作者，留空隐藏"),
+    second_author: str | None = Query(None, description="第二作者，留空隐藏"),
+    corresponding_author: str | None = Query(None, description="通讯作者，留空隐藏"),
+    affiliation: str | None = Query(None, description="单位（覆盖 article.affiliation；留空用文章默认）"),
+    include_references: bool = Query(True, description="是否在文末展示参考文献"),
+    editable: bool = Query(False, description="是否注入预览页内联编辑器（仅 HTML 模式生效）"),
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """海报模式渲染：HTML 预览（前端 iframe）或 PDF 下载。
+
+    - HTML：免费（无水印），便于在前端实时预览。
+    - PDF：和常规 PDF 导出同等扣费（带水印免费 / 无水印 3 积分）。
+    - first_author / second_author / corresponding_author / affiliation：
+      用户在导出对话框里可选填的作者元信息，模板按"角色 · 姓名"渲染。
+    - include_references：False 时文末隐藏参考文献块。
+    """
+    from app.services.export.poster import (
+        render_html as _poster_render_html,
+        render_pdf as _poster_render_pdf,
+        render_docx as _poster_render_docx,
+        PosterRenderError,
+    )
+    from app.services.export.utils import load_article_sections
+    from app.utils.content_disposition import attachment_content_disposition
+    from fastapi.responses import Response
+
+    fmt_norm = (fmt or "html").lower().strip()
+    if fmt_norm not in ("html", "pdf", "docx"):
+        raise HTTPException(400, "format 仅支持 html / pdf / docx")
+
+    # 加载基础数据
+    try:
+        article, parts = await load_article_sections(article_id, db)
+    except ValueError as e:
+        raise HTTPException(404 if str(e) == "Article not found" else 500, str(e))
+
+    # 收集 section content_json + 配图 slot
+    article_obj_result = await db.execute(
+        select(Article).where(Article.id == article_id, Article.deleted_at.is_(None))
+    )
+    article_obj = article_obj_result.scalar_one_or_none()
+    if not article_obj:
+        raise HTTPException(404, "Article not found")
+
+    sections_result = await db.execute(
+        select(ArticleSection).where(ArticleSection.article_id == article_id)
+        .order_by(ArticleSection.order_num)
+    )
+    sections = sections_result.scalars().all()
+    article_obj.sections = sections  # 注入给 renderer 用
+
+    platform = (article_obj.platform or "wechat").lower()
+    section_ids = [s.id for s in sections]
+    content_rows: list[ArticleContent] = []
+    if section_ids:
+        cont_result = await db.execute(
+            select(ArticleContent)
+            .where(
+                ArticleContent.section_id.in_(section_ids),
+                ArticleContent.is_current == True,
+            )
+        )
+        content_rows = list(cont_result.scalars().all())
+    content_by_section: dict[int, list[ArticleContent]] = {}
+    for c in content_rows:
+        content_by_section.setdefault(c.section_id, []).append(c)
+
+    section_parts: list[tuple[str, dict | None, str]] = []
+    for sec in sections:
+        cands = content_by_section.get(sec.id, [])
+        c = next((x for x in cands if x.platform == platform), None) \
+            or next((x for x in cands if x.platform is None), cands[0] if cands else None)
+        cj = None
+        if c and c.content_json:
+            try:
+                cj = json.loads(c.content_json)
+            except Exception:
+                cj = None
+        # 注意：即便 cj 为空也要 append，让 build_render_context 能感知所有
+        # 章节，从而把每节的配图都挂上（合并视图下其他章节常 cj=None，但仍
+        # 可能有图）。renderer 内部会跳过 body 为空且 slots 也为空的章节。
+        section_parts.append((sec.title or sec.section_type, cj, sec.section_type or ""))
+
+    # 配图 slot（参赛 / 文章 / 患者手册都能用）
+    image_slots: list = []
+    try:
+        from app.models.article_image_slot import ArticleImageSlot
+        slot_result = await db.execute(
+            select(ArticleImageSlot)
+            .where(ArticleImageSlot.article_id == article_id)
+            .order_by(ArticleImageSlot.section_id, ArticleImageSlot.order_num)
+        )
+        image_slots = list(slot_result.scalars().all())
+    except Exception:
+        pass
+
+    # 参考文献
+    refs_text_full = ""
+    try:
+        # 复用已有 _build_reference_text，但它是 export route 的内部闭包；这里独立实现
+        from app.services.literature.citation_formatter import CitationFormatter
+        from app.models.article import ArticleLiteratureBinding, ArticleExternalReference
+        from app.models.literature import LiteraturePaper
+
+        bind_result = await db.execute(
+            select(ArticleLiteratureBinding.paper_id)
+            .where(ArticleLiteratureBinding.article_id == article_id)
+            .order_by(ArticleLiteratureBinding.priority.asc(), ArticleLiteratureBinding.id.asc())
+        )
+        paper_ids = []
+        seen = set()
+        for r in bind_result.fetchall():
+            if r[0] not in seen:
+                seen.add(r[0])
+                paper_ids.append(r[0])
+        ref_lines: list[str] = []
+        if paper_ids:
+            pr = await db.execute(select(LiteraturePaper).where(LiteraturePaper.id.in_(paper_ids)))
+            papers = {p.id: p for p in pr.scalars().all()}
+            for pid in paper_ids:
+                p = papers.get(pid)
+                if not p:
+                    continue
+                ref_lines.append(CitationFormatter(p).format("popular"))
+        ext_result = await db.execute(
+            select(ArticleExternalReference)
+            .where(ArticleExternalReference.article_id == article_id)
+            .order_by(ArticleExternalReference.id.asc())
+        )
+        for r in ext_result.scalars().all():
+            ref_lines.append(CitationFormatter.format_external_ref(r))
+        references_list = ref_lines
+    except Exception:
+        references_list = []
+
+    # 用户在导出对话框传过来的可选项
+    poster_kwargs = dict(
+        first_author=first_author,
+        second_author=second_author,
+        corresponding_author=corresponding_author,
+        affiliation_override=affiliation,
+        include_references=include_references,
+    )
+
+    # 渲染
+    # HTML 是免费预览，独立分支（不经过扣费）
+    if fmt_norm == "html":
+        try:
+            html = _poster_render_html(
+                article_obj, section_parts, image_slots=image_slots,
+                references=references_list, template_id=template,
+                editable=editable,
+                **poster_kwargs,
+            )
+            return Response(content=html, media_type="text/html; charset=utf-8")
+        except PosterRenderError as e:
+            raise HTTPException(500, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"海报渲染失败：{e}")
+
+    # DOCX：免费导出（与常规文章 docx 导出一致；用户用于二次编辑，不计费）
+    if fmt_norm == "docx":
+        try:
+            docx_bytes = _poster_render_docx(
+                article_obj, section_parts, image_slots=image_slots,
+                references=references_list, template_id=template,
+                **poster_kwargs,
+            )
+        except PosterRenderError as e:
+            raise HTTPException(500, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"海报渲染失败：{e}")
+        base_name = (article_obj.title or article_obj.topic or "article").replace("/", "-")
+        return Response(
+            content=docx_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": attachment_content_disposition(f"{base_name}_{template}.docx")},
+        )
+
+    # PDF：先开计费会话（冻结积分）→ 渲染 → 成功才 settle 扣费；失败 abort 触发退款
+    billing_session_id: str | None = None
+    export_cost: Decimal | None = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user as _get_exp_user
+        from app.services.credit.pricing import calc_export_cost
+        from app.services.billing.dependency import open_billing_session, close_billing_session
+        from app.services.credit.service import InsufficientCreditsError
+
+        try:
+            exp_user = await _get_exp_user(request, db)
+            export_cost = calc_export_cost(with_watermark=False)
+            billing_session_id = await open_billing_session(
+                exp_user.id, "export", export_cost, db,
+                business_ref={"article_id": article_id, "format": "poster_pdf", "template": template},
+            )
+            # 立刻 commit：让 freeze + session 持久化，方便后续 abort 触发退款
+            await db.commit()
+        except InsufficientCreditsError:
+            raise HTTPException(402, f"海报 PDF 导出需要 {calc_export_cost(with_watermark=False)} 积分，余额不足")
+
+    try:
+        pdf_bytes = await _poster_render_pdf(
+            article_obj, section_parts, image_slots=image_slots,
+            references=references_list, template_id=template,
+            **poster_kwargs,
+        )
+    except Exception as render_exc:
+        # 渲染失败 → 终止计费会话（abort = 全额退还冻结积分）
+        if billing_session_id:
+            from app.services.billing.dependency import close_billing_session
+            try:
+                await close_billing_session(
+                    billing_session_id, db,
+                    success=False,
+                    reason="poster_pdf_render_failed",
+                )
+                await db.commit()
+            except Exception as refund_exc:
+                # 退款本身失败不能再覆盖原始错误，仅记日志；后台 cleanup_stale_billing_sessions 兜底
+                await db.rollback()
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "poster pdf refund failed: session=%s err=%s",
+                    billing_session_id, refund_exc,
+                )
+        if isinstance(render_exc, PosterRenderError):
+            raise HTTPException(500, str(render_exc))
+        if isinstance(render_exc, HTTPException):
+            raise
+        raise HTTPException(500, f"海报渲染失败：{render_exc}")
+
+    # 渲染成功 → 正式结算扣费
+    if billing_session_id and export_cost is not None:
+        from app.services.billing.dependency import close_billing_session
+        await close_billing_session(
+            billing_session_id, db,
+            success=True,
+            override_cost=export_cost,
+        )
+        await db.commit()
+
+    base_name = (article_obj.title or article_obj.topic or "article").replace("/", "-")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": attachment_content_disposition(f"{base_name}_{template}.pdf")},
+    )
+
+
+# ════════════════════════════════════════════════════════════════
+#  海报模式：带 overrides 的渲染 (POST，body 里传用户在预览页改的数据)
+# ════════════════════════════════════════════════════════════════
+
+class PosterRenderRequest(BaseModel):
+    template: str = "contest_pro"
+    format: str = "html"  # html / pdf / docx
+    first_author: str | None = None
+    second_author: str | None = None
+    corresponding_author: str | None = None
+    affiliation: str | None = None
+    include_references: bool = True
+    editable: bool = False
+    overrides: dict | None = None
+
+
+@router.post("/articles/{article_id}/poster/render")
+async def render_poster_with_overrides(
+    article_id: int,
+    req: PosterRenderRequest,
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """带用户在预览页内联改动（overrides）的海报渲染。
+
+    与 GET /poster 共享同一份数据加载与渲染逻辑，区别仅在：
+      - body 里多一个 overrides dict（覆盖标题 / 作者 / 单位 / 章节 / 配图等）
+      - editable=True 时返回的 HTML 会注入 contenteditable + 图片 toolbar
+    """
+    return await _render_poster_internal(
+        article_id=article_id,
+        template=req.template,
+        fmt=req.format,
+        first_author=req.first_author,
+        second_author=req.second_author,
+        corresponding_author=req.corresponding_author,
+        affiliation=req.affiliation,
+        include_references=req.include_references,
+        editable=req.editable,
+        overrides=req.overrides,
+        request=request,
+        db=db,
+    )
+
+
+async def _render_poster_internal(
+    *,
+    article_id: int,
+    template: str,
+    fmt: str,
+    first_author: str | None,
+    second_author: str | None,
+    corresponding_author: str | None,
+    affiliation: str | None,
+    include_references: bool,
+    editable: bool,
+    overrides: dict | None,
+    request: Request | None,
+    db: AsyncSession,
+):
+    """共享 GET /poster 的逻辑。仅给 POST 路由使用，避免大段代码复制。"""
+    from app.services.export.poster import (
+        render_html as _poster_render_html,
+        render_pdf as _poster_render_pdf,
+        render_docx as _poster_render_docx,
+        PosterRenderError,
+    )
+    from app.services.export.utils import load_article_sections
+    from app.utils.content_disposition import attachment_content_disposition
+    from fastapi.responses import Response
+
+    fmt_norm = (fmt or "html").lower().strip()
+    if fmt_norm not in ("html", "pdf", "docx"):
+        raise HTTPException(400, "format 仅支持 html / pdf / docx")
+
+    try:
+        article, _parts_unused = await load_article_sections(article_id, db)
+    except ValueError as e:
+        raise HTTPException(404 if str(e) == "Article not found" else 500, str(e))
+
+    article_obj_result = await db.execute(
+        select(Article).where(Article.id == article_id, Article.deleted_at.is_(None))
+    )
+    article_obj = article_obj_result.scalar_one_or_none()
+    if not article_obj:
+        raise HTTPException(404, "Article not found")
+
+    sections_result = await db.execute(
+        select(ArticleSection).where(ArticleSection.article_id == article_id)
+        .order_by(ArticleSection.order_num)
+    )
+    sections = sections_result.scalars().all()
+    article_obj.sections = sections
+
+    platform = (article_obj.platform or "wechat").lower()
+    section_ids = [s.id for s in sections]
+    content_rows: list[ArticleContent] = []
+    if section_ids:
+        cont_result = await db.execute(
+            select(ArticleContent)
+            .where(
+                ArticleContent.section_id.in_(section_ids),
+                ArticleContent.is_current == True,
+            )
+        )
+        content_rows = list(cont_result.scalars().all())
+    content_by_section: dict[int, list[ArticleContent]] = {}
+    for c in content_rows:
+        content_by_section.setdefault(c.section_id, []).append(c)
+
+    section_parts: list[tuple[str, dict | None, str]] = []
+    for sec in sections:
+        cands = content_by_section.get(sec.id, [])
+        c = next((x for x in cands if x.platform == platform), None) \
+            or next((x for x in cands if x.platform is None), cands[0] if cands else None)
+        cj = None
+        if c and c.content_json:
+            try:
+                cj = json.loads(c.content_json)
+            except Exception:
+                cj = None
+        section_parts.append((sec.title or sec.section_type, cj, sec.section_type or ""))
+
+    image_slots: list = []
+    try:
+        from app.models.article_image_slot import ArticleImageSlot
+        slot_result = await db.execute(
+            select(ArticleImageSlot)
+            .where(ArticleImageSlot.article_id == article_id)
+            .order_by(ArticleImageSlot.section_id, ArticleImageSlot.order_num)
+        )
+        image_slots = list(slot_result.scalars().all())
+    except Exception:
+        pass
+
+    references_list: list[str] = []
+    try:
+        from app.services.literature.citation_formatter import CitationFormatter
+        from app.models.article import ArticleLiteratureBinding, ArticleExternalReference
+        from app.models.literature import LiteraturePaper
+
+        bind_result = await db.execute(
+            select(ArticleLiteratureBinding.paper_id)
+            .where(ArticleLiteratureBinding.article_id == article_id)
+            .order_by(ArticleLiteratureBinding.priority.asc(), ArticleLiteratureBinding.id.asc())
+        )
+        paper_ids = []
+        seen = set()
+        for r in bind_result.fetchall():
+            if r[0] not in seen:
+                seen.add(r[0])
+                paper_ids.append(r[0])
+        ref_lines: list[str] = []
+        if paper_ids:
+            pr = await db.execute(select(LiteraturePaper).where(LiteraturePaper.id.in_(paper_ids)))
+            papers = {p.id: p for p in pr.scalars().all()}
+            for pid in paper_ids:
+                p = papers.get(pid)
+                if not p:
+                    continue
+                ref_lines.append(CitationFormatter(p).format("popular"))
+        ext_result = await db.execute(
+            select(ArticleExternalReference)
+            .where(ArticleExternalReference.article_id == article_id)
+            .order_by(ArticleExternalReference.id.asc())
+        )
+        for r in ext_result.scalars().all():
+            ref_lines.append(CitationFormatter.format_external_ref(r))
+        references_list = ref_lines
+    except Exception:
+        references_list = []
+
+    poster_kwargs = dict(
+        first_author=first_author,
+        second_author=second_author,
+        corresponding_author=corresponding_author,
+        affiliation_override=affiliation,
+        include_references=include_references,
+        overrides=overrides,
+    )
+
+    if fmt_norm == "html":
+        try:
+            html = _poster_render_html(
+                article_obj, section_parts, image_slots=image_slots,
+                references=references_list, template_id=template,
+                editable=editable,
+                **poster_kwargs,
+            )
+            return Response(content=html, media_type="text/html; charset=utf-8")
+        except PosterRenderError as e:
+            raise HTTPException(500, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"海报渲染失败：{e}")
+
+    if fmt_norm == "docx":
+        try:
+            docx_bytes = _poster_render_docx(
+                article_obj, section_parts, image_slots=image_slots,
+                references=references_list, template_id=template,
+                **poster_kwargs,
+            )
+        except PosterRenderError as e:
+            raise HTTPException(500, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"海报渲染失败：{e}")
+        base_name = (article_obj.title or article_obj.topic or "article").replace("/", "-")
+        return Response(
+            content=docx_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": attachment_content_disposition(f"{base_name}_{template}.docx")},
+        )
+
+    # PDF：和原 GET 路由一样要扣费
+    billing_session_id: str | None = None
+    export_cost: Decimal | None = None
+    if is_saas() and request:
+        from app.core.deps import get_current_user as _get_exp_user
+        from app.services.credit.pricing import calc_export_cost
+        from app.services.billing.dependency import open_billing_session, close_billing_session
+        from app.services.credit.service import InsufficientCreditsError
+        try:
+            exp_user = await _get_exp_user(request, db)
+            export_cost = calc_export_cost(with_watermark=False)
+            billing_session_id = await open_billing_session(
+                exp_user.id, "export", export_cost, db,
+                business_ref={"article_id": article_id, "format": "poster_pdf_overrides", "template": template},
+            )
+            await db.commit()
+        except InsufficientCreditsError:
+            raise HTTPException(402, f"海报 PDF 导出需要 {calc_export_cost(with_watermark=False)} 积分，余额不足")
+
+    try:
+        pdf_bytes = await _poster_render_pdf(
+            article_obj, section_parts, image_slots=image_slots,
+            references=references_list, template_id=template,
+            **poster_kwargs,
+        )
+    except Exception as render_exc:
+        if billing_session_id:
+            from app.services.billing.dependency import close_billing_session
+            try:
+                await close_billing_session(
+                    billing_session_id, db, success=False,
+                    reason="poster_pdf_render_failed",
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+        if isinstance(render_exc, PosterRenderError):
+            raise HTTPException(500, str(render_exc))
+        if isinstance(render_exc, HTTPException):
+            raise
+        raise HTTPException(500, f"海报渲染失败：{render_exc}")
+
+    if billing_session_id and export_cost is not None:
+        from app.services.billing.dependency import close_billing_session
+        await close_billing_session(
+            billing_session_id, db, success=True, override_cost=export_cost,
+        )
+        await db.commit()
+
+    base_name = (article_obj.title or article_obj.topic or "article").replace("/", "-")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": attachment_content_disposition(f"{base_name}_{template}.pdf")},
+    )
 
 
 @router.get("/articles/{article_id}")
@@ -923,7 +1542,22 @@ async def get_article(
 
     platform = article.platform or "wechat"
     section_has_content: dict[int, bool] = {}
+    section_excerpts: dict[int, str] = {}
+    section_word_counts: dict[int, int] = {}
     full_doc_nodes: list[dict] = []
+
+    def _node_plain_text(node: dict) -> str:
+        """从 Tiptap node 提取纯文本，块级节点之间补换行。"""
+        if not isinstance(node, dict):
+            return ""
+        if node.get("type") == "text":
+            return node.get("text", "") or ""
+        children = node.get("content") or []
+        parts = [_node_plain_text(c) for c in children]
+        joined = "".join(parts)
+        if node.get("type") in {"paragraph", "heading", "blockquote", "listItem", "codeBlock"}:
+            return joined + "\n"
+        return joined
 
     if sections:
         all_section_ids = [s.id for s in sections]
@@ -944,13 +1578,15 @@ async def get_article(
         cf = article.content_format or "article"
         hide_section_headings = cf == "article"
 
+        # 先扫一遍：哪些 section 有当前 platform 的有效内容
+        # 当只有 1 个 section 有内容时，默认编辑器在「合并视图单章模式」下保存（save-full-content 已写入规范章节、清空其他章节的 is_current）
+        # 此时不再为这个仅存的 section 拼一个外层 H2，避免出现"导言"包裹整篇正文的诡异结果
+        _eligible: list[tuple] = []
         for sec in sections:
             if _skip_article_legacy_intro(article.content_format, sec.section_type):
                 continue
             candidates = content_by_section.get(sec.id, [])
-            has = bool(candidates)
-            section_has_content[sec.id] = has
-
+            section_has_content[sec.id] = bool(candidates)
             c = next((x for x in candidates if x.platform == platform), None) or \
                 next((x for x in candidates if x.platform is None), candidates[0] if candidates else None)
             if not c or not c.content_json:
@@ -962,12 +1598,25 @@ async def get_article(
             nodes = doc.get("content", []) if isinstance(doc, dict) else []
             if not nodes:
                 continue
-
             nodes = _strip_reference_nodes(nodes)
             if not nodes:
                 continue
+            _eligible.append((sec, nodes))
 
-            if not hide_section_headings:
+        single_merged_mode = len(_eligible) == 1
+        merged_full_text_for_others = ""
+        for sec, nodes in _eligible:
+            try:
+                full_text = "\n".join(_node_plain_text(n) for n in nodes).strip()
+                if full_text:
+                    section_word_counts[sec.id] = len(full_text)
+                    section_excerpts[sec.id] = full_text[:2000]
+                    if single_merged_mode:
+                        merged_full_text_for_others = full_text
+            except Exception:
+                pass
+
+            if not hide_section_headings and not single_merged_mode:
                 sec_title = sec.title or titles_map.get(sec.section_type, sec.section_type)
                 full_doc_nodes.append({
                     "type": "heading", "attrs": {"level": 2},
@@ -976,6 +1625,28 @@ async def get_article(
             if full_doc_nodes:
                 full_doc_nodes.append({"type": "paragraph"})
             full_doc_nodes.extend(nodes)
+
+        # 「单合并视图」下，全文已经合并写入唯一一个规范章节（其它章节 is_current=False）。
+        # 但配图管理 / 一键建议画意 等批量功能仍按"每个章节一张图"的设计跑：
+        # 因此把合并后的全文作为 fallback 传给其它非 meta 章节，让 paintableSections 看到所有章节，
+        # 同时 LLM 借助 section_type / 章节标题做差异化建议（参见 prompt_engine.suggest_painting_intents）。
+        _META_SECTION_TYPES = {
+            "planner", "series_plan", "book_plan", "image_plan", "script_plan",
+            "drama_plan", "anim_plan", "handbook_plan", "poster_brief", "design_spec",
+            "prod_notes", "filming_notes", "cast_table", "char_design",
+        }
+        if single_merged_mode and merged_full_text_for_others:
+            excerpt_for_others = merged_full_text_for_others[:2000]
+            for sec in sections:
+                if (sec.section_type or "") in _META_SECTION_TYPES:
+                    continue
+                if _skip_article_legacy_intro(article.content_format, sec.section_type):
+                    continue
+                if section_has_content.get(sec.id, False):
+                    continue
+                section_has_content[sec.id] = True
+                section_excerpts[sec.id] = excerpt_for_others
+                section_word_counts[sec.id] = len(merged_full_text_for_others)
 
     d["full_content_json"] = {"type": "doc", "content": full_doc_nodes} if full_doc_nodes else {"type": "doc", "content": []}
 
@@ -987,6 +1658,8 @@ async def get_article(
             "order_num": s.order_num,
             "status": s.status or "pending",
             "has_content": section_has_content.get(s.id, False),
+            "content_excerpt": section_excerpts.get(s.id, ""),
+            "content_word_count": section_word_counts.get(s.id, 0),
         }
         for s in sections
         if not _skip_article_legacy_intro(article.content_format, s.section_type)
@@ -1652,9 +2325,27 @@ async def _get_planner_context(db: AsyncSession, article_id: int, platform: str,
 @router.post("/sections/{section_id}/generate-full")
 async def generate_section_full(
     section_id: int,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """全流程图生成：mode_detect → retrieve → format_route → generate → verify → save"""
+    """全流程图生成（仅供内部调试）：mode_detect → retrieve → format_route → generate → verify → save
+
+    本端口跳过 streaming_session 包裹、不做积分扣费，因此对外暴露会被免费刷量。
+    必须通过 INTERNAL_API_SECRET（环境变量）+ X-Internal-API header 才能调用。
+    SaaS 生产环境必须设置 INTERNAL_API_SECRET，否则该接口直接 404。
+    """
+    import os
+    _internal_secret = os.environ.get("INTERNAL_API_SECRET", "").strip()
+    if not _internal_secret:
+        raise HTTPException(status_code=404, detail="Endpoint disabled")
+    _provided = (
+        request.headers.get("X-Internal-API")
+        or request.headers.get("x-internal-api")
+        or ""
+    )
+    if _provided != _internal_secret:
+        raise HTTPException(status_code=403, detail="Internal API key required")
+
     from app.workflow.graphs.medcomm_graph import run_medcomm_graph
 
     sec_result = await db.execute(

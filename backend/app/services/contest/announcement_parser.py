@@ -91,10 +91,10 @@ def _extract_text(content: bytes, filename: str) -> str:
 
 async def _parse_via_llm(text: str) -> dict:
     """通过 LLM 抽取公告中的赛制参数"""
-    from app.services.llm.manager import get_llm_manager
+    from app.services.llm.openai_client import chat_completion
+    from app.services.llm.manager import TaskTier
     import json
 
-    mgr = get_llm_manager()
     system_prompt = (
         "你是一个健康科普赛事公告解析助手。请从以下公告文本中提取赛事参数。\n"
         "以 JSON 对象输出，包含以下字段（无法识别的字段值设为 null）：\n"
@@ -107,16 +107,17 @@ async def _parse_via_llm(text: str) -> dict:
         "只输出纯 JSON，不要其他文字。"
     )
 
-    response = await mgr.chat_completion(
+    raw = await chat_completion(
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text[:8000]},
         ],
+        task=TaskTier.BALANCED,
         temperature=0.1,
-        max_tokens=1000,
+        _log_task_type="contest_parse_announcement",
     )
 
-    result_text = response.get("content", "").strip()
+    result_text = (raw if isinstance(raw, str) else "").strip()
     if result_text.startswith("```"):
         lines = result_text.split("\n")
         lines = [l for l in lines if not l.strip().startswith("```")]

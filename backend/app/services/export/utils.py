@@ -117,6 +117,89 @@ def _extract_text(node) -> str:
     return "".join(_extract_text(c) for c in node.get("content", []))
 
 
+def _extract_inline(nodes) -> str:
+    """段落 / 标题内联 → 文本，保留 hardBreak 为换行。"""
+    out: list[str] = []
+    for c in nodes or []:
+        if not isinstance(c, dict):
+            continue
+        t = c.get("type", "")
+        if t == "text":
+            out.append(c.get("text", ""))
+        elif t == "hardBreak":
+            out.append("\n")
+        elif t == "image":
+            src = c.get("attrs", {}).get("src", "")
+            alt = c.get("attrs", {}).get("alt", "")
+            if src:
+                out.append(f"![{alt}]({src})")
+        else:
+            out.append(_extract_inline(c.get("content") or []))
+    return "".join(out)
+
+
+def extract_markdown(node) -> str:
+    """TipTap JSON → Markdown 文本，保留段落、标题、列表、引用、换行。
+
+    用于导出（html/md/txt）路径，避免把整篇正文压成一段。"""
+    if isinstance(node, list):
+        return "\n\n".join(extract_markdown(c) for c in node if c).strip("\n")
+    if not isinstance(node, dict):
+        return ""
+    ntype = node.get("type", "")
+    children = node.get("content") or []
+
+    if ntype == "doc":
+        parts = [extract_markdown(c) for c in children]
+        return "\n\n".join(p for p in parts if p).strip("\n")
+    if ntype == "paragraph":
+        return _extract_inline(children).rstrip()
+    if ntype == "heading":
+        level = (node.get("attrs") or {}).get("level", 2)
+        try:
+            level = int(level)
+        except Exception:
+            level = 2
+        level = max(1, min(level, 6))
+        return ("#" * level) + " " + _extract_inline(children).strip()
+    if ntype == "bulletList":
+        items: list[str] = []
+        for it in children:
+            if it.get("type") != "listItem":
+                continue
+            inner = "\n".join(extract_markdown(c) for c in it.get("content") or [] if c).strip()
+            if inner:
+                items.append("- " + inner.replace("\n", "\n  "))
+        return "\n".join(items)
+    if ntype == "orderedList":
+        items = []
+        for i, it in enumerate(children, 1):
+            if it.get("type") != "listItem":
+                continue
+            inner = "\n".join(extract_markdown(c) for c in it.get("content") or [] if c).strip()
+            if inner:
+                items.append(f"{i}. " + inner.replace("\n", "\n   "))
+        return "\n".join(items)
+    if ntype == "blockquote":
+        inner = "\n\n".join(extract_markdown(c) for c in children if c).strip()
+        return "\n".join("> " + ln for ln in inner.splitlines()) if inner else ""
+    if ntype == "horizontalRule":
+        return "---"
+    if ntype in ("codeBlock", "code_block"):
+        raw = "".join(c.get("text", "") for c in children if isinstance(c, dict) and c.get("type") == "text")
+        return f"```\n{raw}\n```"
+    if ntype == "image":
+        attrs = node.get("attrs") or {}
+        src = attrs.get("src", "")
+        alt = attrs.get("alt", "")
+        return f"![{alt}]({src})" if src else ""
+    if ntype == "text":
+        return node.get("text", "")
+    if ntype == "hardBreak":
+        return ""
+    return "\n\n".join(extract_markdown(c) for c in children if c).strip("\n")
+
+
 async def load_article_sections(article_id: int, db: AsyncSession) -> tuple[Article, list[tuple[str, str, str]]]:
     """加载文章及章节内容，返回 (article, [(title, body, section_type), ...])"""
     result = await db.execute(select(Article).where(Article.id == article_id, Article.deleted_at.is_(None)))
@@ -142,7 +225,7 @@ async def load_article_sections(article_id: int, db: AsyncSession) -> tuple[Arti
         if c and c.content_json:
             try:
                 doc = json.loads(c.content_json)
-                text = _extract_text(doc)
+                text = extract_markdown(doc)
             except Exception:
                 pass
         parts.append((sec.title or sec.section_type, text, sec.section_type))

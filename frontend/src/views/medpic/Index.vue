@@ -1060,7 +1060,7 @@ const form = ref({
   engineOverride: '' as string,
 })
 
-// 画图引擎下拉选项（与 PaintingIntentPanel 保持一致）
+// 画图引擎下拉选项（与 ContestImageOverview 保持一致）
 const medpicEngineOptions: Array<{ value: string; label: string }> = [
   { value: '', label: '自动选择（推荐）' },
   { value: 'gpt_image', label: 'GPT Image' },

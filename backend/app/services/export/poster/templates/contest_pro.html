@@ -1,0 +1,168 @@
+{% extends "_base.html" %}
+{% import "_macros.html" as M %}
+
+{% block extra_styles %}
+<style>
+  /* ── contest_pro：正式参赛推作版式 ────────────── */
+  body { background: #fafafa; font-family: "PingFang SC", "Songti SC", "Microsoft YaHei", serif; }
+  .page { background: #fff; margin: 0 auto; padding: 0; box-shadow: 0 0 0 1px #eee; }
+
+  /* 封面页 */
+  .cover {
+    position: relative;
+    height: 320px;
+    background: linear-gradient(135deg, #0f3a8b 0%, #1e63d8 100%);
+    color: #fff;
+    overflow: hidden;
+    margin-bottom: 0;
+  }
+  .cover-hero {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center;
+    opacity: 0.32;
+    filter: saturate(1.2);
+  }
+  .cover::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(15,58,139,0.1) 0%, rgba(15,58,139,0.55) 100%);
+  }
+  .cover-overlay {
+    position: relative;
+    z-index: 2;
+    padding: 36px 48px 32px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+  }
+  .cover-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    margin-bottom: 16px;
+    width: fit-content;
+    backdrop-filter: blur(4px);
+    background: rgba(255,255,255,0.18) !important;
+    border: 1px solid rgba(255,255,255,0.35);
+  }
+  .cover-title {
+    font-size: 32px;
+    font-weight: 700;
+    margin: 0 0 12px;
+    line-height: 1.3;
+    letter-spacing: 0.02em;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  }
+  .cover-subtitle {
+    font-size: 16px;
+    opacity: 0.9;
+    margin-bottom: 14px;
+    font-weight: 300;
+  }
+  .cover-meta {
+    font-size: 13px;
+    opacity: 0.92;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .cover-meta span { white-space: nowrap; }
+
+  /* 顶部装饰条 */
+  .ribbon {
+    height: 6px;
+    background: linear-gradient(90deg, #0f3a8b 0%, #1e63d8 50%, #0f3a8b 100%);
+  }
+
+  /* 正文 */
+  .article-body {
+    padding: 32px 48px 48px;
+    font-size: 15px;
+    line-height: 1.85;
+  }
+  .article-body p {
+    margin: 0.85em 0;
+    text-indent: 2em;
+  }
+  .article-body p:has(strong:only-child),
+  .article-body p:first-child { text-indent: 0; }
+
+  .section-title {
+    font-size: 19px;
+    color: #0f3a8b;
+    margin: 1.8em 0 0.7em;
+    padding-left: 12px;
+    border-left: 4px solid #0f3a8b;
+    line-height: 1.4;
+    text-indent: 0;
+  }
+  .section-body h3 { font-size: 16px; color: #1f2937; margin: 1em 0 0.4em; }
+  .section-body ul, .section-body ol { padding-left: 2em; margin: 0.6em 0; }
+  .section-body blockquote {
+    border-left: 3px solid #c5d3eb;
+    background: #f3f6fc;
+    padding: 0.6em 1em;
+    margin: 0.8em 0;
+    color: #475569;
+  }
+  .figure img { max-width: 90%; border-radius: 4px; }
+  .figure figcaption {
+    font-size: 13px;
+    text-align: center;
+    color: #6b7280;
+  }
+
+  /* 参考文献 */
+  .references-block {
+    margin-top: 2.5em;
+    padding-top: 1.5em;
+    border-top: 1px solid #e5e7eb;
+  }
+  .references-list {
+    font-size: 13px;
+    color: #4b5563;
+    padding-left: 1.6em;
+  }
+  .references-list li { margin: 0.35em 0; }
+
+  /* AI 声明 */
+  .ai-footer {
+    margin-top: 2em;
+    padding: 0.8em 1em;
+    background: #f9fafb;
+    border-left: 3px solid #9ca3af;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #6b7280;
+  }
+  .ai-footer__label { font-weight: 600; margin-right: 0.5em; color: #374151; }
+
+  @media print {
+    .page { box-shadow: none; }
+    .section-title { page-break-after: avoid; }
+    .figure { page-break-inside: avoid; }
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="poster-doc">
+  <div class="page page--hero">
+    {{ M.render_hero(meta, hero, '#0f3a8b') }}
+    <div class="ribbon"></div>
+  </div>
+  <div class="page page--body">
+    <div class="article-body">
+      {% for sec in sections %}
+        {{ M.render_section(sec, slots_at_top=loop.index0 == 0) }}
+      {% endfor %}
+      {{ M.render_references(references) }}
+      {{ M.render_ai_declaration(meta) }}
+    </div>
+  </div>
+</div>
+{% endblock %}
